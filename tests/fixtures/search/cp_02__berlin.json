@@ -1,0 +1,37 @@
+{
+  "provider": "fixture",
+  "query": "Syrer in Berlin site:facebook.com/groups",
+  "note": "Erfundene Beispielantwort fuer Offline-Tests. Keine echten Gruppen.",
+  "results": [
+    {
+      "title": "Syrer in Berlin | Facebook",
+      "url": "https://www.facebook.com/groups/482910573829104",
+      "snippet": "Öffentliche Gruppe · 12.400 Mitglieder · Austausch für Syrerinnen und Syrer in Berlin."
+    },
+    {
+      "title": "سوريين في برلين - Facebook",
+      "url": "https://www.facebook.com/groups/739201847362915",
+      "snippet": "مجموعة عامة · 8500 عضو · مجموعة للسوريين في برلين"
+    },
+    {
+      "title": "Jobs für Araber in Berlin",
+      "url": "https://m.facebook.com/groups/615840293748162/?ref=share",
+      "snippet": "Private Gruppe · 3.200 Mitglieder · Stellenangebote und Bewerbungstipps"
+    },
+    {
+      "title": "Berlin Wohnungen - kein Gruppen-Link",
+      "url": "https://www.facebook.com/pages/irgendwas",
+      "snippet": "Dieser Treffer ist keine Gruppe und muss herausgefiltert werden."
+    },
+    {
+      "title": "Blogbeitrag über Berlin",
+      "url": "https://example.com/blog/berlin",
+      "snippet": "Fremde Domain - muss ebenfalls herausgefiltert werden."
+    },
+    {
+      "title": "Syrer in Berlin | Facebook",
+      "url": "https://www.facebook.com/groups/482910573829104/about",
+      "snippet": "Derselbe Gruppen-Link in anderer Schreibweise - Dublette."
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+# Globale Einstellungen. Alle Werte sind ohne Codeaenderung anpassbar.
+
+paths:
+  data_dir: data
+  seeds_dir: data/seeds
+  exports_dir: data/exports
+  runs_dir: data/runs
+  sqlite_path: data/groups.sqlite
+  # Dauerhafter Anfragespeicher: eine bereits erfolgreich beantwortete Anfrage
+  # geht nie ein zweites Mal an den Suchdienst. Bewusst eine eigene Datei -
+  # der Bestand (groups.sqlite) bleibt loeschbar, ohne Guthaben zu verlieren.
+  query_cache_path: data/query_cache.sqlite
+
+marketing:
+  # Basis-URL der Anwendung, die den Tracking-Link entgegennimmt.
+  # Die Umgebungsvariable APP_BASE_URL hat Vorrang - so laeuft dieselbe
+  # Konfiguration lokal und auf der echten Domain, ohne die gespeicherten
+  # Codes anzufassen. Der Code steht fest, nur sein Vorspann wechselt.
+  app_base_url: http://localhost:3000
+
+  tracking:
+    prefix: FB        # Kanal, erster Teil des Codes: FB-SYR-BER-001
+    path: r           # ergibt {APP_BASE_URL}/r/{code}
+    number_width: 3   # 001, 002, ...
+
+dedupe:
+  # Unscharfer Namensabgleich: ab diesem Wert (0-100) gilt ein Paar als
+  # Dublettenverdacht. Es wird NICHT automatisch zusammengefuehrt,
+  # sondern nur im Report gemeldet.
+  fuzzy_threshold: 88
+  # Sehr kurze Namen erzeugen zu viele Falschtreffer.
+  fuzzy_min_name_length: 8
+
+classification:
+  # Treffer im Gruppennamen wiegt schwerer als im Beschreibungstext.
+  name_confidence: 1.0
+  snippet_confidence: 0.5
+  # Ab welcher Konfidenz eine Stadt uebernommen wird.
+  city_min_confidence: 0.5
+
+scoring:
+  # Summe der Gewichte = 100. Der Score ist die Summe der tatsaechlich
+  # belegten Punkte - er wird NICHT hochgerechnet. Was bei der jeweiligen
+  # Datenlage hoechstens erreichbar war, steht in der Spalte "Score max.".
+  weights:
+    # Die Mitgliederzahl ist das schwerste Kriterium: Fuer eine Kooperation
+    # entscheidet die Reichweite. Sie ist zugleich die einzige Angabe, die
+    # dieses Projekt nicht selbst ermitteln kann - der Suchdienst liefert sie
+    # nicht (in 273 gespeicherten Treffern kein einziges Mal), und
+    # facebook.com wird nicht aufgerufen. Sie kommt aus der Pruefliste.
+    member_count: 45
+    audience_match: 25
+    city_match: 15
+    category_match: 8
+    # Beurteilt nur noch die Form des Namens (vollstaendig, kurz, kein
+    # Beitragstitel). Zielgruppe und Stadt haben eigene Gewichte und werden
+    # hier nicht erneut vergeben - diese Doppelzaehlung war der Grund, weshalb
+    # 27 Gruppen gemeinsam auf dem Hoechstwert standen.
+    name_quality: 7
+
+  # Punkte (0-1 Anteil) je Mitglieder-Groessenklasse. Erste passende Regel gewinnt.
+  member_count_buckets:
+    - { min: 50000, factor: 1.00 }
+    - { min: 20000, factor: 0.85 }
+    - { min: 10000, factor: 0.70 }
+    - { min: 5000,  factor: 0.55 }
+    - { min: 1000,  factor: 0.40 }
+    - { min: 200,   factor: 0.20 }
+    - { min: 0,     factor: 0.05 }
+  #
+  # Hinweis: Es gibt bewusst KEINEN Ersatzwert fuer eine unbekannte
+  # Mitgliederzahl. Ein solcher Wert erzeugte fuer jede Gruppe ohne Metadaten
+  # denselben Score. Ist die Zahl unbekannt, entfaellt der Bestandteil: die
+  # Gruppe erhaelt dafuer keine Punkte, und "Score max." sinkt auf 75. Frueher
+  # wurde stattdessen auf 100 hochgerechnet - damit erreichte eine Gruppe, von
+  # der nur der Name bekannt war, denselben Hoechstwert wie eine belegte
+  # Grossgruppe.

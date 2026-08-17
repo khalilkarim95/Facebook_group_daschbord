@@ -1,0 +1,125 @@
+# Zielgruppen. Eine Gruppe kann mehrere Tags tragen (z. B. syrians + arabs).
+#
+# terms.de / terms.translit  -> Abgleich mit Wortgrenzen (lateinische Schrift)
+# terms.ar                   -> Teilstring-Abgleich, da im Arabischen Artikel und
+#                               Praepositionen direkt am Wort haengen
+#                               ("سوريين" ist in "السوريين" enthalten)
+
+audiences:
+  syrians:
+    label_de: Syrer in Deutschland
+    priority: 1
+    phase: 1
+    terms:
+      de: [Syrer, Syrerin, Syrerinnen, Syrien, syrisch, syrische, syrischen]
+      ar: [سوريين, سوريون, سورية, سوريا, سوري]
+      translit: [Suriyeen, Suriyin, Souriyin, Souriyeen, Syrian, Syrians, Syria]
+
+  arabs:
+    label_de: Araber in Deutschland
+    priority: 1
+    phase: 1
+    terms:
+      de: [Araber, Araberin, arabisch, arabische, arabischen, Arabische Community]
+      ar: [عرب, عربي, عربية, العربية]
+      translit: [Arab, Arabs, Arabi, Arabic]
+
+  # --- Phase 2: aktiviert durch phase: 1 ---
+  lebanese:
+    label_de: Libanesen in Deutschland
+    priority: 2
+    phase: 2
+    terms:
+      de: [Libanese, Libanesen, Libanon, libanesisch]
+      ar: [لبناني, لبنانيين, لبنان]
+      translit: [Lubnani, Lebanese, Lebanon]
+
+  iraqis:
+    label_de: Iraker in Deutschland
+    priority: 2
+    phase: 2
+    terms:
+      de: [Iraker, Irak, irakisch]
+      ar: [عراقي, عراقيين, العراق]
+      translit: [Iraqi, Iraqis, Iraq]
+
+  palestinians:
+    label_de: Palaestinenser in Deutschland
+    priority: 2
+    phase: 2
+    terms:
+      de: [Palaestinenser, Palästinenser, Palästina, palaestinensisch]
+      ar: [فلسطيني, فلسطينيين, فلسطين]
+      translit: [Falastini, Palestinian, Palestine]
+
+  jordanians:
+    label_de: Jordanier in Deutschland
+    priority: 3
+    phase: 2
+    terms:
+      de: [Jordanier, Jordanien, jordanisch]
+      ar: [أردني, اردني, الأردن]
+      translit: [Urduni, Jordanian, Jordan]
+
+  egyptians:
+    label_de: Aegypter in Deutschland
+    priority: 2
+    phase: 2
+    terms:
+      de: [Ägypter, Aegypter, Ägypten, ägyptisch]
+      ar: [مصري, مصريين, مصر]
+      translit: [Masri, Egyptian, Egypt]
+
+  moroccans:
+    label_de: Marokkaner in Deutschland
+    priority: 3
+    phase: 2
+    terms:
+      de: [Marokkaner, Marokko, marokkanisch]
+      ar: [مغربي, مغاربة, المغرب]
+      translit: [Maghribi, Moroccan, Morocco]
+
+  algerians:
+    label_de: Algerier in Deutschland
+    priority: 3
+    phase: 2
+    terms:
+      de: [Algerier, Algerien, algerisch]
+      ar: [جزائري, جزائريين, الجزائر]
+      translit: [Jazairi, Algerian, Algeria]
+
+  tunisians:
+    label_de: Tunesier in Deutschland
+    priority: 3
+    phase: 2
+    terms:
+      de: [Tunesier, Tunesien, tunesisch]
+      ar: [تونسي, تونسيين, تونس]
+      translit: [Tunsi, Tunisian, Tunisia]
+
+  yemenis:
+    label_de: Jemeniten in Deutschland
+    priority: 3
+    phase: 2
+    terms:
+      de: [Jemenit, Jemeniten, Jemen, jemenitisch]
+      ar: [يمني, يمنيين, اليمن]
+      translit: [Yamani, Yemeni, Yemen]
+
+  libyans:
+    label_de: Libyer in Deutschland
+    priority: 3
+    phase: 2
+    terms:
+      de: [Libyer, Libyen, libysch]
+      ar: [ليبي, ليبيين, ليبيا]
+      translit: [Libi, Libyan, Libya]
+
+  sudanese:
+    label_de: Sudanesen in Deutschland
+    priority: 3
+    phase: 2
+    terms:
+      de: [Sudanese, Sudanesen, Sudan, sudanesisch]
+      ar: [سوداني, سودانيين, السودان]
+      translit: [Sudani, Sudanese]

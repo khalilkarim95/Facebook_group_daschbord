@@ -1,0 +1,40 @@
+# Suchanfragen. Hier steht die fachliche Wahrheit - im Code ist keine einzige
+# Anfrage hartkodiert. Der Builder rendert diese Datei; "fbgroups queries" und
+# "fbgroups search --dry-run" zeigen das Ergebnis, ohne etwas abzufragen.
+#
+# Gesamt Phase 1: 7 bundesweit + 9 Muster x 4 Staedte = 43 Anfragen.
+
+settings:
+  max_results_per_query: 10
+
+  # Wird nur angehaengt, wenn der Provider den Operator laut capabilities
+  # unterstuetzt - deshalb nicht Teil der Muster.
+  site_filter: "facebook.com/groups/"
+
+  # Der Suchbegriff wird in Anfuehrungszeichen gesetzt: "Syrer Deutschland".
+  # Ohne sie liefert die Suche auch Treffer, die die Worte nur einzeln und
+  # verstreut enthalten - jeder davon kostet Guthaben, ohne etwas beizutragen.
+  quote_phrase: true
+
+# --- A) Bundesweite Anfragen ---
+nationwide:
+  - { id: nw_01, text: "Syrer Deutschland",       lang: de, audiences: [syrians] }
+  - { id: nw_02, text: "Syrer in Deutschland",    lang: de, audiences: [syrians] }
+  - { id: nw_03, text: "سوريين في ألمانيا",         lang: ar, audiences: [syrians] }
+  - { id: nw_04, text: "السوريين في ألمانيا",       lang: ar, audiences: [syrians] }
+  - { id: nw_05, text: "Araber Deutschland",      lang: de, audiences: [arabs] }
+  - { id: nw_06, text: "Araber in Deutschland",   lang: de, audiences: [arabs] }
+  - { id: nw_07, text: "عرب في ألمانيا",            lang: ar, audiences: [arabs] }
+
+# --- B) Stadt-Muster ---
+# {city} = name_de, {city_ar} = name_ar
+city_patterns:
+  - { id: cp_01, pattern: "Syrer {city}",       lang: de,       audiences: [syrians] }
+  - { id: cp_02, pattern: "Syrer in {city}",    lang: de,       audiences: [syrians] }
+  - { id: cp_03, pattern: "سوريين {city_ar}",    lang: ar,       audiences: [syrians] }
+  - { id: cp_04, pattern: "سوريين في {city_ar}", lang: ar,       audiences: [syrians] }
+  - { id: cp_05, pattern: "Suriyeen {city}",    lang: translit, audiences: [syrians] }
+  - { id: cp_06, pattern: "Araber {city}",      lang: de,       audiences: [arabs] }
+  - { id: cp_07, pattern: "Araber in {city}",   lang: de,       audiences: [arabs] }
+  - { id: cp_08, pattern: "عرب {city_ar}",       lang: ar,       audiences: [arabs] }
+  - { id: cp_09, pattern: "عرب في {city_ar}",    lang: ar,       audiences: [arabs] }

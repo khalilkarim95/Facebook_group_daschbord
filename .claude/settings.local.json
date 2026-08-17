@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cd \"K:\\\\Batraqiq\\\\Facebook.panal\"; $env:PYTHONIOENCODING=\"utf-8\"; .\\\\.venv\\\\Scripts\\\\python.exe -m fbgroups.cli report --top 11 2>&1 | Select-Object -First 32)",
+      "PowerShell(cd \"K:\\\\Batraqiq\\\\Facebook.panal\"; $env:PYTHONIOENCODING=\"utf-8\"; .\\\\.venv\\\\Scripts\\\\python.exe -m fbgroups.cli report --top 4 > $null; \"Exit-Code: $LASTEXITCODE\")",
+      "WebSearch",
+      "PowerShell(cd \"K:\\\\Batraqiq\\\\Facebook.panal\"; $env:PYTHONIOENCODING=\"utf-8\"; .\\\\.venv\\\\Scripts\\\\python.exe -m fbgroups.cli providers)",
+      "PowerShell(cd \"K:\\\\Batraqiq\\\\Facebook.panal\"; Remove-Item data\\\\groups.sqlite, data\\\\runs, data\\\\cache -Recurse -Force -ErrorAction SilentlyContinue; $env:PYTHONIOENCODING=\"utf-8\"; .\\\\.venv\\\\Scripts\\\\python.exe -m fbgroups.cli search)",
+      "PowerShell(cd \"K:\\\\Batraqiq\\\\Facebook.panal\"; $env:PYTHONIOENCODING=\"utf-8\"; .\\\\.venv\\\\Scripts\\\\python.exe -m fbgroups.cli search 2>&1 | Select-String -Pattern \"Zwischenspeicher|Gespeichert\"; \"--- Bestand ---\"; .\\\\.venv\\\\Scripts\\\\python.exe -m fbgroups.cli report --top 4 2>&1 | Select-Object -Last 12)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m mypy)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests --fix; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; if \\(-not \\(Test-Path \"src\\\\fbgroups\\\\py.typed\"\\)\\) { New-Item -ItemType File \"src\\\\fbgroups\\\\py.typed\" | Out-Null }; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m mypy)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli providers)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli search --dry-run --provider serper --show-all)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli search --dry-run --provider serper --limit 5 2>&1 | Select-Object -Last 22; Write-Output \"`n===== ohne Mengenangabe \\(Schutz gegen Vollscan\\) =====\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli search --provider serper; Write-Output \"Exit-Code: $LASTEXITCODE\")",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest tests\\\\test_cli_search.py -v 2>&1 | Select-Object -Last 40)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q 2>&1 | Select-Object -Last 20)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q --tb=no 2>&1 | Select-Object -Last 3)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q --tb=short 2>&1 | Select-Object -Last 6; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests; Write-Output \"`n===== providers =====\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli providers)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli search --dry-run --provider serper 2>&1 | Select-Object -Last 18; Write-Output \"`n===== Testanzahl =====\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest --collect-only -q 2>&1 | Select-Object -Last 2)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest --collect-only 2>&1 | Select-String \"tests collected|test\\(s\\)? collected\")",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; $env:COLUMNS=\"140\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli search --dry-run --provider serper --limit 5 2>&1 | Out-File -Encoding utf8 \"$env:TEMP\\\\plan.txt\"; Get-Content \"$env:TEMP\\\\plan.txt\" -TotalCount 12)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; $env:COLUMNS=\"140\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli import-seeds)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli export --format both)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; $env:COLUMNS=\"140\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli search --provider serper --limit 5)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; $env:COLUMNS=\"150\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli report --top 12 2>&1 | Select-Object -Last 30)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" \"$env:TEMP\\\\claude\\\\K--Batraqiq-Facebook-panal\\\\689bde99-08ca-4b64-bccd-2ea6b0dac416\\\\scratchpad\\\\pruefe_stadt.py\")",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" \"$env:TEMP\\\\claude\\\\K--Batraqiq-Facebook-panal\\\\689bde99-08ca-4b64-bccd-2ea6b0dac416\\\\scratchpad\\\\roh.py\")",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q --tb=short 2>&1 | Select-Object -Last 25)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests; $env:COLUMNS=\"140\"; Write-Output \"`n===== Neuauswertung aus dem Speicher \\(0 Credits\\) =====\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli search --provider serper --limit 0 2>&1 | Select-Object -First 18)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q --tb=line 2>&1 | Select-Object -Last 5; Write-Output \"`n===== Stadtzuordnung nach der Korrektur =====\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" \"$env:TEMP\\\\claude\\\\K--Batraqiq-Facebook-panal\\\\689bde99-08ca-4b64-bccd-2ea6b0dac416\\\\scratchpad\\\\pruefe_stadt.py\")",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q --tb=short 2>&1 | Select-Object -Last 20)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q --tb=line 2>&1 | Select-Object -Last 3; Remove-Item \"data\\\\groups.sqlite\" -Force; $env:COLUMNS=\"140\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli import-seeds 2>&1 | Select-Object -Last 2; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli search --provider serper --limit 0 2>&1 | Select-Object -First 16)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; $env:COLUMNS=\"150\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m fbgroups.cli report --top 10 2>&1 | Select-Object -First 30)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q --tb=line 2>&1 | Select-Object -Last 3; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest --collect-only 2>&1 | Select-String \"collected\")",
+      "PowerShell(& \".\\\\suche.ps1\" -Plan)",
+      "PowerShell(& \".\\\\suche.ps1\" -Anfragen 0 2>&1)",
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q --tb=short 2>&1 | Select-Object -Last 15; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests)"
+    ]
+  }
+}

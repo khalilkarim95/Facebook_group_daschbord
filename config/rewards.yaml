@@ -1,0 +1,39 @@
+# Praemienregeln. Die Zahlen sind fachliche Entscheidungen und stehen
+# ausschliesslich hier - eine Aenderung kostet keine Codeaenderung.
+#
+# id        eindeutige Kennung; sie steht in der Datenbank und darf sich nicht
+#           mehr aendern, sonst gilt eine vergebene Praemie als neu
+# threshold ab wie vielen Empfehlungen
+# metric    welchen Stand die Empfehlungen mindestens haben muessen:
+#           registered | qualified | converted
+# type      feature_unlock | premium_days | credits | discount | custom
+# value     Freitext, vom Typ abhaengig (Tage, Punkte, Prozent, Merkmalsname)
+# active    false schaltet eine Regel ab, ohne sie zu loeschen
+#
+# Bewusst kein Geldbetrag: Was ausgezahlt wird, gehoert nicht nebenbei in eine
+# Konfigurationsdatei.
+
+rewards:
+  - id: premium_7_tage
+    label_de: 7 Premium-Tage
+    threshold: 3
+    metric: qualified
+    type: premium_days
+    value: "7"
+    active: true
+
+  - id: credits_100
+    label_de: 100 Credits
+    threshold: 5
+    metric: qualified
+    type: credits
+    value: "100"
+    active: true
+
+  - id: premium_30_tage
+    label_de: 30 Premium-Tage
+    threshold: 10
+    metric: qualified
+    type: premium_days
+    value: "30"
+    active: true

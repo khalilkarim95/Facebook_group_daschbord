@@ -1,0 +1,59 @@
+# Themenkategorien. Erste Kategorie mit dem hoechsten Trefferzaehler gewinnt.
+# Reihenfolge bei Gleichstand = Reihenfolge in dieser Datei.
+
+categories:
+  - id: jobs
+    label_de: Jobs & Arbeit
+    terms:
+      de: [Job, Jobs, Arbeit, Stellenangebote, Minijob, Ausbildung, Bewerbung, Praktikum]
+      ar: [وظائف, عمل, شغل, وظيفة, تدريب]
+      translit: [wazayif, shughl, work, jobs]
+
+  - id: wohnen
+    label_de: Wohnen & Immobilien
+    terms:
+      de: [Wohnung, Wohnungen, WG, Zimmer, Wohnungssuche, Miete, Immobilien, Untermiete]
+      ar: [سكن, شقة, شقق, غرفة, ايجار, إيجار]
+      translit: [sakan, shaqqa, wohnung]
+
+  - id: kaufen_verkaufen
+    label_de: Kaufen & Verkaufen
+    terms:
+      de: [Kaufen, Verkaufen, Verkauf, Flohmarkt, Kleinanzeigen, gebraucht, Basar]
+      ar: [بيع, شراء, للبيع, بازار, مستعمل]
+      translit: [bay3, shira, bazar]
+
+  - id: studenten
+    label_de: Studium & Ausbildung
+    terms:
+      de: [Studenten, Studium, Uni, Universität, Studierende, Hochschule]
+      ar: [طلاب, الطلاب, دراسة, جامعة]
+      translit: [tullab, students, university]
+
+  - id: essen
+    label_de: Essen & Restaurants
+    terms:
+      de: [Essen, Restaurant, Küche, halal, Lebensmittel, Rezepte]
+      ar: [مطعم, مطاعم, حلال, طبخ, اكل, أكل]
+      translit: [mat3am, halal, tabkh]
+
+  - id: events
+    label_de: Events & Veranstaltungen
+    terms:
+      de: [Event, Events, Veranstaltung, Party, Treffen, Festival]
+      ar: [فعاليات, حفلة, لقاء, مهرجان]
+      translit: [faaliyat, event]
+
+  - id: beratung
+    label_de: Beratung & Behoerden
+    terms:
+      de: [Beratung, Behörden, Amt, Jobcenter, Aufenthalt, Visum, Integration, Anerkennung]
+      ar: [استشارة, اقامة, إقامة, لجوء, مساعدة, ترجمة]
+      translit: [istisharah, iqama, lujoo]
+
+  - id: community
+    label_de: Community & Austausch
+    terms:
+      de: [Community, Gemeinschaft, Austausch, Freunde, Gruppe, Verein, Familie]
+      ar: [تجمع, جالية, مجتمع, اصدقاء, أصدقاء, عائلة]
+      translit: [tajammu3, jaliya, community]

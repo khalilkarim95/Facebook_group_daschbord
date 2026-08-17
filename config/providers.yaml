@@ -1,0 +1,73 @@
+# Search-Provider. Die Anwendung kennt nur Namen aus dieser Datei - kein Modul
+# ausserhalb von src/fbgroups/providers/ importiert anbieterspezifischen Code.
+#
+# Zugangsdaten stehen NIE hier, sondern in .env (siehe api_key_env).
+
+active: fixture           # Standard: laeuft offline, ohne Konto, ohne Kosten
+
+# Bewusst leer. Ein automatischer Wechsel auf einen anderen Dienst koennte
+# Guthaben eines Kontos verbrauchen, das der Nutzer gerade nicht einsetzen
+# will. Ein Providerwechsel ist eine Entscheidung, keine Ausweichreaktion:
+# er erfolgt ueber "active" oder "fbgroups search --provider NAME".
+fallback_chain: []
+
+providers:
+
+  # --- Offline, fuer Entwicklung und Tests ---
+  fixture:
+    enabled: true
+    fixtures_dir: tests/fixtures/search
+    # Unbekannte Anfragen liefern ein leeres Ergebnis statt eines Fehlers.
+    strict: false
+
+  # --- Serper.dev: Google-Ergebnisse, 2.500 Gratis-Credits (6 Monate) ---
+  #
+  # Betrieb ausschliesslich im Gratis-Kontingent: keine Zahlungsdaten, kein
+  # Auto-Top-Up. Ist das Kontingent aufgebraucht, antwortet der Dienst mit
+  # HTTP 402; der Lauf endet daraufhin geordnet (QuotaExhaustedError) und
+  # schickt nichts nach.
+  serper:
+    enabled: true
+    api_key_env: SERPER_API_KEY   # ausschliesslich aus .env, nie aus dieser Datei
+    endpoint: https://google.serper.dev/search
+    max_results_per_call: 10      # 1 Credit; ab 11 Ergebnissen kostet es 2
+    credits_per_query: 1          # Grundlage der Verbrauchsschaetzung im dry-run
+    country: de                   # gl - Suchregion Deutschland
+    language: de                  # hl - Vorgabe, je Anfrage von der Sprache ueberstimmt
+    supports_site_operator: true
+    min_interval_seconds: 0.5
+    timeout_seconds: 20
+
+  # --- Brave: 5 $ Guthaben monatlich, erneuert sich (~1.000 Anfragen) ---
+  #
+  # ACHTUNG - bewusst deaktiviert: Brave verlangt bei der Anmeldung eine
+  # Kreditkarte und hat seit Februar 2026 KEINE Ausgabenobergrenze. Ist das
+  # Monatsguthaben aufgebraucht, wird jede weitere Anfrage der Karte belastet.
+  # Nur aktivieren, wenn du das bewusst in Kauf nimmst.
+  brave:
+    enabled: false
+    api_key_env: BRAVE_API_KEY
+    endpoint: https://api.search.brave.com/res/v1/web/search
+    max_results_per_call: 10      # API erlaubt bis 20
+    country: DE
+    language: de
+    supports_site_operator: true
+    # Der kostenlose Tarif erlaubt rund eine Anfrage pro Sekunde.
+    min_interval_seconds: 1.1
+    timeout_seconds: 20
+
+# --- Schutz vor unbeabsichtigtem Kontingentverbrauch ---
+limits:
+  # Harte Obergrenze NEUER Anfragen je Lauf. Sie greift zusaetzlich zu --limit;
+  # der kleinere Wert gewinnt. Bereits gespeicherte Anfragen zaehlen nicht mit,
+  # weil sie kein Guthaben kosten.
+  max_queries_per_run: 50
+  max_results_per_query: 10
+
+  # Dauerhafter Anfragespeicher (data/query_cache.sqlite): eine erfolgreich
+  # beantwortete Anfrage geht nie ein zweites Mal an den Dienst.
+  cache_enabled: true
+  # 0 = unbegrenzt gueltig. Das ist hier die sparsame Einstellung: ein Ablauf
+  # wuerde bereits bezahlte Anfragen erneut kostenpflichtig machen. Wer
+  # frischere Ergebnisse braucht, setzt einen Wert in Tagen.
+  cache_ttl_days: 0

@@ -1,0 +1,17 @@
+{
+  "provider": "fixture",
+  "query": "سوريين في برلين site:facebook.com/groups",
+  "note": "Erfundene Beispielantwort fuer Offline-Tests. Keine echten Gruppen.",
+  "results": [
+    {
+      "title": "تجمع السوريين في برلين | Facebook",
+      "url": "https://www.facebook.com/groups/928374651029384",
+      "snippet": "مجموعة عامة · 15200 عضو · تجمع للسوريين في مدينة برلين"
+    },
+    {
+      "title": "Syrer in Berlin | Facebook",
+      "url": "https://www.facebook.com/groups/482910573829104",
+      "snippet": "Öffentliche Gruppe · 12.400 Mitglieder · bereits über die deutsche Anfrage gefunden"
+    }
+  ]
+}

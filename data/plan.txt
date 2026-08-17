@@ -1,0 +1,64 @@
+﻿                             Geplante Anfragen an 'serper' (Phase 1)                             
+ÔöîÔöÇÔöÇÔöÇÔöÇÔö¼ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö¼ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö¼ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö¼ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÉ
+Ôöé  # Ôöé ID               Ôöé Spr.     Ôöé Status Ôöé Anfrage                                           Ôöé
+Ôö£ÔöÇÔöÇÔöÇÔöÇÔö╝ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö╝ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö╝ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö╝ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöñ
+Ôöé  1 Ôöé nw_01            Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Syrer Deutschland"     Ôöé
+Ôöé  2 Ôöé nw_02            Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Syrer in Deutschland"  Ôöé
+Ôöé  3 Ôöé nw_03            Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï│┘êÏ▒┘è┘è┘å ┘ü┘è Ïú┘ä┘àÏº┘å┘èÏº"     Ôöé
+Ôöé  4 Ôöé nw_04            Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ïº┘äÏ│┘êÏ▒┘è┘è┘å ┘ü┘è Ïú┘ä┘àÏº┘å┘èÏº"   Ôöé
+Ôöé  5 Ôöé nw_05            Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Araber Deutschland"    Ôöé
+Ôöé  6 Ôöé nw_06            Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Araber in Deutschland" Ôöé
+Ôöé  7 Ôöé nw_07            Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï╣Ï▒Ï¿ ┘ü┘è Ïú┘ä┘àÏº┘å┘èÏº"        Ôöé
+Ôöé  8 Ôöé cp_01__berlin    Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Syrer Berlin"          Ôöé
+Ôöé  9 Ôöé cp_02__berlin    Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Syrer in Berlin"       Ôöé
+Ôöé 10 Ôöé cp_03__berlin    Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï│┘êÏ▒┘è┘è┘å Ï¿Ï▒┘ä┘è┘å"          Ôöé
+Ôöé 11 Ôöé cp_04__berlin    Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï│┘êÏ▒┘è┘è┘å ┘ü┘è Ï¿Ï▒┘ä┘è┘å"       Ôöé
+Ôöé 12 Ôöé cp_05__berlin    Ôöé translit Ôöé neu    Ôöé site:facebook.com/groups/ "Suriyeen Berlin"       Ôöé
+Ôöé 13 Ôöé cp_06__berlin    Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Araber Berlin"         Ôöé
+Ôöé 14 Ôöé cp_07__berlin    Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Araber in Berlin"      Ôöé
+Ôöé 15 Ôöé cp_08__berlin    Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï╣Ï▒Ï¿ Ï¿Ï▒┘ä┘è┘å"             Ôöé
+Ôöé 16 Ôöé cp_09__berlin    Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï╣Ï▒Ï¿ ┘ü┘è Ï¿Ï▒┘ä┘è┘å"          Ôöé
+Ôöé 17 Ôöé cp_01__hamburg   Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Syrer Hamburg"         Ôöé
+Ôöé 18 Ôöé cp_02__hamburg   Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Syrer in Hamburg"      Ôöé
+Ôöé 19 Ôöé cp_03__hamburg   Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï│┘êÏ▒┘è┘è┘å ┘çÏº┘àÏ¿┘êÏ▒Ï║"        Ôöé
+Ôöé 20 Ôöé cp_04__hamburg   Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï│┘êÏ▒┘è┘è┘å ┘ü┘è ┘çÏº┘àÏ¿┘êÏ▒Ï║"     Ôöé
+Ôöé 21 Ôöé cp_05__hamburg   Ôöé translit Ôöé neu    Ôöé site:facebook.com/groups/ "Suriyeen Hamburg"      Ôöé
+Ôöé 22 Ôöé cp_06__hamburg   Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Araber Hamburg"        Ôöé
+Ôöé 23 Ôöé cp_07__hamburg   Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Araber in Hamburg"     Ôöé
+Ôöé 24 Ôöé cp_08__hamburg   Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï╣Ï▒Ï¿ ┘çÏº┘àÏ¿┘êÏ▒Ï║"           Ôöé
+Ôöé 25 Ôöé cp_09__hamburg   Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï╣Ï▒Ï¿ ┘ü┘è ┘çÏº┘àÏ¿┘êÏ▒Ï║"        Ôöé
+Ôöé 26 Ôöé cp_01__muenchen  Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Syrer M├╝nchen"         Ôöé
+Ôöé 27 Ôöé cp_02__muenchen  Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Syrer in M├╝nchen"      Ôöé
+Ôöé 28 Ôöé cp_03__muenchen  Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï│┘êÏ▒┘è┘è┘å ┘à┘è┘ê┘åÏ«"          Ôöé
+Ôöé 29 Ôöé cp_04__muenchen  Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï│┘êÏ▒┘è┘è┘å ┘ü┘è ┘à┘è┘ê┘åÏ«"       Ôöé
+Ôöé 30 Ôöé cp_05__muenchen  Ôöé translit Ôöé neu    Ôöé site:facebook.com/groups/ "Suriyeen M├╝nchen"      Ôöé
+Ôöé 31 Ôöé cp_06__muenchen  Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Araber M├╝nchen"        Ôöé
+Ôöé 32 Ôöé cp_07__muenchen  Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Araber in M├╝nchen"     Ôöé
+Ôöé 33 Ôöé cp_08__muenchen  Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï╣Ï▒Ï¿ ┘à┘è┘ê┘åÏ«"             Ôöé
+Ôöé 34 Ôöé cp_09__muenchen  Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï╣Ï▒Ï¿ ┘ü┘è ┘à┘è┘ê┘åÏ«"          Ôöé
+Ôöé 35 Ôöé cp_01__stuttgart Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Syrer Stuttgart"       Ôöé
+Ôöé 36 Ôöé cp_02__stuttgart Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Syrer in Stuttgart"    Ôöé
+Ôöé 37 Ôöé cp_03__stuttgart Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï│┘êÏ▒┘è┘è┘å Ï┤Ï¬┘êÏ¬Ï║ÏºÏ▒Ï¬"       Ôöé
+Ôöé 38 Ôöé cp_04__stuttgart Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï│┘êÏ▒┘è┘è┘å ┘ü┘è Ï┤Ï¬┘êÏ¬Ï║ÏºÏ▒Ï¬"    Ôöé
+Ôöé 39 Ôöé cp_05__stuttgart Ôöé translit Ôöé neu    Ôöé site:facebook.com/groups/ "Suriyeen Stuttgart"    Ôöé
+Ôöé 40 Ôöé cp_06__stuttgart Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Araber Stuttgart"      Ôöé
+Ôöé 41 Ôöé cp_07__stuttgart Ôöé de       Ôöé neu    Ôöé site:facebook.com/groups/ "Araber in Stuttgart"   Ôöé
+Ôöé 42 Ôöé cp_08__stuttgart Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï╣Ï▒Ï¿ Ï┤Ï¬┘êÏ¬Ï║ÏºÏ▒Ï¬"          Ôöé
+Ôöé 43 Ôöé cp_09__stuttgart Ôöé ar       Ôöé neu    Ôöé site:facebook.com/groups/ "Ï╣Ï▒Ï¿ ┘ü┘è Ï┤Ï¬┘êÏ¬Ï║ÏºÏ▒Ï¬"       Ôöé
+ÔööÔöÇÔöÇÔöÇÔöÇÔö┤ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö┤ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö┤ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö┤ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÿ
+ÔöîÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ dry-run ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÉ
+Ôöé Provider: serper   Zustand: vorhanden                                                                                                   Ôöé
+Ôöé                                                                                                                                         Ôöé
+Ôöé Geplante Anfragen:        43                                                                                                            Ôöé
+Ôöé davon bereits gespeichert: 0  (kein Guthaben)                                                                                           Ôöé
+Ôöé davon neu:                 43                                                                                                           Ôöé
+Ôöé in diesem Lauf gesendet:   43  (Obergrenze 50 aus max_queries_per_run)                                                                  Ôöé
+Ôöé zurueckgestellt:           0                                                                                                            Ôöé
+Ôöé                                                                                                                                         Ôöé
+Ôöé Geschaetzter Verbrauch:    43 Credits (1 je Anfrage, max. 10 Ergebnisse)                                                                Ôöé
+Ôöé Im Anfragespeicher gesamt: 0 Anfragen                                                                                                   Ôöé
+Ôöé                                                                                                                                         Ôöé
+Ôöé Es wurde nichts abgefragt und kein Guthaben verbraucht.                                                                                 Ôöé
+Ôöé Ohne --limit zeigt dieser Plan, was 'fbgroups search --alle' senden wuerde.                                                             Ôöé
+Ôöé Ein Lauf ohne Mengenangabe startet nicht.                                                                                               Ôöé
+ÔööÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÿ
