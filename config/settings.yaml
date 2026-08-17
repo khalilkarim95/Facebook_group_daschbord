@@ -16,7 +16,7 @@ marketing:
   # Die Umgebungsvariable APP_BASE_URL hat Vorrang - so laeuft dieselbe
   # Konfiguration lokal und auf der echten Domain, ohne die gespeicherten
   # Codes anzufassen. Der Code steht fest, nur sein Vorspann wechselt.
-  app_base_url: http://localhost:3000
+  app_base_url: https://b-tarikak.de/
 
   tracking:
     prefix: FB        # Kanal, erster Teil des Codes: FB-SYR-BER-001
