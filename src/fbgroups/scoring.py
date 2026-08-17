@@ -133,36 +133,40 @@ def score_group(group: Group, config: AppConfig) -> Group:
         group.status = determine_status(group)
         return group
 
-    weights = {**DEFAULT_WEIGHTS, **(config.get("scoring", "weights", default={}) or {})}
+    # Ein Gewicht von 0 nimmt den Bestandteil vollstaendig aus der Bewertung -
+    # er zaehlt weder Punkte noch erscheint er als "unbekannt" in der
+    # Begruendung. So laesst sich die Mitgliederzahl abschalten, solange sie
+    # nicht beschaffbar ist, ohne den Code anzufassen. Ohne diesen Filter
+    # setzte DEFAULT_WEIGHTS die 45 Punkte gegen die Konfiguration wieder ein.
+    weights = {
+        name: float(gewicht)
+        for name, gewicht in {
+            **DEFAULT_WEIGHTS,
+            **(config.get("scoring", "weights", default={}) or {}),
+        }.items()
+        if float(gewicht) > 0
+    }
 
     # Bestandteile, die anhand der vorliegenden Angaben beurteilbar sind.
     # Die Konfidenz unterscheidet dabei Treffer im Namen (1,0) von Treffern im
     # Beschreibungstext (0,5) - ohne diese Abstufung erreichten alle Teile
     # gleichzeitig ihr Maximum.
-    parts: dict[str, tuple[float, float]] = {
-        "audience_match": (
-            float(weights["audience_match"]),
-            group.audience_confidence if group.audience_tags else 0.0,
-        ),
-        "city_match": (
-            float(weights["city_match"]),
-            group.city_confidence if group.city else 0.0,
-        ),
-        "category_match": (
-            float(weights["category_match"]),
-            group.category_confidence if group.category else 0.0,
-        ),
-        "name_quality": (float(weights["name_quality"]), _name_quality_factor(group)),
+    faktoren: dict[str, float] = {
+        "audience_match": group.audience_confidence if group.audience_tags else 0.0,
+        "city_match": group.city_confidence if group.city else 0.0,
+        "category_match": group.category_confidence if group.category else 0.0,
+        "name_quality": _name_quality_factor(group),
     }
 
     # Die Mitgliederzahl zaehlt nur mit, wenn sie belegt ist. Fehlt sie, sinkt
     # die erreichbare Punktzahl - erfunden wird nichts, aber die Gruppe gilt
     # auch nicht als geprueft gross.
     if group.member_count_hint is not None:
-        parts["member_count"] = (
-            float(weights["member_count"]),
-            _member_count_factor(group.member_count_hint, config),
-        )
+        faktoren["member_count"] = _member_count_factor(group.member_count_hint, config)
+
+    parts: dict[str, tuple[float, float]] = {
+        name: (weights[name], faktor) for name, faktor in faktoren.items() if name in weights
+    }
 
     points = {name: round(weight * factor, 2) for name, (weight, factor) in parts.items()}
     fehlend = [name for name in weights if name not in parts]

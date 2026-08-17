@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from fbgroups.config import load_config
 from fbgroups.extract.enrich import (
     clean_group_name,
     drop_shared_snippets,
@@ -19,14 +20,19 @@ from fbgroups.models import PrivacyHint, QueryStatus
 from fbgroups.pipeline import prepare_groups, process_search_results
 from fbgroups.providers.base import SearchHit
 from fbgroups.providers.fixture import FixtureProvider
+from fbgroups.query.builder import build_queries
 from fbgroups.search import build_plan, build_query_text, run_search
 from fbgroups.storage.query_cache import QueryCache
 from fbgroups.utils.rate_limit import RateLimiter
 
 FIXTURES = Path(__file__).parent / "fixtures" / "search"
 
-# Gesamtzahl der Anfragen in Phase 1: 7 bundesweit + 9 Muster x 4 Staedte.
-GEPLANT = 43
+# Umfang eines Laufs in Phase 1: 7 bundesweite Anfragen + 9 Muster je
+# freigeschalteter Stadt. Aus der Konfiguration abgeleitet statt
+# festgeschrieben: Eine neue Stadt aendert den Umfang eines Laufs und soll
+# keinen Test brechen - geprueft wird das Verhalten des Plans, nicht der
+# gerade eingestellte Ausbaustand.
+GEPLANT = len(build_queries(load_config(), phase=1))
 
 PROVIDER_CONFIG = {
     "active": "fixture",
@@ -42,6 +48,11 @@ MIT_SPEICHER = {
     **PROVIDER_CONFIG,
     "limits": {**PROVIDER_CONFIG["limits"], "cache_enabled": True},
 }
+
+# Harte Obergrenze dieser Testkonfiguration - bewusst unabhaengig von der des
+# Projekts. Sobald mehr Staedte freigeschaltet sind als sie zulaesst, fuehrt
+# ein Lauf nicht mehr alle geplanten Anfragen aus; genau das soll sie.
+OBERGRENZE = PROVIDER_CONFIG["limits"]["max_queries_per_run"]
 
 
 @pytest.fixture
@@ -322,7 +333,7 @@ def test_suchlauf_filtert_und_zaehlt(config, provider, cache) -> None:
     groups, run = run_search(config, provider, PROVIDER_CONFIG, cache=cache)
 
     assert run.queries_planned == GEPLANT
-    assert run.queries_executed == GEPLANT
+    assert run.queries_executed == min(GEPLANT, OBERGRENZE)
     assert run.hits_total > 0
     # Fremde Domains und Nicht-Gruppen sind herausgefiltert
     assert run.group_urls_found < run.hits_total

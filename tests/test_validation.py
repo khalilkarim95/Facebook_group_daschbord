@@ -215,8 +215,14 @@ def test_name_plus_signal_genuegt(config) -> None:
     assert group.score is not None
 
 
-def test_fehlende_mitgliederzahl_wird_nicht_erfunden(config) -> None:
-    """Unbekannte Mitgliederzahl bringt keine Punkte - und keinen Ersatzwert."""
+def test_fehlende_mitgliederzahl_wird_nicht_erfunden(config_mit_mitgliederzahl) -> None:
+    """Unbekannte Mitgliederzahl bringt keine Punkte - und keinen Ersatzwert.
+
+    Geprueft mit eingeschalteter Mitgliederzahl: Im Projekt steht das Gewicht
+    auf 0, der Ersatzwert-Mechanismus muss aber weiterhin fehlen, falls jemand
+    die Zahl von Hand pflegt und den Bestandteil wieder einschaltet.
+    """
+    config = config_mit_mitgliederzahl
     ohne = score_group(
         make_group(
             name="Syrer in Berlin",

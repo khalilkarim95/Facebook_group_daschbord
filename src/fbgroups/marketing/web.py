@@ -1,7 +1,6 @@
-"""Redirect-Dienst und Meldeschnittstelle.
+"""Redirect-Dienst, Meldeschnittstelle und Uebersichtsseite.
 
-Zwei Aufgaben, mehr nicht:
-
+``GET  /``           Uebersicht ueber den Bestand - nur ueber localhost
 ``GET  /r/{code}``   Klick zaehlen und zur Landingpage weiterleiten
 ``POST /events``     die Zielanwendung meldet, was danach passiert ist
 
@@ -29,14 +28,22 @@ import secrets
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
 from fbgroups.config import AppConfig, load_config
-from fbgroups.marketing.models import EventType, ReferralStatus, TrackingEvent
+from fbgroups.marketing.dashboard import render, sammle_daten, status_label
+from fbgroups.marketing.models import (
+    EventType,
+    MarketingStatus,
+    ReferralStatus,
+    TrackingEvent,
+)
 from fbgroups.marketing.referral import code_fuer_benutzer, lege_empfehlung_an, setze_status
 from fbgroups.marketing.rewards import bewerte_benutzer, load_reward_rules
 from fbgroups.marketing.store import MarketingStore
+from fbgroups.storage import SqliteStore
 
 # Optionale Abhaengigkeit, aber auf Modulebene importiert: Wegen
 # ``from __future__ import annotations`` sind Typangaben Zeichenketten, die
@@ -45,13 +52,21 @@ from fbgroups.marketing.store import MarketingStore
 # jeden Aufruf mit 422 beantwortet.
 try:
     from fastapi import FastAPI, HTTPException, Request
-    from fastapi.responses import JSONResponse, RedirectResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
     FASTAPI_VERFUEGBAR = True
 except ImportError:  # pragma: no cover - haengt von der Installation ab
     FASTAPI_VERFUEGBAR = False
 
 SALT_SCHLUESSEL = "visitor_salt"
+
+# Absenderadressen, die als "derselbe Rechner" gelten. Der Dienst steht
+# oeffentlich - die Tracking-Links zeigen auf ihn -, die Arbeitsliste darf aber
+# nicht mit heraus. Es gibt keine Anmeldung, also entscheidet die Herkunft.
+# Sie stammt aus der Verbindung selbst, nicht aus einer Kopfzeile, und ist
+# deshalb nicht vorzutaeuschen. ``testclient`` vergibt Starlettes Testclient
+# im selben Prozess - von aussen kann diese Adresse nicht auftreten.
+LOKALE_ADRESSEN = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 # Welches Ereignis welchen Empfehlungsstand ergibt. Steht hier, damit die
 # Zuordnung an einer Stelle nachlesbar ist.
@@ -60,6 +75,18 @@ _REFERRAL_STUFE = {
     EventType.QUALIFIED: ReferralStatus.QUALIFIED,
     EventType.CONVERSION: ReferralStatus.CONVERTED,
 }
+
+
+class StandMeldung(BaseModel):
+    """Ein Mensch traegt nach, was er bei Facebook getan hat.
+
+    Bewusst genau zwei Felder: Der Weg pflegt den Arbeitsstand, sonst nichts.
+    Weder Bewertung noch Klassifikation lassen sich darueber veraendern - die
+    entstehen aus der Suche und gehoeren nicht in eine Handeingabe.
+    """
+
+    group_id: str = Field(max_length=128)
+    status: MarketingStatus
 
 
 class EventMeldung(BaseModel):
@@ -128,9 +155,86 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
     def _store() -> MarketingStore:
         return MarketingStore(pfad)
 
+    def _nur_lokal(request: Request) -> None:
+        """Laesst nur Aufrufe vom selben Rechner durch - und keine fremde Seite.
+
+        Zwei Pruefungen, weil sie zwei verschiedene Faelle abdecken:
+
+        1. **Absenderadresse.** Sie stammt aus der Verbindung, nicht aus einer
+           Kopfzeile, und ist deshalb nicht vorzutaeuschen. Der Dienst darf
+           oeffentlich stehen, damit die Tracking-Links funktionieren; die
+           Arbeitsliste bleibt trotzdem auf diesem Rechner.
+        2. **Herkunft der Seite.** Ohne sie koennte jede beliebige Webseite,
+           die du im Browser offen hast, an ``localhost`` schreiben - der
+           Browser saesse ja auf demselben Rechner. Der Weg nimmt ausserdem
+           nur JSON entgegen; ein einfaches Formular von aussen scheitert damit
+           schon an der Vorabanfrage, die dieser Dienst nicht beantwortet.
+
+        404 statt 403: Wer den Dienst oeffentlich stellt, soll nicht nebenbei
+        verraten, dass es hier eine Arbeitsliste gibt.
+        """
+        absender = request.client.host if request.client else ""
+        if absender not in LOKALE_ADRESSEN:
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        herkunft = request.headers.get("origin", "")
+        if herkunft and urlparse(herkunft).hostname not in LOKALE_ADRESSEN:
+            raise HTTPException(status_code=404, detail="Not Found")
+
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/", response_class=HTMLResponse)
+    def dashboard(request: Request):  # noqa: ANN202
+        """Uebersicht ueber den Bestand - ausschliesslich vom selben Rechner.
+
+        Von aussen ist der Weg nicht vorhanden (404, nicht 403): Wer den Dienst
+        oeffentlich stellt, soll damit nicht nebenbei verraten, dass es hier
+        ueberhaupt eine Arbeitsliste gibt.
+        """
+        _nur_lokal(request)
+        return HTMLResponse(render(sammle_daten(cfg, pfad)))
+
+    @app.post("/stand")
+    def stand_setzen(meldung: StandMeldung, request: Request):  # noqa: ANN202
+        """Traegt den Arbeitsstand einer Gruppe ein - derselbe Weg wie die CLI.
+
+        Facebook meldet nicht, dass eine Beitrittsanfrage gestellt wurde, und
+        dieser Dienst fragt dort nichts ab. Der Stand kann deshalb nur von dem
+        Menschen kommen, der die Anfrage geschickt hat; hier braucht es dafuer
+        einen Klick statt eines Befehls.
+
+        Anders als der Sammelbefehl ``marketing beitritt`` darf dieser Weg auch
+        zurueckstufen: Es ist eine einzelne, ausdrueckliche Angabe zu einer
+        einzelnen Gruppe - genau die Handarbeit, auf die der Sammelbefehl
+        verweist.
+        """
+        _nur_lokal(request)
+
+        with SqliteStore(pfad) as gruppen_store:
+            bekannt = {g.group_id for g in gruppen_store.load_groups()}
+        if meldung.group_id not in bekannt:
+            raise HTTPException(status_code=404, detail="Unbekannte Gruppe")
+
+        jetzt = datetime.now(UTC)
+        with _store() as store:
+            eintrag = store.load_marketing(meldung.group_id)
+            eintrag.marketing_status = meldung.status
+            # Zeitpunkte nur ergaenzen, nie ueberschreiben: Wann die Anfrage
+            # gestellt wurde, weiss nur der erste Eintrag - ein spaeterer
+            # Korrekturklick darf das Datum nicht auf heute ziehen.
+            if meldung.status is MarketingStatus.JOIN_REQUESTED and not eintrag.join_requested_at:
+                eintrag.join_requested_at = jetzt
+            if meldung.status is MarketingStatus.CONTACTED and not eintrag.last_contacted_at:
+                eintrag.last_contacted_at = jetzt
+            eintrag.updated_at = jetzt
+            store.save_marketing(eintrag)
+            store.audit("stand_gesetzt", meldung.group_id, meldung.status.value)
+
+        return JSONResponse(
+            {"status": meldung.status.value, "label": status_label(meldung.status.value)}
+        )
 
     @app.get("/r/{tracking_code}")
     def redirect(tracking_code: str, request: Request):  # noqa: ANN202

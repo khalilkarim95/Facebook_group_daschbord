@@ -33,21 +33,30 @@ cities:
     phase: 1
     aliases: [شتوتجارت]
 
+  # --- Phase 1, zweite Ausbaustufe (freigeschaltet am 17.08.2026) ---
+  #
+  # Ausgewaehlt nach der Groesse der syrischen und arabischen Community, nicht
+  # nach Einwohnerzahl: Nordrhein-Westfalen hat die mit Abstand meisten
+  # syrischen Einwohner Deutschlands, dazu die Ballungsraeume Frankfurt,
+  # Hannover und Bremen. Leipzig, Dresden, Nuernberg und der Suedwesten sind
+  # bewusst noch nicht dabei - dort ist je Anfrage mit weniger zu rechnen, und
+  # jede Anfrage kostet ein Credit.
+  - { id: koeln,      name_de: Köln,       name_ar: كولونيا,   bundesland: Nordrhein-Westfalen, population: 1090000, phase: 1, aliases: [Koeln, Cologne] }
+  - { id: frankfurt,  name_de: Frankfurt,  name_ar: فرانكفورت, bundesland: Hessen,              population: 770000,  phase: 1, aliases: [Frankfurt am Main] }
+  - { id: duesseldorf, name_de: Düsseldorf, name_ar: دوسلدورف, bundesland: Nordrhein-Westfalen, population: 620000,  phase: 1, aliases: [Duesseldorf, Dusseldorf] }
+  - { id: dortmund,   name_de: Dortmund,   name_ar: دورتموند,  bundesland: Nordrhein-Westfalen, population: 590000,  phase: 1, aliases: [] }
+  - { id: essen,      name_de: Essen,      name_ar: إيسن,      bundesland: Nordrhein-Westfalen, population: 580000,  phase: 1, aliases: [ايسن] }
+  - { id: bremen,     name_de: Bremen,     name_ar: بريمن,     bundesland: Bremen,              population: 570000,  phase: 1, aliases: [] }
+  - { id: hannover,   name_de: Hannover,   name_ar: هانوفر,    bundesland: Niedersachsen,       population: 540000,  phase: 1, aliases: [Hanover] }
+  - { id: duisburg,   name_de: Duisburg,   name_ar: دويسبورغ,  bundesland: Nordrhein-Westfalen, population: 500000,  phase: 1, aliases: [] }
+  - { id: bochum,     name_de: Bochum,     name_ar: بوخوم,     bundesland: Nordrhein-Westfalen, population: 370000,  phase: 1, aliases: [] }
+  - { id: wuppertal,  name_de: Wuppertal,  name_ar: فوبرتال,   bundesland: Nordrhein-Westfalen, population: 360000,  phase: 1, aliases: [] }
+  - { id: bonn,       name_de: Bonn,       name_ar: بون,       bundesland: Nordrhein-Westfalen, population: 340000,  phase: 1, aliases: [] }
+
   # --- Phase 2 ---
-  - { id: koeln,      name_de: Köln,       name_ar: كولونيا,   bundesland: Nordrhein-Westfalen, population: 1090000, phase: 2, aliases: [Koeln, Cologne] }
-  - { id: frankfurt,  name_de: Frankfurt,  name_ar: فرانكفورت, bundesland: Hessen,              population: 770000,  phase: 2, aliases: [Frankfurt am Main] }
-  - { id: duesseldorf, name_de: Düsseldorf, name_ar: دوسلدورف, bundesland: Nordrhein-Westfalen, population: 620000,  phase: 2, aliases: [Duesseldorf, Dusseldorf] }
-  - { id: dortmund,   name_de: Dortmund,   name_ar: دورتموند,  bundesland: Nordrhein-Westfalen, population: 590000,  phase: 2, aliases: [] }
-  - { id: essen,      name_de: Essen,      name_ar: إيسن,      bundesland: Nordrhein-Westfalen, population: 580000,  phase: 2, aliases: [ايسن] }
   - { id: leipzig,    name_de: Leipzig,    name_ar: لايبزيغ,   bundesland: Sachsen,             population: 620000,  phase: 2, aliases: [لايبزيج] }
-  - { id: bremen,     name_de: Bremen,     name_ar: بريمن,     bundesland: Bremen,              population: 570000,  phase: 2, aliases: [] }
   - { id: dresden,    name_de: Dresden,    name_ar: دريسدن,    bundesland: Sachsen,             population: 560000,  phase: 2, aliases: [] }
-  - { id: hannover,   name_de: Hannover,   name_ar: هانوفر,    bundesland: Niedersachsen,       population: 540000,  phase: 2, aliases: [Hanover] }
   - { id: nuernberg,  name_de: Nürnberg,   name_ar: نورنبرغ,   bundesland: Bayern,              population: 520000,  phase: 2, aliases: [Nuernberg, Nuremberg] }
-  - { id: duisburg,   name_de: Duisburg,   name_ar: دويسبورغ,  bundesland: Nordrhein-Westfalen, population: 500000,  phase: 2, aliases: [] }
-  - { id: bochum,     name_de: Bochum,     name_ar: بوخوم,     bundesland: Nordrhein-Westfalen, population: 370000,  phase: 2, aliases: [] }
-  - { id: wuppertal,  name_de: Wuppertal,  name_ar: فوبرتال,   bundesland: Nordrhein-Westfalen, population: 360000,  phase: 2, aliases: [] }
-  - { id: bonn,       name_de: Bonn,       name_ar: بون,       bundesland: Nordrhein-Westfalen, population: 340000,  phase: 2, aliases: [] }
   - { id: mannheim,   name_de: Mannheim,   name_ar: مانهايم,   bundesland: Baden-Württemberg,   population: 320000,  phase: 2, aliases: [] }
   - { id: karlsruhe,  name_de: Karlsruhe,  name_ar: كارلسروه,  bundesland: Baden-Württemberg,   population: 310000,  phase: 2, aliases: [] }
   - { id: freiburg,   name_de: Freiburg,   name_ar: فرايبورغ,  bundesland: Baden-Württemberg,   population: 230000,  phase: 2, aliases: [] }

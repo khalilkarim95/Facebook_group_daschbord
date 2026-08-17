@@ -142,13 +142,23 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
   Ersatzwert für fehlende Daten — eine frühere Fassung vergab bei unbekannter
   Mitgliederzahl einen „neutralen" Faktor und erzeugte damit für jede Gruppe
   ohne Metadaten denselben Score (8,75).
-- **Die Mitgliederzahl ist das schwerste Kriterium (45 von 100).** Für eine
-  Kooperation entscheidet die Reichweite. Sie ist zugleich die einzige Angabe,
-  die das Projekt nicht selbst beschaffen kann: In 273 gespeicherten
-  Suchtreffern stand sie **kein einziges Mal**, und facebook.com wird nicht
-  aufgerufen. Ohne sie sind höchstens 55 Punkte erreichbar — das ist keine
-  Strafe für die Gruppe, sondern die ehrliche Aussage „Größe unbekannt".
-  Sie kommt über `fbgroups pruefliste` von Hand herein.
+- **Die Mitgliederzahl ist abgeschaltet (`member_count: 0`).** Sie war mit 45
+  von 100 das schwerste Kriterium — für eine Kooperation entscheidet die
+  Reichweite. Sie ist aber die einzige Angabe, die das Projekt nicht selbst
+  beschaffen kann: In 273 gespeicherten Suchtreffern stand sie **kein einziges
+  Mal**, und facebook.com wird nicht aufgerufen. Damit fehlte sie ausnahmslos
+  jeder der 132 Gruppen, und die Decke von 55 Punkten unterschied keine Gruppe
+  von einer anderen — sie war eine Aussage über das Projekt, nicht über die
+  Gruppen. Ihre 45 Punkte liegen jetzt auf `audience_match` (45), `city_match`
+  (27), `category_match` (16) und `name_quality` (12).
+- **Gewicht `0` schaltet einen Bestandteil ganz ab, `None` heißt unbekannt.**
+  Ein abgeschalteter Bestandteil senkt `score_max` nicht und erscheint nicht
+  als „unbekannt" in `score_reason` — er wird gar nicht erst erwartet. Ohne
+  diesen Filter in `scoring.score_group` setzte `DEFAULT_WEIGHTS` die 45 Punkte
+  gegen die Konfiguration wieder ein. Wer die Mitgliederzahl von Hand pflegt
+  (`fbgroups pruefliste`), setzt das Gewicht zurück auf > 0 und ruft `rescore`
+  auf; der gesamte Mechanismus ist erhalten und durch die Fixture
+  `config_mit_mitgliederzahl` weiterhin getestet.
 - **`ValidationStatus.UNREACHABLE` ist ein Menschenurteil.** Nur wer die
   Gruppe im Browser geöffnet hat, kann sie für tot erklären. `upsert_groups`
   nimmt dieses Urteil deshalb nie zurück — ein späterer Suchtreffer belegt
@@ -157,8 +167,9 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
   Punkte, bei Gleichstand der **Anteil** an den erreichbaren Punkten: 55 von
   55 steht vor 55 von 100. Die beste Gruppe steht damit in Zeile 2 der Datei.
 - **Der Score wird nicht hochgerechnet.** Er ist die Summe der belegten
-  Punkte; `score_max` nennt das bei dieser Datenlage Erreichbare (ohne
-  Mitgliederzahl: 75). Die zweite Fassung normierte stattdessen über die
+  Punkte; `score_max` nennt das bei dieser Datenlage Erreichbare. Das gilt
+  unverändert für jeden **eingeschalteten** Bestandteil, der fehlt — nicht für
+  einen mit Gewicht 0. Die zweite Fassung normierte stattdessen über die
   vorhandenen Bestandteile auf 100 — bei 134 von 138 Gruppen ohne
   Mitgliederzahl bekam damit eine Gruppe, von der nur der Name bekannt war,
   denselben Höchstwert wie eine belegte Großgruppe. 27 Gruppen standen auf
@@ -228,6 +239,28 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
 - **Der Arbeitsstand steht in `group_marketing`, nicht in `groups`.** Ein
   Suchlauf schreibt jeden gefundenen Datensatz neu; von Hand gepflegte Angaben
   hätten dort keinen sicheren Platz.
+- **Der Stand ändert sich nur von Hand.** Kein Befehl beobachtet Facebook, also
+  kann keiner erkennen, dass eine Anfrage gestellt wurde. `marketing set` und
+  `marketing beitritt` schreiben mit, was ein Mensch im Browser getan hat.
+- **Die Beitrittsanfrage ist ein eigener Schritt** (`beitritt_angefragt` →
+  `mitglied` → `contacted`). Bei Facebook muss man aufgenommen sein, bevor man
+  posten oder die Leitung ansprechen kann. Vorher sprang das Modell von
+  `not_contacted` direkt auf `contacted` — und traf damit den häufigsten
+  Schritt nicht: Beitrittsanfragen betreffen jede Gruppe im Bestand, das
+  Ansprechen der Leitung eine Handvoll. `join_requested_at` ist ein eigenes
+  Feld, nicht `last_contacted_at`: Facebook lässt Beitrittsanfragen oft
+  wochenlang offen.
+- **`marketing beitritt` dreht keinen erreichten Stand zurück.** Der
+  Sammelbefehl überspringt jede Gruppe, die laut `MARKETING_FORTSCHRITT` schon
+  weiter ist, und meldet sie. Auch `beitritt_abgelehnt` bleibt stehen — eine
+  Ablehnung ist ein Ergebnis; sie erneut anzufragen ist eine Entscheidung von
+  Hand über `marketing set`.
+- **Migrationsschritte dürfen an einer schon vorhandenen Spalte nicht
+  scheitern.** Die Marketing-Tabellen entstehen selbst in Schritt 3 – aus dem
+  *aktuellen* Schema. Eine Datei, die diesen Schritt nachholt, bekommt sie
+  deshalb bereits mit allen später ergänzten Spalten, und ein späterer
+  `ALTER … ADD COLUMN` läuft ins Leere. `_migrate` übergeht genau
+  `duplicate column name`, sonst nichts.
 - **Ein vergebener Tracking-Code ändert sich nie.** Er steht in
   veröffentlichten Beiträgen. `add_link` lässt eine bestehende Zuordnung
   unangetastet, `refresh-urls` erneuert nur den Vorspann der Links. Der Code

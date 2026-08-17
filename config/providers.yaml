@@ -61,7 +61,13 @@ limits:
   # Harte Obergrenze NEUER Anfragen je Lauf. Sie greift zusaetzlich zu --limit;
   # der kleinere Wert gewinnt. Bereits gespeicherte Anfragen zaehlen nicht mit,
   # weil sie kein Guthaben kosten.
-  max_queries_per_run: 50
+  #
+  # Am 17.08.2026 von 50 auf 100 angehoben, um die elf neuen Staedte
+  # (99 Anfragen) in einem Durchgang abarbeiten zu koennen. Damit kostet ein
+  # unbedachter Lauf jetzt bis zu 100 Credits statt 50 - wer wieder enger
+  # fahren will, setzt den Wert zurueck. Der eigentliche Schutz bleibt, dass
+  # ein Lauf ohne --limit oder --alle gar nicht erst startet.
+  max_queries_per_run: 100
   max_results_per_query: 10
 
   # Dauerhafter Anfragespeicher (data/query_cache.sqlite): eine erfolgreich

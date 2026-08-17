@@ -9,8 +9,16 @@ def test_phase1_zielgruppen(config) -> None:
 
 
 def test_phase1_staedte(config) -> None:
+    """Die vier Startstaedte bleiben freigeschaltet, Phase 2 bleibt draussen.
+
+    Bewusst keine feste Gesamtliste: Eine Ausweitung erfolgt allein ueber
+    ``phase: 1`` und soll keinen Test brechen. Was der Test sichert, ist die
+    Trennung selbst - dass ``cities_for_phase`` ueberhaupt filtert.
+    """
     namen = {c.name_de for c in config.cities_for_phase(1)}
-    assert namen == {"Berlin", "Hamburg", "München", "Stuttgart"}
+
+    assert {"Berlin", "Hamburg", "München", "Stuttgart"} <= namen
+    assert namen < {c.name_de for c in config.cities.values()}
 
 
 def test_scoring_gewichte_ergeben_100(config) -> None:
@@ -19,11 +27,18 @@ def test_scoring_gewichte_ergeben_100(config) -> None:
 
 
 def test_anzahl_geplanter_anfragen(config) -> None:
-    """7 bundesweit + 9 Muster x 4 Staedte = 43."""
+    """7 bundesweit + 9 Muster je freigeschalteter Stadt.
+
+    Die Zahl wird aus der Konfiguration abgeleitet statt festgeschrieben:
+    Jede neue Stadt kostet 9 Credits, und diese Rechnung muss stimmen -
+    nicht ein bestimmter Ausbaustand.
+    """
+    staedte = len(config.cities_for_phase(1))
     planned = build_queries(config, phase=1)
-    assert len(planned) == 43
+
     assert len([q for q in planned if q.scope == "nationwide"]) == 7
-    assert len([q for q in planned if q.scope == "city"]) == 36
+    assert len([q for q in planned if q.scope == "city"]) == 9 * staedte
+    assert len(planned) == 7 + 9 * staedte
 
 
 def test_bundesweite_anfragen_stehen_in_der_konfiguration(config) -> None:
@@ -64,8 +79,12 @@ def test_builder_ist_deterministisch(config) -> None:
 
 
 def test_ergebnisgrenze(config) -> None:
+    """Hoechstens zehn Ergebnisse je Anfrage.
+
+    Ab dem elften Ergebnis berechnet Serper zwei Credits statt einem - eine
+    stillschweigende Verdopplung der Kosten des gesamten Laufs.
+    """
     assert max_results_per_query(config) == 10
-    assert len(build_queries(config, 1)) * max_results_per_query(config) == 430
 
 
 def test_registrierte_provider() -> None:

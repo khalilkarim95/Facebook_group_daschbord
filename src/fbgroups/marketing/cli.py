@@ -25,6 +25,7 @@ from rich.table import Table
 from fbgroups.config import AppConfig, load_config
 from fbgroups.marketing.analytics import funnel, kennzahlen, top_campaigns, top_groups
 from fbgroups.marketing.models import (
+    MARKETING_FORTSCHRITT,
     Campaign,
     CampaignGroup,
     CampaignParticipation,
@@ -39,7 +40,13 @@ from fbgroups.marketing.models import (
 from fbgroups.marketing.referral import code_fuer_benutzer, setze_status
 from fbgroups.marketing.rewards import bewerte_benutzer, fortschritt, load_reward_rules
 from fbgroups.marketing.store import MarketingStore, UnknownGroupError
-from fbgroups.marketing.tracking import app_base_url, next_tracking_code, tracking_url
+from fbgroups.marketing.tracking import (
+    app_base_url,
+    app_base_url_quelle,
+    ist_lokale_basis,
+    next_tracking_code,
+    tracking_url,
+)
 from fbgroups.models import Group
 from fbgroups.scoring import sort_by_rank
 from fbgroups.storage import SqliteStore
@@ -212,9 +219,13 @@ def campaign_show(campaign_id: str = typer.Argument(...)) -> None:
     with SqliteStore(config.path("sqlite_path")) as gruppen_store:
         namen = {g.group_id: g for g in gruppen_store.load_groups()}
 
+    basis = app_base_url(config)
+    quelle = app_base_url_quelle(config)
+
     kopf = Table(show_header=False, box=None)
     kopf.add_row("Name", campaign.name)
     kopf.add_row("Status", campaign.status.value)
+    kopf.add_row("Basis-URL", f"{basis or '[red]nicht gesetzt[/red]'}  [dim]({quelle})[/dim]")
     kopf.add_row("Beschreibung", campaign.description or "[dim]-[/dim]")
     kopf.add_row("Zielgruppen", ", ".join(campaign.audiences) or "[dim]alle[/dim]")
     kopf.add_row("Staedte", ", ".join(campaign.cities) or "[dim]alle[/dim]")
@@ -223,6 +234,18 @@ def campaign_show(campaign_id: str = typer.Argument(...)) -> None:
     kopf.add_row("Zeitraum", f"{campaign.starts_on or '-'} bis {campaign.ends_on or '-'}")
     kopf.add_row("Zugeordnete Gruppen", str(len(links)))
     console.print(Panel(kopf, title=f"Kampagne {campaign.campaign_id}"))
+
+    # Ein Link auf den eigenen Rechner sieht aus wie jeder andere. In einem
+    # Beitrag fuehrt er jeden Leser auf dessen eigenen Rechner - deshalb hier
+    # ausdruecklich benannt, statt es dem Auge zu ueberlassen.
+    if basis and ist_lokale_basis(basis):
+        console.print(
+            f"[yellow]Hinweis:[/yellow] '{basis}' zeigt auf diesen Rechner. Fuer die "
+            "Entwicklung richtig, fuer veroeffentlichte Links unbrauchbar.\n"
+            "[dim]Oeffentliche Adresse setzen:  APP_BASE_URL=https://deine-domain.de "
+            "in .env\ndanach:  fbgroups campaign refresh-urls "
+            f"{campaign.campaign_id}[/dim]"
+        )
 
     if links:
         _links_tabelle(links, namen)
@@ -244,6 +267,65 @@ def _links_tabelle(links: list[CampaignGroup], namen: dict[str, Group]) -> None:
             link.tracking_url or "[dim](keine APP_BASE_URL gesetzt)[/dim]",
         )
     console.print(table)
+
+
+@campaign_app.command("set")
+def campaign_set(
+    campaign_id: str = typer.Argument(...),
+    name: str = typer.Option(None, "--name"),
+    description: str = typer.Option(None, "--beschreibung"),
+    language: str = typer.Option(None, "--sprache", help="de | ar | translit"),
+    landing_page: str = typer.Option(None, "--landingpage", help="Ziel der Tracking-Links."),
+    template: str = typer.Option(None, "--vorlage", help="Textvorlage zum Selberposten."),
+    template_file: Path = typer.Option(None, "--vorlage-datei", help="Vorlage aus einer Datei."),
+    starts_on: str = typer.Option(None, "--start", help="JJJJ-MM-TT"),
+    ends_on: str = typer.Option(None, "--ende", help="JJJJ-MM-TT"),
+) -> None:
+    """Aendert eine bestehende Kampagne. Nicht genannte Felder bleiben.
+
+    Notwendig, weil eine Kampagne nicht neu angelegt werden darf, um etwa die
+    Landingpage zu korrigieren: Beim Loeschen faellt ueber den Fremdschluessel
+    auch die Zuordnung der Gruppen weg - und damit die vergebenen
+    Tracking-Codes. Die stehen aber moeglicherweise schon in veroeffentlichten
+    Beitraegen und muessen bleiben.
+
+    Die Kennung selbst ist nicht aenderbar; sie steckt in jedem Code.
+    """
+    config = _config()
+
+    if template_file:
+        # utf-8-sig: Vorlagen entstehen oft in Notepad, das ein BOM schreibt.
+        template = template_file.read_text(encoding="utf-8-sig")
+
+    with MarketingStore(config.path("sqlite_path")) as store:
+        campaign = _kampagne_oder_ende(store, campaign_id)
+
+        geaendert: list[str] = []
+        for feld, wert in (
+            ("name", name),
+            ("description", description),
+            ("language", language),
+            ("landing_page", landing_page),
+            ("message_template", template),
+            ("starts_on", _datum(starts_on) if starts_on else None),
+            ("ends_on", _datum(ends_on) if ends_on else None),
+        ):
+            if wert is not None:
+                setattr(campaign, feld, wert)
+                geaendert.append(feld)
+
+        if not geaendert:
+            console.print("[yellow]Nichts angegeben - es wurde nichts geaendert.[/yellow]")
+            raise typer.Exit(code=0)
+
+        campaign.updated_at = datetime.now(UTC)
+        store.save_campaign(campaign)
+
+    console.print(
+        f"[green]{campaign_id}:[/green] {', '.join(geaendert)} aktualisiert."
+    )
+    if landing_page:
+        console.print(f"[dim]Klicks auf die Tracking-Links landen jetzt auf {landing_page}[/dim]")
 
 
 @campaign_app.command("status")
@@ -503,6 +585,105 @@ def marketing_set(
         f"[green]{group_id}:[/green] {eintrag.marketing_status.value} / "
         f"Kontakt {eintrag.contact_status.value} / Erlaubnis {eintrag.permission_status.value}"
     )
+
+
+def _ist_schon_weiter(stand: MarketingStatus, ziel: MarketingStatus) -> bool:
+    """Hat die Gruppe den Zielzustand bereits erreicht oder ueberholt?
+
+    Zustaende ausserhalb der Ablaufreihenfolge (abgelehnt, beendet) gelten als
+    "weiter": Sie sind ein Ergebnis, das ein Sammelbefehl nicht ueberschreiben
+    darf. Wer es doch will, setzt den Stand einzeln mit ``marketing set``.
+    """
+    if stand not in MARKETING_FORTSCHRITT:
+        return True
+    return MARKETING_FORTSCHRITT.index(stand) >= MARKETING_FORTSCHRITT.index(ziel)
+
+
+@marketing_app.command("beitritt")
+def marketing_beitritt(
+    group_ids: list[str] = typer.Argument(
+        None, help="Gruppen-Kennungen. Ohne Angabe zaehlt --kampagne oder --top."
+    ),
+    campaign_id: str = typer.Option(None, "--kampagne", help="Alle Gruppen dieser Kampagne."),
+    top: int = typer.Option(0, "--top", help="Die besten N Gruppen des Bestands."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Nur zeigen, nichts speichern."),
+) -> None:
+    """Haelt fest, dass du fuer diese Gruppen eine Beitrittsanfrage gestellt hast.
+
+    Der Befehl stellt die Anfrage **nicht** - facebook.com wird nie aufgerufen.
+    Du schickst sie im Browser; hier wird nur mitgeschrieben, fuer welche
+    Gruppen und wann. Genau dafuer gibt es die Linkliste:
+    ``fbgroups campaign links <kampagne> --export``.
+
+    Gruppen, die bereits weiter sind, bleiben unangetastet - ein Sammelbefehl
+    darf einen erreichten Stand nicht zurueckdrehen.
+    """
+    config = _config()
+    gruppen_store, store = _stores(config)
+
+    try:
+        if campaign_id:
+            _kampagne_oder_ende(store, campaign_id)
+            auswahl = [link.group_id for link in store.links_for_campaign(campaign_id)]
+        elif top > 0:
+            auswahl = [g.group_id for g in sort_by_rank(gruppen_store.load_groups())[:top]]
+        elif group_ids:
+            auswahl = list(group_ids)
+        else:
+            console.print(
+                "[red]Keine Auswahl.[/red] Erwartet wird eine Gruppen-Kennung, "
+                "--kampagne oder --top."
+            )
+            raise typer.Exit(code=2)
+
+        bekannt = {g.group_id: g for g in gruppen_store.load_groups()}
+        jetzt = datetime.now(UTC)
+
+        markiert: list[tuple[str, str]] = []
+        uebersprungen: list[tuple[str, str]] = []
+        unbekannt: list[str] = []
+
+        for gid in auswahl:
+            group = bekannt.get(gid)
+            if group is None:
+                unbekannt.append(gid)
+                continue
+
+            eintrag = store.load_marketing(gid)
+            if _ist_schon_weiter(eintrag.marketing_status, MarketingStatus.JOIN_REQUESTED):
+                uebersprungen.append((group.name or gid, eintrag.marketing_status.value))
+                continue
+
+            eintrag.marketing_status = MarketingStatus.JOIN_REQUESTED
+            eintrag.join_requested_at = jetzt
+            eintrag.updated_at = jetzt
+            if not dry_run:
+                store.save_marketing(eintrag)
+            markiert.append((group.name or gid, gid))
+    finally:
+        gruppen_store.close()
+        store.close()
+
+    if markiert:
+        table = Table(title="Beitrittsanfrage vermerkt")
+        table.add_column("Gruppe")
+        table.add_column("Kennung")
+        for name, gid in markiert:
+            table.add_row(name[:50], gid)
+        console.print(table)
+
+    vorspann = "[cyan]--dry-run:[/cyan] " if dry_run else ""
+    console.print(
+        f"{vorspann}[green]{len(markiert)}[/green] Gruppen auf "
+        f"'{MarketingStatus.JOIN_REQUESTED.value}' gesetzt"
+        + (f", {len(uebersprungen)} bereits weiter" if uebersprungen else "")
+        + (f", {len(unbekannt)} unbekannt" if unbekannt else "")
+        + ("." if not dry_run else " - es wurde nichts geschrieben.")
+    )
+    for name, stand in uebersprungen[:10]:
+        console.print(f"  [dim]uebersprungen: {name[:50]} steht auf '{stand}'[/dim]")
+    for gid in unbekannt[:10]:
+        console.print(f"  [red]unbekannt:[/red] {gid}")
 
 
 @marketing_app.command("list")

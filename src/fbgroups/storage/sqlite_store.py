@@ -18,7 +18,7 @@ from fbgroups.marketing.store import SCHEMA as MARKETING_SCHEMA
 from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEMA
 from fbgroups.models import Group, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # Schritte, die eine aeltere Datei nachholt, ohne dass der Bestand neu
 # aufgebaut werden muss. Handgepflegte Notizen bleiben so erhalten.
@@ -34,6 +34,10 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
     3: (MARKETING_SCHEMA,),
     # Ereignisse, Empfehlungen, Praemien und das Pruefprotokoll.
     4: (MARKETING_TRACKING_SCHEMA,),
+    # Zeitpunkt der Beitrittsanfrage. Die neuen Zustaende der
+    # MarketingStatus-Aufzaehlung brauchen keinen Schritt: Die Spalte ist TEXT
+    # und nimmt sie ohne Aenderung auf.
+    5: ("ALTER TABLE group_marketing ADD COLUMN join_requested_at TEXT",),
 }
 
 SCHEMA = """
@@ -153,7 +157,22 @@ class SqliteStore:
             for statement in _MIGRATIONS[version]:
                 # executescript, weil ein Schritt mehrere Anweisungen umfassen
                 # darf (die Marketing-Tabellen sind ein solcher Schritt).
-                self.conn.executescript(statement)
+                try:
+                    self.conn.executescript(statement)
+                except sqlite3.OperationalError as exc:
+                    # Die Marketing-Tabellen entstehen selbst in einem
+                    # Migrationsschritt, und zwar aus dem AKTUELLEN Schema in
+                    # marketing/store.py. Eine Datei, die diesen Schritt gerade
+                    # erst nachholt, bekommt sie deshalb bereits mit allen
+                    # spaeter ergaenzten Spalten - der zugehoerige
+                    # ALTER-Schritt liefe dann ins Leere. Genau dieser Fall
+                    # wird uebergangen; jeder andere Fehler bleibt stehen.
+                    #
+                    # Die Alternative waere, das Schema jedes Schrittes hier
+                    # einzufrieren. Das hiesse eine zweite Kopie der
+                    # Tabellendefinition zu pflegen, die auseinanderlaufen kann.
+                    if "duplicate column name" not in str(exc):
+                        raise
             version += 1
             self.conn.execute(f"PRAGMA user_version = {version}")
             self.conn.commit()
@@ -390,6 +409,26 @@ class SqliteStore:
 
     def count_groups(self) -> int:
         return int(self.conn.execute("SELECT COUNT(*) FROM groups").fetchone()[0])
+
+    def count_distinct_sources(self) -> dict[str, int]:
+        """Je Gruppe: von wie vielen **verschiedenen** Quellen sie stammt.
+
+        Gemeint sind verschiedene Suchanfragen bzw. Seed-Dateien, nicht Funde.
+        ``times_seen`` taugt dafuer nicht: Es zaehlt jeden Fund, und ein
+        erneuter Lauf zaehlt dieselbe Gruppe wieder mit - auch wenn er
+        vollstaendig aus dem Anfragespeicher kommt und nichts kostet. Eine
+        Gruppe aus der ersten Ausbaustufe stuende damit bei 99 Funden aus zwei
+        Anfragen, eine gleich gute aus einer neuen Stadt bei 1 aus einer.
+        Verglichen wuerde dann das Alter des Datensatzes, nicht die Gruppe.
+
+        Die Obergrenze ist fuer jede Stadt dieselbe (9 Stadtmuster + 7
+        bundesweite Anfragen), die Werte sind also untereinander vergleichbar.
+        """
+        rows = self.conn.execute(
+            "SELECT group_id, COUNT(DISTINCT source_ref) AS anzahl "
+            "FROM group_sources GROUP BY group_id"
+        ).fetchall()
+        return {row["group_id"]: int(row["anzahl"]) for row in rows}
 
     @staticmethod
     def _row_to_group(row: sqlite3.Row) -> Group:

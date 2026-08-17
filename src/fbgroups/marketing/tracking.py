@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 import re
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fbgroups.config import AppConfig
 from fbgroups.models import Group
@@ -104,6 +104,32 @@ def app_base_url(config: AppConfig) -> str:
     if aus_umgebung:
         return aus_umgebung.rstrip("/")
     return str(config.get("marketing", "app_base_url", default="")).strip().rstrip("/")
+
+
+def app_base_url_quelle(config: AppConfig) -> str:
+    """Woher die Basis-URL stammt - fuer die Anzeige, nicht fuer die Auswahl.
+
+    Ein Link, der auf ``localhost`` zeigt, sieht aus wie jeder andere; in einem
+    Facebook-Beitrag fuehrt er aber jeden Leser auf dessen eigenen Rechner.
+    Deshalb soll ``campaign show`` nicht nur den Wert nennen, sondern auch,
+    welche Quelle ihn gesetzt hat.
+    """
+    if os.environ.get("APP_BASE_URL", "").strip():
+        return "Umgebung (APP_BASE_URL)"
+    if str(config.get("marketing", "app_base_url", default="")).strip():
+        return "config/settings.yaml"
+    return "nicht gesetzt"
+
+
+def ist_lokale_basis(basis_url: str) -> bool:
+    """Zeigt die Basis-URL auf den eigenen Rechner?
+
+    Rein zur Warnung. Der lokale Betrieb bleibt ausdruecklich moeglich - er ist
+    fuer die Entwicklung genau richtig, nur eben nicht fuer veroeffentlichte
+    Links.
+    """
+    rechner = (urlparse(basis_url).hostname or "").lower()
+    return rechner in {"localhost", "127.0.0.1", "::1", "0.0.0.0"} or rechner.endswith(".local")
 
 
 def tracking_url(tracking_code: str, config: AppConfig) -> str:

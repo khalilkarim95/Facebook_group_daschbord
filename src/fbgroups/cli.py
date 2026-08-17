@@ -153,14 +153,16 @@ def serve_command(
     port: int = typer.Option(3000, "--port"),
     reload: bool = typer.Option(False, "--reload", help="Neu laden bei Codeaenderung."),
 ) -> None:
-    """Startet den Redirect-Dienst fuer die Tracking-Links.
+    """Startet den Dienst: Uebersichtsseite und Tracking-Links.
 
-    Zwei Wege: ``/r/{code}`` zaehlt einen Klick und leitet zur Landingpage
-    weiter, ``POST /events`` nimmt die Meldungen der Zielanwendung entgegen.
-    Es wird nichts bei Facebook abgerufen und nichts veroeffentlicht.
+    ``/`` zeigt den Bestand im Browser, ``/r/{code}`` zaehlt einen Klick und
+    leitet zur Landingpage weiter, ``POST /events`` nimmt die Meldungen der
+    Zielanwendung entgegen. Es wird nichts bei Facebook abgerufen und nichts
+    veroeffentlicht.
 
     Standardmaessig nur lokal erreichbar (127.0.0.1). Wer den Dienst oeffentlich
-    stellt, sollte ihn hinter einen Reverse Proxy mit TLS setzen.
+    stellt, sollte ihn hinter einen Reverse Proxy mit TLS setzen; die
+    Uebersichtsseite bleibt dabei auf den eigenen Rechner beschraenkt.
     """
     try:
         import uvicorn
@@ -175,9 +177,11 @@ def serve_command(
     basis = app_base_url(config)
     console.print(
         Panel(
-            f"Redirect-Dienst auf [bold]http://{host}:{port}[/bold]\n"
+            f"Uebersicht im Browser: [bold]http://{host}:{port}/[/bold]\n"
             f"Tracking-Links zeigen auf: [bold]{basis or '(APP_BASE_URL fehlt)'}[/bold]\n\n"
-            "  GET  /r/{{code}}   Klick zaehlen und weiterleiten\n"
+            "  GET  /            Uebersicht (nur vom eigenen Rechner)\n"
+            # Kein f-String: die geschweiften Klammern bleiben wie geschrieben.
+            "  GET  /r/{code}    Klick zaehlen und weiterleiten\n"
             "  POST /events      Meldung der Zielanwendung\n"
             "  GET  /healthz     Lebenszeichen\n\n"
             "[dim]Beenden mit Strg+C[/dim]",

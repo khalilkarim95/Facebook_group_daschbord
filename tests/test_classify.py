@@ -63,8 +63,19 @@ def test_stadt_alias_muenchen(config) -> None:
 
 
 def test_stadt_ausserhalb_phase1(config) -> None:
-    assert classify_city("Syrer in Köln", None, config, phase=1).city is None
-    assert classify_city("Syrer in Köln", None, config, phase=2).city == "Köln"
+    """Eine noch nicht freigeschaltete Stadt wird nicht zugeordnet.
+
+    Die Stadt kommt aus der Konfiguration, nicht aus dem Test: Wird Leipzig
+    eines Tages freigeschaltet, prueft der Test die naechste Phase-2-Stadt
+    statt fehlzuschlagen.
+    """
+    spaeter = next(
+        c for c in config.cities.values() if c not in config.cities_for_phase(1)
+    )
+    name = f"Syrer in {spaeter.name_de}"
+
+    assert classify_city(name, None, config, phase=1).city is None
+    assert classify_city(name, None, config, phase=2).city == spaeter.name_de
 
 
 def test_keine_stadt(config) -> None:

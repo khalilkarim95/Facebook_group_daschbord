@@ -23,15 +23,47 @@ def _utcnow() -> datetime:
 
 
 class MarketingStatus(StrEnum):
-    """Wo im Kooperationsablauf eine Gruppe steht."""
+    """Wo im Kooperationsablauf eine Gruppe steht.
+
+    Die Reihenfolge folgt dem tatsaechlichen Ablauf bei Facebook: Erst muss man
+    **aufgenommen** sein, danach kann man die Gruppenleitung ueberhaupt
+    ansprechen. Frueher sprang das Modell von ``not_contacted`` direkt auf
+    ``contacted`` - fuer die Beitrittsanfrage gab es keinen Zustand, obwohl sie
+    der haeufigste Schritt ist: Sie betrifft jede Gruppe im Bestand, das
+    Ansprechen der Leitung nur eine Handvoll.
+
+    ``rejected`` bleibt der Kooperation vorbehalten (die Leitung will keine
+    Werbung); eine abgelehnte **Aufnahme** ist ``join_rejected`` - dort ist man
+    nicht einmal Mitglied und kann es spaeter erneut versuchen.
+    """
 
     NOT_CONTACTED = "not_contacted"
-    CONTACTED = "contacted"
+    JOIN_REQUESTED = "beitritt_angefragt"   # Beitrittsanfrage gestellt
+    MEMBER = "mitglied"                     # aufgenommen, Posten moeglich
+    JOIN_REJECTED = "beitritt_abgelehnt"    # Aufnahme abgelehnt
+    CONTACTED = "contacted"                 # Leitung wegen Werbung angesprochen
     INTERESTED = "interested"
     APPROVED = "approved"
     REJECTED = "rejected"
     ACTIVE = "active"
     INACTIVE = "inactive"
+
+
+# Reihenfolge des Ablaufs - allein fuer die Frage "ist die Gruppe schon
+# weiter?". Ein Sammelbefehl darf einen erreichten Stand nicht zurueckdrehen:
+# Wer bei einer Gruppe bereits Mitglied ist oder die Erlaubnis hat, verliert
+# das nicht dadurch, dass eine Liste erneut abgearbeitet wird. Die abgelehnten
+# und beendeten Zustaende stehen bewusst nicht darin - sie wieder aufzunehmen
+# ist eine Entscheidung von Hand, kein Nebeneffekt.
+MARKETING_FORTSCHRITT: tuple[MarketingStatus, ...] = (
+    MarketingStatus.NOT_CONTACTED,
+    MarketingStatus.JOIN_REQUESTED,
+    MarketingStatus.MEMBER,
+    MarketingStatus.CONTACTED,
+    MarketingStatus.INTERESTED,
+    MarketingStatus.APPROVED,
+    MarketingStatus.ACTIVE,
+)
 
 
 class ContactStatus(StrEnum):
@@ -88,6 +120,11 @@ class GroupMarketing(BaseModel):
     contact_status: ContactStatus = ContactStatus.NONE
     permission_status: PermissionStatus = PermissionStatus.UNKNOWN
     campaign_status: CampaignParticipation = CampaignParticipation.NONE
+    # Wann die Beitrittsanfrage gestellt wurde. Eigenes Feld, nicht
+    # last_contacted_at: Eine Anfrage an die Gruppe ist keine Ansprache der
+    # Leitung, und beide Zeitpunkte liegen oft Wochen auseinander - Facebook
+    # laesst Beitrittsanfragen lange offen.
+    join_requested_at: datetime | None = None
     last_contacted_at: datetime | None = None
     last_posted_at: datetime | None = None
     notes: str = ""

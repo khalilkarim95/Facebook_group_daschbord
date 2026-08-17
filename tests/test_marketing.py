@@ -288,11 +288,18 @@ def test_alte_datenbank_bekommt_die_neuen_tabellen(tmp_path: Path) -> None:
     with SqliteStore(pfad) as store:
         store.upsert_groups([_group()])
 
-    # Zurueck auf die Fassung vor der Marketing-Erweiterung.
+    # Zurueck auf die Fassung vor der Marketing-Erweiterung. Die Zahl steht
+    # fest bei 3 und nicht bei SCHEMA_VERSION - 1: Gemeint ist der Stand, ab
+    # dem Schritt 3 die Marketing-Tabellen anlegt. Mit jedem spaeteren Schritt
+    # waere "eins zurueck" ein anderer, hier unmoeglicher Zustand - eine
+    # Datenbank ohne Marketing-Tabellen, die sich als neuere Fassung ausgibt.
+    VOR_MARKETING = 3
+    assert VOR_MARKETING < SCHEMA_VERSION
+
     con = sqlite3.connect(pfad)
     con.executescript(
         "DROP TABLE campaigns; DROP TABLE campaign_groups; DROP TABLE group_marketing;"
-        f"PRAGMA user_version = {SCHEMA_VERSION - 1};"
+        f"PRAGMA user_version = {VOR_MARKETING};"
     )
     con.commit()
     con.close()
@@ -307,4 +314,11 @@ def test_alte_datenbank_bekommt_die_neuen_tabellen(tmp_path: Path) -> None:
 
     assert len(gruppen) == 1                                   # Daten unversehrt
     assert version == SCHEMA_VERSION
+    # Die Tabelle entstand in Schritt 3 aus dem aktuellen Schema und bringt die
+    # spaeter ergaenzten Spalten schon mit; Schritt 5 darf daran nicht
+    # scheitern.
+    con = sqlite3.connect(pfad)
+    spalten = {r[1] for r in con.execute("PRAGMA table_info(group_marketing)")}
+    con.close()
+    assert "join_requested_at" in spalten
     assert {"campaigns", "campaign_groups", "group_marketing"} <= tabellen

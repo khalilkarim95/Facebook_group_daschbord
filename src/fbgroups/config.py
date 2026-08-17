@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 
 CONFIG_DIRNAME = "config"
 
@@ -107,10 +108,32 @@ class AppConfig:
         return node
 
 
+def lade_umgebung(root: Path) -> None:
+    """Uebernimmt ``.env`` in die Prozessumgebung.
+
+    ``override=False``: Eine echte Umgebungsvariable schlaegt die Datei. Im
+    Betrieb wird die Umgebung gesetzt, ``.env`` ist die Bequemlichkeit fuer den
+    eigenen Rechner - und darf den Betrieb nicht ueberstimmen.
+
+    Der Aufruf steht hier und nicht nur bei den Suchanbietern: Zuvor las
+    ausschliesslich die Schluesselabfrage in ``providers/factory.py`` die
+    Datei. Kein ``campaign``-Befehl kam dort vorbei, und ein dort eingetragenes
+    ``APP_BASE_URL`` blieb wirkungslos - die Tracking-Links zeigten still
+    weiter auf ``localhost``, obwohl ``.env.example`` genau diesen Eintrag
+    vorschlaegt. Ein Link, der auf den eigenen Rechner zeigt, ist in einem
+    Beitrag wertlos, und man sieht es ihm nicht an.
+    """
+    load_dotenv(root / ".env", override=False)
+
+
 def load_config(root: Path | None = None) -> AppConfig:
     """Liest alle Konfigurationsdateien ein."""
     base = Path(root) if root else project_root()
     cfg_dir = base / CONFIG_DIRNAME
+
+    # Vor den YAML-Dateien: Werte aus .env sollen beim Lesen der Konfiguration
+    # bereits zur Verfuegung stehen (z. B. APP_BASE_URL).
+    lade_umgebung(base)
 
     settings = _read_yaml(cfg_dir / "settings.yaml")
 

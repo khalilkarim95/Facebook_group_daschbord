@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS group_marketing (
     contact_status    TEXT NOT NULL DEFAULT 'none',
     permission_status TEXT NOT NULL DEFAULT 'unknown',
     campaign_status   TEXT NOT NULL DEFAULT 'none',
+    join_requested_at TEXT,
     last_contacted_at TEXT,
     last_posted_at    TEXT,
     notes             TEXT NOT NULL DEFAULT '',
@@ -359,13 +360,15 @@ class MarketingStore:
             """
             INSERT INTO group_marketing (
                 group_id, marketing_status, contact_status, permission_status,
-                campaign_status, last_contacted_at, last_posted_at, notes, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?)
+                campaign_status, join_requested_at, last_contacted_at,
+                last_posted_at, notes, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(group_id) DO UPDATE SET
                 marketing_status  = excluded.marketing_status,
                 contact_status    = excluded.contact_status,
                 permission_status = excluded.permission_status,
                 campaign_status   = excluded.campaign_status,
+                join_requested_at = excluded.join_requested_at,
                 last_contacted_at = excluded.last_contacted_at,
                 last_posted_at    = excluded.last_posted_at,
                 notes             = excluded.notes,
@@ -377,6 +380,7 @@ class MarketingStore:
                 eintrag.contact_status.value,
                 eintrag.permission_status.value,
                 eintrag.campaign_status.value,
+                _iso(eintrag.join_requested_at),
                 _iso(eintrag.last_contacted_at),
                 _iso(eintrag.last_posted_at),
                 eintrag.notes,
@@ -733,6 +737,7 @@ class MarketingStore:
             contact_status=row["contact_status"],
             permission_status=row["permission_status"],
             campaign_status=row["campaign_status"],
+            join_requested_at=row["join_requested_at"],
             last_contacted_at=row["last_contacted_at"],
             last_posted_at=row["last_posted_at"],
             notes=row["notes"],

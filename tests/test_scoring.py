@@ -61,13 +61,16 @@ def test_breakdown_summiert_sich_zum_score(config) -> None:
     assert group.score_max == 100.0
 
 
-def test_ohne_mitgliederzahl_sinkt_die_erreichbare_punktzahl(config) -> None:
-    """Fehlt die Mitgliederzahl, sind hoechstens 75 Punkte erreichbar.
+def test_ohne_mitgliederzahl_sinkt_die_erreichbare_punktzahl(
+    config_mit_mitgliederzahl,
+) -> None:
+    """Fehlt ein eingeschalteter Bestandteil, sinkt die erreichbare Punktzahl.
 
     Regressionstest: Frueher wurde auf 100 hochgerechnet - eine Gruppe, von der
     nur der Name bekannt war, erhielt damit denselben Hoechstwert wie eine
     Gruppe mit belegten 50.000 Mitgliedern.
     """
+    config = config_mit_mitgliederzahl
     gewicht = float(config.get("scoring", "weights", "member_count", default=45))
     ohne = score_group(_full_group(member_count_hint=None), config)
 
@@ -82,9 +85,31 @@ def test_ohne_mitgliederzahl_sinkt_die_erreichbare_punktzahl(config) -> None:
     assert mit.score > ohne.score
 
 
-def test_mehr_mitglieder_ergibt_hoeheren_score(config) -> None:
-    klein = score_group(_full_group(member_count_hint=300), config)
-    gross = score_group(_full_group(member_count_hint=60000), config)
+def test_gewicht_null_schaltet_den_bestandteil_ganz_ab(config) -> None:
+    """Abgeschaltet ist etwas anderes als unbekannt.
+
+    Bei ``member_count: 0`` darf die Mitgliederzahl weder Punkte bringen noch
+    die erreichbare Punktzahl senken noch als "unbekannt" in der Begruendung
+    stehen - sonst traegt jede Zeile des Exports einen Mangel vor sich her, den
+    das Projekt gar nicht beheben kann. Der Test haengt am Projektstand: Wird
+    die Mitgliederzahl wieder eingeschaltet, prueft er nichts mehr.
+    """
+    gewicht = float(config.get("scoring", "weights", "member_count", default=45))
+    if gewicht > 0:
+        return
+
+    mit_zahl = score_group(_full_group(member_count_hint=50000), config)
+    ohne_zahl = score_group(_full_group(member_count_hint=None), config)
+
+    assert mit_zahl.score == ohne_zahl.score
+    assert mit_zahl.score_max == ohne_zahl.score_max == 100.0
+    assert mit_zahl.score_breakdown.member_count == 0.0
+    assert "Mitglieder" not in mit_zahl.score_reason
+
+
+def test_mehr_mitglieder_ergibt_hoeheren_score(config_mit_mitgliederzahl) -> None:
+    klein = score_group(_full_group(member_count_hint=300), config_mit_mitgliederzahl)
+    gross = score_group(_full_group(member_count_hint=60000), config_mit_mitgliederzahl)
     assert gross.score > klein.score
 
 
@@ -139,22 +164,26 @@ def test_kategorie_aus_dem_beschreibungstext_zaehlt_schwaecher(config) -> None:
 
 
 def test_score_streut_statt_zu_verklumpen(config) -> None:
-    """Verschiedene Datenlagen muessen verschiedene Scores ergeben."""
+    """Verschiedene Datenlagen muessen verschiedene Scores ergeben.
+
+    Bewusst ohne Mitgliederzahl: Sie liegt im Betrieb keiner Gruppe vor, die
+    Streuung muss also aus den uebrigen Bestandteilen entstehen.
+    """
     varianten = [
         _full_group(member_count_hint=None),
         _full_group(member_count_hint=None, category=None, category_confidence=0.0),
         _full_group(member_count_hint=None, city=None, city_confidence=0.0),
         _full_group(member_count_hint=None, city_confidence=0.5),
+        _full_group(member_count_hint=None, category_confidence=0.5),
         _full_group(member_count_hint=None, name="Syrer in Berlin ..."),
-        _full_group(member_count_hint=50000),
-        _full_group(member_count_hint=300),
     ]
     scores = {score_group(g, config).score for g in varianten}
     assert len(scores) == len(varianten)
 
 
-def test_mitgliederzahl_ist_das_schwerste_kriterium(config) -> None:
+def test_mitgliederzahl_ist_das_schwerste_kriterium(config_mit_mitgliederzahl) -> None:
     """Eine grosse Gruppe schlaegt eine perfekt passende ohne belegte Groesse."""
+    config = config_mit_mitgliederzahl
     gross = _full_group(
         group_id="739201847362915",
         name="Gruppe",              # kein Zielgruppen-, Stadt- oder Kategoriebezug

@@ -43,22 +43,31 @@ scoring:
   # belegten Punkte - er wird NICHT hochgerechnet. Was bei der jeweiligen
   # Datenlage hoechstens erreichbar war, steht in der Spalte "Score max.".
   weights:
-    # Die Mitgliederzahl ist das schwerste Kriterium: Fuer eine Kooperation
-    # entscheidet die Reichweite. Sie ist zugleich die einzige Angabe, die
-    # dieses Projekt nicht selbst ermitteln kann - der Suchdienst liefert sie
-    # nicht (in 273 gespeicherten Treffern kein einziges Mal), und
-    # facebook.com wird nicht aufgerufen. Sie kommt aus der Pruefliste.
-    member_count: 45
-    audience_match: 25
-    city_match: 15
-    category_match: 8
+    # Die Mitgliederzahl ist ABGESCHALTET (Gewicht 0), weil sie sich nicht
+    # automatisch beschaffen laesst: Der Suchdienst liefert sie nicht (in 273
+    # gespeicherten Treffern kein einziges Mal), und facebook.com wird nicht
+    # aufgerufen. Bei Gewicht 45 fehlte sie damit ausnahmslos jeder Gruppe -
+    # die Folge war eine Decke von 55 Punkten, die keine Gruppe von einer
+    # anderen unterschied. Die Rangfolge entsteht seither aus den Angaben, die
+    # tatsaechlich vorliegen; die 45 Punkte sind auf sie verteilt.
+    #
+    # Wer die Zahl doch von Hand pflegt ("fbgroups pruefliste"), setzt hier
+    # wieder ein Gewicht > 0 und ruft "fbgroups rescore" auf. Ein Gewicht von 0
+    # nimmt einen Bestandteil vollstaendig aus der Bewertung - er taucht dann
+    # auch nicht als "unbekannt" in der Begruendung auf.
+    member_count: 0
+    audience_match: 45
+    city_match: 27
+    category_match: 16
     # Beurteilt nur noch die Form des Namens (vollstaendig, kurz, kein
     # Beitragstitel). Zielgruppe und Stadt haben eigene Gewichte und werden
     # hier nicht erneut vergeben - diese Doppelzaehlung war der Grund, weshalb
     # 27 Gruppen gemeinsam auf dem Hoechstwert standen.
-    name_quality: 7
+    name_quality: 12
 
-  # Punkte (0-1 Anteil) je Mitglieder-Groessenklasse. Erste passende Regel gewinnt.
+  # Punkte (0-1 Anteil) je Mitglieder-Groessenklasse. Erste passende Regel
+  # gewinnt. Wirkungslos, solange "member_count: 0" gilt - die Klassen bleiben
+  # stehen, damit ein Wiedereinschalten eine reine Zahlenaenderung ist.
   member_count_buckets:
     - { min: 50000, factor: 1.00 }
     - { min: 20000, factor: 0.85 }
@@ -71,7 +80,11 @@ scoring:
   # Hinweis: Es gibt bewusst KEINEN Ersatzwert fuer eine unbekannte
   # Mitgliederzahl. Ein solcher Wert erzeugte fuer jede Gruppe ohne Metadaten
   # denselben Score. Ist die Zahl unbekannt, entfaellt der Bestandteil: die
-  # Gruppe erhaelt dafuer keine Punkte, und "Score max." sinkt auf 75. Frueher
-  # wurde stattdessen auf 100 hochgerechnet - damit erreichte eine Gruppe, von
-  # der nur der Name bekannt war, denselben Hoechstwert wie eine belegte
-  # Grossgruppe.
+  # Gruppe erhaelt dafuer keine Punkte, und "Score max." sinkt entsprechend.
+  # Frueher wurde stattdessen auf 100 hochgerechnet - damit erreichte eine
+  # Gruppe, von der nur der Name bekannt war, denselben Hoechstwert wie eine
+  # belegte Grossgruppe.
+  #
+  # Das gilt unveraendert fuer jeden eingeschalteten Bestandteil. Abgeschaltet
+  # (Gewicht 0) ist etwas anderes als unbekannt: der Bestandteil wird gar nicht
+  # erst erwartet, deshalb senkt sein Fehlen "Score max." auch nicht.
