@@ -15,6 +15,7 @@ from fbgroups.pipeline import run_seed_import
 from fbgroups.scoring import score_group
 from fbgroups.validation import (
     assess_data_quality,
+    determine_status,
     has_sufficient_data,
     is_placeholder_identifier,
     validate_group,
@@ -148,7 +149,16 @@ def test_platzhalter_erhaelt_keinen_score(config) -> None:
 
 # --- Fall 4: Duplikat --------------------------------------------------
 
-def test_duplikat_wird_zusammengefuehrt_und_markiert(config, tmp_path: Path) -> None:
+def test_duplikat_wird_zusammengefuehrt(config, tmp_path: Path) -> None:
+    """Dieselbe Gruppe unter zwei URLs ergibt einen Datensatz.
+
+    Vermerkt wird der Zusammenschluss am **Lauf** (``run.groups_duplicate``),
+    nicht am Datensatz: Was uebrig bleibt, ist die Gruppe selbst, und die ist
+    ``validated``. Frueher trug sie ``duplicate``, abgeleitet aus
+    ``times_seen > 1`` - dieselbe Bedingung loest aber auch jeder erneute Fund
+    aus einer weiteren Suchanfrage aus. Beide Faelle sind hinterher nicht mehr
+    zu unterscheiden, und der zweite ist der weitaus haeufigere.
+    """
     path = _write(
         tmp_path,
         "url;name;member_count\n"
@@ -160,8 +170,7 @@ def test_duplikat_wird_zusammengefuehrt_und_markiert(config, tmp_path: Path) -> 
     assert len(groups) == 1
     assert run.groups_duplicate == 1
     assert groups[0].times_seen == 2
-    assert groups[0].status is RecordStatus.DUPLICATE
-    # Trotz Duplikat-Status bleibt die Gruppe bewertbar
+    assert groups[0].status is RecordStatus.VALIDATED
     assert groups[0].score is not None
 
 
@@ -368,3 +377,25 @@ def test_metadaten_werden_nie_erfunden(config, tmp_path: Path) -> None:
     assert group.member_count_hint is None
     assert group.audience_tags == []
     assert group.privacy_hint.value == "unknown"
+
+
+def test_mehrfach_gefundene_gruppe_ist_keine_dublette() -> None:
+    """``times_seen`` zaehlt Funde, nicht Datensaetze.
+
+    Nach der Ausweitung der Suchmuster fanden mehrere Anfragen dieselben
+    Gruppen - und zwar die einschlaegigsten. Galt das als Dublette, verschwand
+    mehr als die Haelfte des Bestands aus jeder Auswertung, die auf
+    ``validated`` filterte: 146 von 273, darunter zwei der drei bestbewerteten.
+
+    Echte Dubletten sind hier laengst zusammengefuehrt (``deduplicate_exact``
+    laeuft vor der Bewertung), ein ueberlebender Datensatz ist also nie eine
+    offene Dublette.
+    """
+    gruppe = make_group(
+        name="Syrer in Berlin",
+        city="Berlin",
+        audience_tags=["syrians"],
+        times_seen=17,
+    )
+
+    assert determine_status(gruppe) is RecordStatus.VALIDATED

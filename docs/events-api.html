@@ -1,0 +1,648 @@
+<title>go.b-tarikak Events</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+
+<style>
+  :root {
+    --ground:   #F6F7F5;
+    --surface:  #FFFFFF;
+    --sunk:     #EDF0EC;
+    --line:     #D8DED8;
+    --line-firm:#B9C2BB;
+    --ink:      #16211D;
+    --ink-soft: #4A5751;
+    --ink-mute: #6E7A74;
+    --accent:   #0F6E5C;
+    --accent-bg:#E3EFEA;
+    --amber:    #8A5A10;
+    --amber-bg: #F6EEDC;
+    --danger:   #9B342F;
+    --danger-bg:#F7E7E5;
+    --shadow:   0 1px 2px rgba(22,33,29,.06), 0 8px 24px -16px rgba(22,33,29,.30);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:   #0E1412;
+      --surface:  #161E1A;
+      --sunk:     #1C2621;
+      --line:     #2A3530;
+      --line-firm:#3D4A44;
+      --ink:      #E7EDE9;
+      --ink-soft: #B0BCB6;
+      --ink-mute: #85938C;
+      --accent:   #4FB79B;
+      --accent-bg:#16302A;
+      --amber:    #D9A24A;
+      --amber-bg: #2E2617;
+      --danger:   #E08076;
+      --danger-bg:#31201E;
+      --shadow:   0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:   #0E1412;
+    --surface:  #161E1A;
+    --sunk:     #1C2621;
+    --line:     #2A3530;
+    --line-firm:#3D4A44;
+    --ink:      #E7EDE9;
+    --ink-soft: #B0BCB6;
+    --ink-mute: #85938C;
+    --accent:   #4FB79B;
+    --accent-bg:#16302A;
+    --amber:    #D9A24A;
+    --amber-bg: #2E2617;
+    --danger:   #E08076;
+    --danger-bg:#31201E;
+    --shadow:   0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  h1, h2, h3 {
+    font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
+    text-wrap: balance;
+    margin: 0;
+    line-height: 1.18;
+  }
+  h1 { font-size: 42px; font-weight: 700; letter-spacing: -.015em; }
+  h2 { font-size: 26px; font-weight: 600; letter-spacing: -.005em; }
+  h3 { font-size: 18px; font-weight: 600; }
+
+  p, li { max-width: 68ch; }
+  p { margin: 0; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11.5px;
+    font-weight: 500;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+  }
+
+  header {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-bottom: 32px;
+    border-bottom: 2px solid var(--ink);
+  }
+  header .lede { font-size: 18.5px; color: var(--ink-soft); }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 28px;
+    margin-top: 6px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12.5px;
+    color: var(--ink-mute);
+  }
+  .meta b { color: var(--ink-soft); font-weight: 500; }
+
+  section { display: flex; flex-direction: column; gap: 16px; }
+
+  code, kbd {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .88em;
+    background: var(--sunk);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: .1em .38em;
+  }
+
+  pre {
+    margin: 0;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    box-shadow: var(--shadow);
+  }
+  pre code {
+    background: none;
+    border: 0;
+    padding: 0;
+    font-size: 13.5px;
+    line-height: 1.62;
+    color: var(--ink);
+  }
+
+  .scroll { overflow-x: auto; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14.5px;
+  }
+  th, td {
+    text-align: left;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  thead th {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
+    border-bottom: 1.5px solid var(--line-firm);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td code { white-space: nowrap; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .stages { display: flex; flex-direction: column; gap: 2px; }
+  .stage {
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    gap: 0 18px;
+    padding: 16px 18px 16px 14px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+  .stage:first-child { border-radius: 6px 6px 0 0; }
+  .stage:last-child  { border-radius: 0 0 6px 6px; }
+  .stage + .stage { border-top: 0; }
+  .stage .idx {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    padding-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .stage .body { display: flex; flex-direction: column; gap: 5px; }
+  .stage .name {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 14.5px;
+    font-weight: 600;
+  }
+  .stage .who {
+    font-size: 12px;
+    color: var(--ink-mute);
+    text-transform: uppercase;
+    letter-spacing: .07em;
+  }
+  .stage p { font-size: 14.5px; color: var(--ink-soft); }
+  .stage.auto { background: var(--sunk); }
+
+  .note {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px 18px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .note .tag {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .11em;
+    text-transform: uppercase;
+  }
+  .note p { font-size: 15px; }
+  .note.decide { background: var(--amber-bg); border-color: var(--amber); }
+  .note.decide .tag { color: var(--amber); }
+  .note.warn { background: var(--danger-bg); border-color: var(--danger); }
+  .note.warn .tag { color: var(--danger); }
+  .note.good { background: var(--accent-bg); border-color: var(--accent); }
+  .note.good .tag { color: var(--accent); }
+
+  ul, ol { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 7px; }
+
+  hr { border: 0; border-top: 1px solid var(--line); margin: 0; }
+
+  footer {
+    padding-top: 28px;
+    border-top: 1px solid var(--line);
+    font-size: 13.5px;
+    color: var(--ink-mute);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  @media (max-width: 600px) {
+    h1 { font-size: 32px; }
+    h2 { font-size: 22px; }
+    .page { padding: 36px 18px 64px; gap: 32px; }
+    .stage { grid-template-columns: 32px 1fr; gap: 0 12px; }
+  }
+</style>
+
+<div class="page">
+
+<header>
+  <span class="eyebrow">Integration contract · fbgroups tracking</span>
+  <h1>go.b-tarikak Events</h1>
+  <p class="lede">
+    How the b-tarikak API reports what happens after a visitor arrives from a
+    Facebook group, so each group can be measured by the customers it brings
+    rather than the clicks it produces.
+  </p>
+  <div class="meta">
+    <span><b>Endpoint</b> POST https://go.b-tarikak.de/events</span>
+    <span><b>Auth</b> X-Events-Token</span>
+    <span><b>Version</b> 2026-08-18</span>
+  </div>
+</header>
+
+<section>
+  <h2>Why this exists</h2>
+  <p>
+    413 Facebook groups each carry a distinct tracking code. A link posted in a
+    group looks like
+    <code>https://go.b-tarikak.de/r/FB-SYR-BER-001</code>; the tracking service
+    counts the click and redirects to
+    <code>https://b-tarikak.de/?ref=FB-SYR-BER-001</code>.
+  </p>
+  <p>
+    That is where our visibility ends. The service never sees a signup, a
+    verified profile, or a completed delivery — those happen inside your
+    application. Without the events below, the funnel reads
+    <em>12 clicks → 0 registrations</em>, and a group that sends 200 idle
+    visitors is indistinguishable from one that sends 20 who stay.
+  </p>
+</section>
+
+<section>
+  <h2>The request</h2>
+  <div class="scroll">
+    <pre><code>POST https://go.b-tarikak.de/events
+Content-Type: application/json
+X-Events-Token: &lt;secret&gt;
+
+{
+  "event_type":    "registration",
+  "user_ref":      "usr_9f21c4",
+  "tracking_code": "FB-SYR-BER-001",
+  "referral_code": "",
+  "occurred_at":   "2026-08-18T14:31:07Z"
+}</code></pre>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>Field</th><th>Type</th><th>Required</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>event_type</code></td>
+          <td>enum</td>
+          <td>yes</td>
+          <td>One of the six stages below. Anything else is rejected with 422.</td>
+        </tr>
+        <tr>
+          <td><code>user_ref</code></td>
+          <td>string ≤ 128</td>
+          <td>effectively</td>
+          <td>
+            Your opaque user id. Without it the event cannot be attributed to a
+            person, and referrals and rewards do not run.
+          </td>
+        </tr>
+        <tr>
+          <td><code>tracking_code</code></td>
+          <td>string ≤ 64</td>
+          <td>first event only</td>
+          <td>
+            The <code>ref</code> value from the landing URL. Send it on the
+            first event you have it for; later events inherit it — see
+            <em>Attribution</em>.
+          </td>
+        </tr>
+        <tr>
+          <td><code>referral_code</code></td>
+          <td>string ≤ 64</td>
+          <td>no</td>
+          <td>
+            Only on <code>registration</code>, when the new user was invited by
+            an existing one.
+          </td>
+        </tr>
+        <tr>
+          <td><code>occurred_at</code></td>
+          <td>ISO-8601</td>
+          <td>no</td>
+          <td>
+            When it happened on your side. Omitted means now. Send it when
+            replaying a backlog, or the funnel dates will be wrong.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="tag">Never send</span>
+    <p>
+      No names, e-mail addresses, or phone numbers. <code>user_ref</code> must
+      be opaque — an internal id, not something that identifies a person on its
+      own. The data model has no fields for personal data, so such values would
+      be discarded, but they would still have travelled.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2>The six stages</h2>
+  <p>
+    The order is the funnel. Each stage is reported at most once per user; the
+    service does not deduplicate them, so a repeated call is counted twice.
+  </p>
+
+  <div class="stages">
+    <div class="stage auto">
+      <span class="idx">01</span>
+      <div class="body">
+        <span class="name">click</span>
+        <span class="who">Automatic — do not send</span>
+        <p>Recorded by the redirect service itself when the link is opened.</p>
+      </div>
+    </div>
+    <div class="stage">
+      <span class="idx">02</span>
+      <div class="body">
+        <span class="name">landing_visit</span>
+        <span class="who">Send from the web app</span>
+        <p>
+          A visitor loads b-tarikak.de with a <code>?ref=</code> parameter. This
+          is the only stage that closes the gap between "clicked in Facebook"
+          and "actually arrived" — without it, a broken landing page looks
+          exactly like an uninterested audience.
+        </p>
+      </div>
+    </div>
+    <div class="stage">
+      <span class="idx">03</span>
+      <div class="body">
+        <span class="name">registration</span>
+        <span class="who">Send from the API</span>
+        <p>
+          The user account is created. This is the stage that carries the most
+          weight: it also issues the user's own referral code and, if
+          <code>referral_code</code> was supplied, records who invited them.
+        </p>
+      </div>
+    </div>
+    <div class="stage">
+      <span class="idx">04</span>
+      <div class="body">
+        <span class="name">activation</span>
+        <span class="who">Send from the API</span>
+        <p>
+          The account becomes usable. <em>Proposed for b-tarikak:</em> identity
+          verification passes (<code>btarikak-verify</code>). Confirm or replace
+          — see the decision below.
+        </p>
+      </div>
+    </div>
+    <div class="stage">
+      <span class="idx">05</span>
+      <div class="body">
+        <span class="name">qualified</span>
+        <span class="who">Send from the API</span>
+        <p>
+          The user does the thing the platform exists for, for the first time.
+          <em>Proposed:</em> a first trip offered or a first request posted.
+        </p>
+      </div>
+    </div>
+    <div class="stage">
+      <span class="idx">06</span>
+      <div class="body">
+        <span class="name">conversion</span>
+        <span class="who">Send from the API</span>
+        <p>
+          The loop closes. <em>Proposed:</em> a match is confirmed by both sides
+          and the item is handed over.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="note decide">
+    <span class="tag">Needs a decision</span>
+    <p>
+      Stages 04–06 are named generically because the tracking service is not
+      specific to this product. Their meaning for b-tarikak is a business
+      choice, not a technical one, and it must be made once and kept: changing
+      it later makes old and new numbers incomparable without any visible sign
+      that they are.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2>Attribution</h2>
+  <p>
+    Send <code>tracking_code</code> on the first event where you know it —
+    normally <code>landing_visit</code> or <code>registration</code>. On later
+    events you may omit it: when <code>tracking_code</code> is empty and
+    <code>user_ref</code> is present, the service reuses that user's first known
+    attribution.
+  </p>
+  <p>
+    This matters because by the time a delivery completes, your application no
+    longer knows which Facebook group brought the person — and those late stages
+    are the interesting ones. The <em>first</em> attribution wins: it is the one
+    that brought the person in.
+  </p>
+</section>
+
+<section>
+  <h2>Referrals</h2>
+  <p>
+    Every registration receives a referral code in the response. Show it to the
+    user; when someone signs up through it, send that value as
+    <code>referral_code</code> on the new user's <code>registration</code>.
+  </p>
+
+  <div class="scroll">
+    <pre><code>→ POST /events
+  {"event_type":"registration","user_ref":"usr_new","referral_code":"REF-8KD2M"}
+
+← 200 OK
+  {
+    "gespeichert":  "registration",
+    "referral_code": "REF-QW7P3",     // this user's own code, to display
+    "referral":      "angenommen"      // outcome for the invitation used
+  }</code></pre>
+  </div>
+
+  <p>
+    A rejected referral does not invalidate the event — the person did register.
+    The <code>referral</code> field always carries a reason, and suspicious
+    cases are set to <code>review</code> rather than blocked: wrongly turning
+    away a real user costs more than a manual check. Self-referral is refused,
+    and one user can be credited to one referrer only.
+  </p>
+</section>
+
+<section>
+  <h2>Responses and failure</h2>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>Status</th><th>Meaning</th><th>What to do</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="num"><code>200</code></td>
+          <td>Stored. Body contains <code>gespeichert</code> and, after a registration, the referral fields.</td>
+          <td>Mark the event as sent.</td>
+        </tr>
+        <tr>
+          <td class="num"><code>401</code></td>
+          <td>Missing or wrong <code>X-Events-Token</code>. Nothing was stored.</td>
+          <td>Do not retry. Fix the configuration.</td>
+        </tr>
+        <tr>
+          <td class="num"><code>422</code></td>
+          <td>Body does not match the schema — usually an unknown <code>event_type</code>.</td>
+          <td>Do not retry. Log the payload.</td>
+        </tr>
+        <tr>
+          <td class="num"><code>5xx</code> / timeout</td>
+          <td>Unknown whether it was stored.</td>
+          <td>Retry with backoff, at most a few times. See below.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="tag">Call it out of band</span>
+    <p>
+      Never block a user-facing request on this call. A signup must not fail
+      because a tracking service is slow. Write the event to a local queue and
+      send it from a worker — that also gives you the retry and the replay for
+      free, and <code>occurred_at</code> keeps the timestamps honest when a
+      backlog drains hours later.
+    </p>
+  </div>
+
+  <div class="note warn">
+    <span class="tag">Retries duplicate</span>
+    <p>
+      Only clicks are deduplicated. A retried <code>registration</code> is
+      counted twice and inflates the funnel. Prefer an outbox row marked sent
+      over a blind retry; if you must retry blind, cap it at two attempts.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2>The token</h2>
+  <p>
+    Stored on the server in <code>/opt/fbgroups/app/.env</code> as
+    <code>EVENTS_TOKEN</code>, readable by root and the <code>fbgroups</code>
+    service user only:
+  </p>
+  <div class="scroll">
+    <pre><code>ssh root@159.195.216.246 "grep '^EVENTS_TOKEN=' /opt/fbgroups/app/.env"</code></pre>
+  </div>
+  <p>
+    Put it in the API's own secret store — never in the repository. Rotating it
+    means changing both sides; there is no grace period, so change the
+    application first and the server second, or accept a short window of 401s.
+  </p>
+</section>
+
+<section>
+  <h2>Verify the connection</h2>
+  <p>Run this from the API container. It was verified working on 18.08.2026:</p>
+  <div class="scroll">
+    <pre><code>curl -i -X POST https://go.b-tarikak.de/events \
+  -H "Content-Type: application/json" \
+  -H "X-Events-Token: $EVENTS_TOKEN" \
+  -d '{"event_type":"landing_visit","user_ref":"connectivity-check"}'
+
+# expected: HTTP/1.1 200 OK
+#           {"gespeichert":"landing_visit"}</code></pre>
+  </div>
+  <div class="note good">
+    <span class="tag">Already confirmed</span>
+    <p>
+      The <code>btarikak-api</code> container reaches this endpoint over the
+      public hostname and receives 200 with the token, 401 without it. No Docker
+      network configuration is required — that is precisely why the endpoint is
+      protected by a token rather than by an IP rule: the container cannot reach
+      the host's <code>127.0.0.1</code>, and a bridge address changes whenever
+      the compose network is recreated.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2>Open questions</h2>
+  <ol>
+    <li>
+      What are <code>activation</code>, <code>qualified</code> and
+      <code>conversion</code> for b-tarikak? Proposals above; the decision is
+      yours and should be recorded once.
+    </li>
+    <li>
+      Does the app need to display a user's referral standing? A read endpoint
+      <code>GET /referral/{user_ref}</code> exists but is deliberately not
+      exposed publicly. Say so and it will be opened behind the same token.
+    </li>
+    <li>
+      Is <code>landing_visit</code> feasible in the Flutter web app? It is the
+      cheapest stage to add and the one that separates "the page is broken" from
+      "the audience is wrong".
+    </li>
+  </ol>
+</section>
+
+<footer>
+  <p>
+    Receiving service: <code>fbgroups</code>, systemd unit on the same VPS,
+    bound to <code>127.0.0.1:8090</code> behind nginx. It never contacts
+    facebook.com and stores no IP addresses — click deduplication uses a daily
+    rotating HMAC of address and user agent.
+  </p>
+  <p>Questions about this contract go to the fbgroups side, not the API team.</p>
+</footer>
+
+</div>

@@ -33,19 +33,38 @@ def classify_category(
     name: str,
     snippet: str | None,
     config: AppConfig,
+    city_id: str | None = None,
 ) -> CategoryResult:
-    """Bestimmt die wahrscheinlichste Themenkategorie."""
+    """Bestimmt die wahrscheinlichste Themenkategorie.
+
+    ``city_id`` ist das Ergebnis der Stadterkennung. Begriffe, die zugleich ein
+    Name **dieser** Stadt sind, zaehlen hier nicht mit: Ein Wort darf nur
+    einmal Punkte bringen. Der Fall ist real und im Bestand messbar - "Essen"
+    ist eine Stadt mit 600.000 Einwohnern *und* der deutsche Kategoriebegriff
+    fuer Speisen. Ohne diesen Ausschluss bekam jede Gruppe namens "Syrer in
+    Essen" neben den Stadtpunkten auch die vollen Kategoriepunkte, und stand in
+    der Uebersicht als Essensgruppe: 8 von 16 Treffern der Kategorie ``essen``
+    waren genau das.
+
+    Ausgeschlossen wird nur der Name der **erkannten** Stadt. "Arabisches Essen
+    in Berlin" behaelt seine Kategorie - dort ist Berlin die Stadt, und
+    "Essen" bleibt ein Speisebegriff.
+    """
     name_norm = normalize(name)
     snippet_norm = normalize(snippet or "")
     if not name_norm and not snippet_norm:
         return CategoryResult()
+
+    stadtnamen: set[str] = set()
+    if city_id and city_id in config.cities:
+        stadtnamen = {normalize(n) for n in config.cities[city_id].all_names() if n}
 
     w_name = float(config.get("classification", "name_confidence", default=1.0))
     w_snippet = float(config.get("classification", "snippet_confidence", default=0.5))
 
     best = CategoryResult()
     for category in config.categories:
-        terms = category.all_terms()
+        terms = [term for term in category.all_terms() if normalize(term) not in stadtnamen]
         name_hits = sum(1 for term in terms if contains_term(name_norm, term))
         snippet_hits = sum(1 for term in terms if contains_term(snippet_norm, term))
         if not name_hits and not snippet_hits:

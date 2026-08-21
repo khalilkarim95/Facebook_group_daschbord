@@ -101,8 +101,14 @@ def test_tracking_url_nutzt_die_basis_url(config, monkeypatch) -> None:
 def test_umgebungsvariable_schlaegt_die_konfiguration(config, monkeypatch) -> None:
     monkeypatch.setenv("APP_BASE_URL", "https://echte-domain.example")
     assert app_base_url(config) == "https://echte-domain.example"
+
+    # Ohne Variable gilt wieder settings.yaml - welcher Wert dort steht, ist
+    # eine Frage des Betriebs und keine des Verfahrens. Frueher stand hier der
+    # damalige Wert fest verdrahtet; der Wechsel auf die echte Domain machte
+    # den Test rot, obwohl die Vorrangregel unveraendert richtig war.
     monkeypatch.delenv("APP_BASE_URL")
-    assert app_base_url(config) == "http://localhost:3000"
+    aus_datei = str(config.get("marketing", "app_base_url", default="")).rstrip("/")
+    assert app_base_url(config) == aus_datei
 
 
 def test_ohne_basis_url_bleibt_der_link_leer(config, monkeypatch) -> None:

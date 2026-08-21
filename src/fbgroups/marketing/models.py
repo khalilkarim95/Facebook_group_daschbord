@@ -127,6 +127,17 @@ class GroupMarketing(BaseModel):
     join_requested_at: datetime | None = None
     last_contacted_at: datetime | None = None
     last_posted_at: datetime | None = None
+    # Eigene Achse, ausdruecklich NICHT ueber marketing_status geloest: Dort
+    # bedeuten ACTIVE/INACTIVE das Ende des Kooperationswegs (Zusammenarbeit
+    # laeuft / ist beendet). Wer damit auch "nicht bearbeiten" ausdrueckte,
+    # loeschte beim Ausschliessen die Information, dass er in der Gruppe
+    # bereits Mitglied war - und beim Wiederaufnehmen faengt er von vorn an.
+    #
+    # Der Tracking-Code bleibt bei einem Ausschluss unberuehrt gueltig: Er
+    # steht moeglicherweise in einem veroeffentlichten Beitrag. Ausschliessen
+    # ist eine Entscheidung ueber die eigene Arbeit, kein Widerruf des Codes.
+    bearbeiten: bool = True
+    ausschlussgrund: str = ""
     notes: str = ""
     updated_at: datetime = Field(default_factory=_utcnow)
 
@@ -137,6 +148,17 @@ class Campaign(BaseModel):
     ``audiences`` und ``cities`` verweisen auf die Kennungen aus
     ``config/audiences.yaml`` und ``config/cities.yaml`` - dieselbe fachliche
     Wahrheit wie im Rest des Projekts, keine zweite Liste.
+
+    **Beschreibung und Auswahlregel sind zwei verschiedene Dinge.** ``audiences``
+    und ``cities`` sagen, *wen* die Kampagne bewirbt; die ``target_*``-Felder
+    sagen, *welche Gruppen* einen Tracking-Code bekommen. Frueher war beides
+    dasselbe Feld. Das faellt erst auf, wenn man es auseinanderziehen will: Eine
+    Kampagne darf "Batreeq Syrian Germany" heissen, syrische Zielgruppen
+    bewerben und trotzdem den gesamten Bestand abdecken.
+
+    Bei jedem ``target_*``-Feld heisst **leer: keine Einschraenkung**. Eine
+    Kampagne ohne Angaben erfasst damit den ganzen Bestand - "alle Gruppen" ist
+    ein Normalfall der Regel und kein Sonderweg.
     """
 
     campaign_id: str                       # Slug, z. B. "batreeq-syrian-germany"
@@ -150,6 +172,22 @@ class Campaign(BaseModel):
     status: CampaignStatus = CampaignStatus.DRAFT
     starts_on: date | None = None
     ends_on: date | None = None
+    # -- Auswahlregel: welche Gruppen die Kampagne erfasst ------------------
+    target_audiences: list[str] = Field(default_factory=list)
+    target_cities: list[str] = Field(default_factory=list)
+    target_categories: list[str] = Field(default_factory=list)
+    target_statuses: list[str] = Field(default_factory=list)
+    target_min_score: float | None = None
+    # Gruppen ohne Score sind solche, von denen oft nur die URL bekannt ist.
+    # Sie bekommen einen Code ohne Zielgruppe und ohne Stadt (FB-GEN-DE-...),
+    # der nichts ueber die Gruppe aussagt. Deshalb ist das eine ausdrueckliche
+    # Entscheidung und keine Vorgabe.
+    target_include_unscored: bool = False
+    # Uebernimmt ein Import- oder Suchlauf neu gefundene Gruppen von selbst?
+    # Vorgabe aus: Ein Lauf soll melden, was er gefunden hat, und nicht
+    # nebenbei eine Kampagne veraendern. Anders als bei der Suche kostet das
+    # Einschalten aber nichts - es wird nichts abgerufen und nichts bezahlt.
+    auto_assign: bool = False
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 

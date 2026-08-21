@@ -18,7 +18,7 @@ from fbgroups.marketing.store import SCHEMA as MARKETING_SCHEMA
 from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEMA
 from fbgroups.models import Group, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 
 # Schritte, die eine aeltere Datei nachholt, ohne dass der Bestand neu
 # aufgebaut werden muss. Handgepflegte Notizen bleiben so erhalten.
@@ -38,6 +38,46 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
     # MarketingStatus-Aufzaehlung brauchen keinen Schritt: Die Spalte ist TEXT
     # und nimmt sie ohne Aenderung auf.
     5: ("ALTER TABLE group_marketing ADD COLUMN join_requested_at TEXT",),
+    # Die Auswahlregel einer Kampagne. Bisher war der Zuordnungsfilter
+    # dasselbe Feld wie die Beschreibung ('audiences'/'cities'), und angewandt
+    # wurde er genau einmal - beim Aufruf von 'campaign add-groups'. Ab hier
+    # steht die Regel bei der Kampagne und laesst sich beliebig oft anwenden.
+    #
+    # Die Uebernahme aus 'audiences'/'cities' ist Absicht: Eine bestehende
+    # Kampagne behaelt damit exakt ihren bisherigen Umfang. Wer sie weiten
+    # will, tut das ausdruecklich ueber 'campaign target' - eine Migration
+    # darf keine Kampagne heimlich vergroessern.
+    6: (
+        "ALTER TABLE campaigns ADD COLUMN target_audiences TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE campaigns ADD COLUMN target_cities TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE campaigns ADD COLUMN target_categories TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE campaigns ADD COLUMN target_statuses TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE campaigns ADD COLUMN target_min_score REAL",
+        "ALTER TABLE campaigns ADD COLUMN target_include_unscored INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE campaigns ADD COLUMN auto_assign INTEGER NOT NULL DEFAULT 0",
+        "UPDATE campaigns SET target_audiences = audiences, target_cities = cities",
+    ),
+    # Eigene Achse fuer die Frage "arbeiten wir an dieser Gruppe ueberhaupt?".
+    # Sie steht neben dem Kooperationsweg, nicht darin - siehe GroupMarketing.
+    #
+    # Der abschliessende INSERT schliesst die Gruppen ohne verwertbare Daten
+    # einmalig aus. Es sind ausschliesslich Datensaetze, von denen nichts als
+    # eine URL bekannt ist (meist Treffer auf einen Beitrag statt auf ein
+    # Gruppenprofil); an ihnen laesst sich nicht arbeiten, und in der
+    # Arbeitsliste verdecken sie die brauchbaren. ``DO NOTHING`` schuetzt jede
+    # bereits von Hand gepflegte Zeile - eine Migration ueberstimmt kein
+    # Menschenurteil. Rueckgaengig mit einem Klick je Gruppe.
+    7: (
+        "ALTER TABLE group_marketing ADD COLUMN bearbeiten INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE group_marketing ADD COLUMN ausschlussgrund TEXT NOT NULL DEFAULT ''",
+        """
+        INSERT INTO group_marketing (group_id, bearbeiten, ausschlussgrund, updated_at)
+        SELECT group_id, 0, 'keine Daten',
+               strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
+        FROM groups WHERE status = 'insufficient_data'
+        ON CONFLICT(group_id) DO NOTHING
+        """,
+    ),
 }
 
 SCHEMA = """

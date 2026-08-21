@@ -1,6 +1,7 @@
 """Redirect-Dienst, Meldeschnittstelle und Uebersichtsseite.
 
-``GET  /``           Uebersicht ueber den Bestand - nur ueber localhost
+``GET  /``           Uebersicht ueber den Bestand - localhost, oder lesend
+                     ueber nginx mit Passwort (``UEBERSICHT_TOKEN``)
 ``GET  /r/{code}``   Klick zaehlen und zur Landingpage weiterleiten
 ``POST /events``     die Zielanwendung meldet, was danach passiert ist
 
@@ -24,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import secrets
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -33,8 +35,15 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field
 
 from fbgroups.config import AppConfig, load_config
-from fbgroups.marketing.dashboard import render, sammle_daten, status_label
+from fbgroups.marketing.dashboard import (
+    regel_kurzfassung,
+    render,
+    sammle_daten,
+    status_label,
+)
 from fbgroups.marketing.models import (
+    Campaign,
+    CampaignStatus,
     EventType,
     MarketingStatus,
     ReferralStatus,
@@ -42,7 +51,10 @@ from fbgroups.marketing.models import (
 )
 from fbgroups.marketing.referral import code_fuer_benutzer, lege_empfehlung_an, setze_status
 from fbgroups.marketing.rewards import bewerte_benutzer, load_reward_rules
+from fbgroups.marketing.selection import auswahl_der_kampagne, baue_plan, synchronisiere
 from fbgroups.marketing.store import MarketingStore
+from fbgroups.marketing.tracking import slug
+from fbgroups.models import RecordStatus
 from fbgroups.storage import SqliteStore
 
 # Optionale Abhaengigkeit, aber auf Modulebene importiert: Wegen
@@ -89,6 +101,82 @@ class StandMeldung(BaseModel):
     status: MarketingStatus
 
 
+class KampagneNeu(BaseModel):
+    """Eine neue Kampagne - ohne dass dabei ein einziger Code entsteht.
+
+    Anlegen und Zuordnen sind bewusst getrennt. Ein Tracking-Code ist
+    endgueltig: Er steht spaeter in veroeffentlichten Beitraegen und wird nie
+    zurueckgenommen. Ein Formular, das beim Speichern still 400 Codes vergibt,
+    waere ein Knopf mit unumkehrbarer Wirkung. Die Kampagne beginnt deshalb als
+    ``draft``, ohne Zuordnungen und mit ``auto_assign`` aus.
+    """
+
+    name: str = Field(min_length=1, max_length=120)
+    campaign_id: str = Field(default="", max_length=64)
+    description: str = Field(default="", max_length=500)
+    audiences: list[str] = Field(default_factory=list, max_length=50)
+    cities: list[str] = Field(default_factory=list, max_length=50)
+    language: str = Field(default="", max_length=16)
+    message_template: str = Field(default="", max_length=2000)
+    landing_page: str = Field(default="", max_length=300)
+
+
+class KampagneStatusMeldung(BaseModel):
+    status: CampaignStatus
+
+
+class SyncMeldung(BaseModel):
+    """``dry_run`` ist die Vorgabe - gezeigt wird erst, gehandelt danach."""
+
+    dry_run: bool = True
+
+
+class AuswahlMeldung(BaseModel):
+    """Die Auswahlregel einer Kampagne: **welche Gruppen** sie erfasst.
+
+    Nicht zu verwechseln mit ``audiences``/``cities`` der Kampagne - die
+    beschreiben, *wen* sie bewirbt. Beides war frueher dasselbe Feld; dadurch
+    liess sich eine Kampagne nicht auf den ganzen Bestand weiten, ohne ihre
+    fachliche Beschreibung zu verfaelschen.
+
+    ``None`` heisst **unveraendert**, die leere Liste heisst **keine
+    Einschraenkung**. Die Unterscheidung ist noetig, weil das Formular nur
+    Zielgruppen und Staedte zeigt: Ohne sie loeschte jedes Speichern die auf
+    der Kommandozeile gesetzte Kategorie- oder Statusregel gleich mit.
+
+    ``min_score`` unter 0 hebt den Mindestscore auf - dieselbe Vereinbarung wie
+    ``campaign target --min-score -1``. Ein Mindestscore unter 0 ist fachlich
+    sinnlos und damit als "aufheben" eindeutig.
+    """
+
+    audiences: list[str] | None = Field(default=None, max_length=100)
+    cities: list[str] | None = Field(default=None, max_length=100)
+    categories: list[str] | None = Field(default=None, max_length=100)
+    statuses: list[str] | None = Field(default=None, max_length=20)
+    min_score: float | None = Field(default=None, ge=-1, le=100)
+    include_unscored: bool | None = None
+    auto_assign: bool | None = None
+
+
+class BearbeitenMeldung(BaseModel):
+    """Ob an diesen Gruppen gearbeitet wird - eine oder viele auf einmal.
+
+    Eigene Meldung neben ``StandMeldung``, weil es zwei Fragen sind: Wo stehen
+    wir mit dieser Gruppe (``marketing_status``), und arbeiten wir ueberhaupt
+    an ihr. In einem Feld vermischt, loeschte das Ausschliessen die Angabe,
+    dass man in der Gruppe bereits Mitglied ist - beim Wiederaufnehmen finge
+    man von vorn an.
+
+    Mengenweise, weil einzeln unbrauchbar: Beim ersten vollen Bestand waren
+    144 von 413 Datensaetzen ohne verwertbare Daten. Das auszusortieren ist ein
+    Zug, keine 144 Klicks.
+    """
+
+    group_ids: list[str] = Field(min_length=1, max_length=2000)
+    bearbeiten: bool
+    grund: str = Field(default="", max_length=200)
+
+
 class EventMeldung(BaseModel):
     """Was die Zielanwendung meldet.
 
@@ -105,6 +193,45 @@ class EventMeldung(BaseModel):
     occurred_at: datetime | None = None
 
 
+def _events_token() -> str:
+    """Gemeinsames Geheimnis fuer ``POST /events`` - aus der Umgebung.
+
+    Leer heisst: keine Pruefung. Das ist der Entwicklungsfall und der Grund,
+    warum die Tests ohne Einrichtung laufen; im Betrieb gehoert der Weg dann
+    hinter einen Proxy, der nur den eigenen Rechner durchlaesst.
+
+    Mit Schluessel ist der Weg von aussen benutzbar - und das ist der Punkt:
+    Die Zielanwendung laeuft in einem Container und erreicht ``127.0.0.1`` des
+    Wirts gar nicht. Die Alternative waere, den Dienst zusaetzlich an das
+    Docker-Gateway zu binden; dessen Adresse wechselt aber, sobald das
+    Compose-Netz neu entsteht, und offen waere er dann fuer jeden Container.
+
+    Der Weg braucht den Schutz unabhaengig davon: Er schreibt Registrierungen,
+    Empfehlungen und damit Praemien. Ohne Pruefung koennte jeder Praemien
+    ausloesen.
+    """
+    return os.environ.get("EVENTS_TOKEN", "").strip()
+
+
+def _uebersicht_token() -> str:
+    """Geheimnis, mit dem nginx eine bestandene Passwortpruefung bezeugt.
+
+    Die Uebersicht bleibt an ``127.0.0.1`` gebunden. Wer sie von aussen sehen
+    will, kommt ueber einen nginx-Block mit ``auth_basic``, der diese Kopfzeile
+    setzt - und der Dienst zeigt sie dann **schreibgeschuetzt**.
+
+    Der Wert muss geheim sein, obwohl ``proxy_set_header`` eine vom Besucher
+    mitgeschickte Kopfzeile ueberschreibt: Sonst haengt der Schutz daran, dass
+    jeder kuenftige Block das Ueberschreiben nicht vergisst - auch der, den in
+    zwei Jahren jemand anders schreibt. Ein Weg, der Auskunft gibt, bringt
+    seinen Schutz besser selbst mit, als ihn von einer Datei nebenan zu borgen.
+
+    Leer heisst: kein Zugang von aussen. Das ist die Vorgabe und der Fall, in
+    dem die Tests ohne Einrichtung laufen.
+    """
+    return os.environ.get("UEBERSICHT_TOKEN", "").strip()
+
+
 def _visitor_hash(store: MarketingStore, ip: str, user_agent: str) -> str:
     """Taeglich wechselnder Pruefwert statt gespeicherter IP-Adresse.
 
@@ -119,6 +246,39 @@ def _visitor_hash(store: MarketingStore, ip: str, user_agent: str) -> str:
 
     roh = f"{ip}|{user_agent}|{date.today().isoformat()}"
     return hmac.new(salt.encode(), roh.encode(), hashlib.sha256).hexdigest()[:16]
+
+
+# User-Agents, die eine Linkvorschau erzeugen, statt dass ein Mensch klickt:
+# Facebook selbst beim Posten, WhatsApp/Telegram/Slack & Co. beim Weiterleiten
+# oder Anzeigen der Karte (Titel, Bild, Beschreibung). Kein Anspruch auf
+# Vollstaendigkeit - neue Muster werden ergaenzt, sobald sie im nginx-Protokoll
+# auffallen.
+_VORSCHAU_USER_AGENTS = (
+    "facebookexternalhit",
+    "facebookcatalog",
+    "whatsapp",
+    "telegrambot",
+    "slackbot",
+    "slack-imgproxy",
+    "discordbot",
+    "linkedinbot",
+    "twitterbot",
+    "skypeuripreview",
+    "vkshare",
+)
+
+
+def _ist_linkvorschau(user_agent: str) -> bool:
+    """Erkennt einen automatischen Vorschau-Abruf statt eines Klicks.
+
+    Ein frisch geposteter Link wird von der Plattform selbst abgerufen, um die
+    Vorschaukarte zu bauen - oft von mehreren IPs und mehrfach ueber die Zeit
+    verteilt. Ohne diese Erkennung zaehlte jeder dieser Abrufe als eigener
+    Klick: Ein einzelner Livetest zeigte 25 Klicks fuer einen einzigen
+    Menschen, alle mit demselben ``facebookexternalhit``-User-Agent.
+    """
+    ua = user_agent.lower()
+    return any(muster in ua for muster in _VORSCHAU_USER_AGENTS)
 
 
 def _ziel_url(store: MarketingStore, tracking_code: str, config: AppConfig) -> str:
@@ -155,6 +315,27 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
     def _store() -> MarketingStore:
         return MarketingStore(pfad)
 
+    def _pruefe_token(request: Request) -> None:
+        """Prueft ``X-Events-Token`` - fuer die Wege, die die Zielanwendung ruft.
+
+        Leerer Schluessel heisst: keine Pruefung. Das ist der Entwicklungsfall
+        und der Grund, warum die Tests ohne Einrichtung laufen. Im Betrieb
+        steht der Schluessel in ``/opt/fbgroups/app/.env``.
+
+        401 statt 404: Anders als bei der Uebersicht ist hier nichts zu
+        verbergen - die Gegenstelle ist eine Anwendung und soll den
+        Unterschied zwischen "falscher Schluessel" und "Weg gibt es nicht"
+        sehen koennen.
+        """
+        erwartet = _events_token()
+        if not erwartet:
+            return
+        # Zeitkonstanter Vergleich: Ein frueher Abbruch bei der ersten
+        # abweichenden Stelle verraet ueber viele Versuche den Schluessel.
+        gesendet = request.headers.get("x-events-token", "")
+        if not hmac.compare_digest(gesendet, erwartet):
+            raise HTTPException(status_code=401, detail="Ungueltiger Schluessel")
+
     def _nur_lokal(request: Request) -> None:
         """Laesst nur Aufrufe vom selben Rechner durch - und keine fremde Seite.
 
@@ -181,20 +362,60 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         if herkunft and urlparse(herkunft).hostname not in LOKALE_ADRESSEN:
             raise HTTPException(status_code=404, detail="Not Found")
 
+    def _pruefe_uebersicht(request: Request) -> bool:
+        """Laesst die Uebersicht durch und sagt, ob sie schreibgeschuetzt ist.
+
+        Zwei Zugaenge mit verschiedenen Rechten:
+
+        * **vom selben Rechner** (SSH-Tunnel): die volle Seite, Aenderungen
+          moeglich.
+        * **ueber nginx mit Passwort**: dieselben Zahlen, aber nur lesend.
+
+        Der Unterschied ist Absicht, kein Rest. Die schreibenden Wege vergeben
+        Tracking-Codes, und ein vergebener Code wird nie zurueckgenommen - er
+        steht spaeter in veroeffentlichten Beitraegen. Ein abhandengekommenes
+        Passwort soll Zahlen zeigen koennen, aber nicht mit einem Klick 400
+        Codes vergeben. Wer aendern will, baut den Tunnel auf; das ist ein
+        Handgriff und keine taegliche Huerde.
+
+        Rueckgabe: ``True``, wenn die Seite schreibgeschuetzt zu bauen ist.
+        """
+        absender = request.client.host if request.client else ""
+        herkunft = request.headers.get("origin", "")
+        lokal = absender in LOKALE_ADRESSEN and (
+            not herkunft or urlparse(herkunft).hostname in LOKALE_ADRESSEN
+        )
+        if lokal:
+            return False
+
+        erwartet = _uebersicht_token()
+        # Zeitkonstant, aus demselben Grund wie bei _pruefe_token.
+        gesendet = request.headers.get("x-uebersicht-token", "")
+        if erwartet and hmac.compare_digest(gesendet, erwartet):
+            return True
+
+        # 404 wie bisher: Wer den Dienst oeffentlich stellt, soll nicht
+        # nebenbei verraten, dass es hier eine Arbeitsliste gibt.
+        raise HTTPException(status_code=404, detail="Not Found")
+
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):  # noqa: ANN202
-        """Uebersicht ueber den Bestand - ausschliesslich vom selben Rechner.
+        """Uebersicht ueber den Bestand - vom selben Rechner oder lesend.
 
-        Von aussen ist der Weg nicht vorhanden (404, nicht 403): Wer den Dienst
-        oeffentlich stellt, soll damit nicht nebenbei verraten, dass es hier
-        ueberhaupt eine Arbeitsliste gibt.
+        Ohne einen der beiden Zugaenge ist der Weg nicht vorhanden (404, nicht
+        403): Wer den Dienst oeffentlich stellt, soll damit nicht nebenbei
+        verraten, dass es hier ueberhaupt eine Arbeitsliste gibt.
+
+        Die schreibenden Wege darunter pruefen weiterhin mit ``_nur_lokal``.
+        Der Schreibschutz der Seite ist damit nicht die Absicherung, sondern
+        ihre sichtbare Entsprechung.
         """
-        _nur_lokal(request)
-        return HTMLResponse(render(sammle_daten(cfg, pfad)))
+        nur_lesen = _pruefe_uebersicht(request)
+        return HTMLResponse(render(sammle_daten(cfg, pfad), nur_lesen=nur_lesen))
 
     @app.post("/stand")
     def stand_setzen(meldung: StandMeldung, request: Request):  # noqa: ANN202
@@ -236,6 +457,257 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             {"status": meldung.status.value, "label": status_label(meldung.status.value)}
         )
 
+    @app.post("/kampagnen")
+    def kampagne_anlegen(meldung: KampagneNeu, request: Request):  # noqa: ANN202
+        """Legt eine Kampagne an - als Entwurf, ohne Zuordnungen.
+
+        Die Auswahlregel startet als Abbild der Beschreibung: Wer eine Kampagne
+        fuer syrische Zielgruppen in Berlin anlegt, erfasst zunaechst genau
+        diese Gruppen. Eine leere Regel hiesse "keine Einschraenkung" und damit
+        der gesamte Bestand - das mag richtig sein, ist aber eine Entscheidung
+        und keine Vorgabe fuer ein frisch ausgefuelltes Formular.
+        """
+        _nur_lokal(request)
+
+        kennung = slug(meldung.campaign_id) or slug(meldung.name)
+        if not kennung:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Aus diesem Namen entsteht keine Kennung - bitte eine angeben "
+                    "(Buchstaben a-z und Ziffern)."
+                ),
+            )
+
+        unbekannt = [a for a in meldung.audiences if a not in cfg.audiences]
+        unbekannt += [c for c in meldung.cities if c not in cfg.cities]
+        if unbekannt:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unbekannt in der Konfiguration: {', '.join(unbekannt)}",
+            )
+
+        with _store() as store:
+            if store.load_campaign(kennung) is not None:
+                raise HTTPException(
+                    status_code=409, detail=f"Es gibt bereits eine Kampagne '{kennung}'."
+                )
+            store.save_campaign(
+                Campaign(
+                    campaign_id=kennung,
+                    name=meldung.name,
+                    description=meldung.description,
+                    audiences=list(meldung.audiences),
+                    cities=list(meldung.cities),
+                    language=meldung.language,
+                    message_template=meldung.message_template,
+                    landing_page=meldung.landing_page,
+                    target_audiences=list(meldung.audiences),
+                    target_cities=list(meldung.cities),
+                )
+            )
+            store.audit("kampagne_angelegt", kennung, meldung.name)
+
+        return JSONResponse(
+            {"campaign_id": kennung, "status": CampaignStatus.DRAFT.value}, status_code=201
+        )
+
+    @app.post("/kampagnen/{campaign_id}/status")
+    def kampagne_status(  # noqa: ANN202
+        campaign_id: str, meldung: KampagneStatusMeldung, request: Request
+    ):
+        """Setzt den Status. Vergebene Codes bleiben in jedem Fall gueltig.
+
+        Eine pausierte oder beendete Kampagne nimmt keine neuen Gruppen mehr
+        auf - aber ihre Links funktionieren weiter. Sie stehen in Beitraegen,
+        die niemand zurueckholt.
+        """
+        _nur_lokal(request)
+        with _store() as store:
+            campaign = store.load_campaign(campaign_id)
+            if campaign is None:
+                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
+            campaign.status = meldung.status
+            store.save_campaign(campaign)
+            store.audit("kampagne_status", campaign_id, meldung.status.value)
+        return JSONResponse({"campaign_id": campaign_id, "status": meldung.status.value})
+
+    @app.post("/kampagnen/{campaign_id}/auswahl")
+    def kampagne_auswahl(  # noqa: ANN202
+        campaign_id: str, meldung: AuswahlMeldung, request: Request
+    ):
+        """Setzt die Auswahlregel - und rechnet sofort vor, was sie bedeutet.
+
+        Speichern vergibt **keinen** Code. Die Regel sagt nur, welche Gruppen
+        in Frage kommen; die Codes entstehen erst durch "Zuordnen", und dort
+        wird noch einmal gefragt. Ein Tracking-Code ist endgueltig - er steht
+        spaeter in veroeffentlichten Beitraegen.
+
+        Die Antwort enthaelt denselben Plan, den auch ``sync`` ausfuehren
+        wuerde (``selection.baue_plan``). Eine zweite Zaehlung koennte davon
+        abweichen, und der Mensch bestaetigte dann eine Zahl und bekaeme eine
+        andere.
+        """
+        _nur_lokal(request)
+
+        kategorien = {k.id for k in cfg.categories}
+        zustaende = {s.value for s in RecordStatus}
+        unbekannt = [a for a in (meldung.audiences or []) if a not in cfg.audiences]
+        unbekannt += [c for c in (meldung.cities or []) if c not in cfg.cities]
+        unbekannt += [k for k in (meldung.categories or []) if k not in kategorien]
+        unbekannt += [s for s in (meldung.statuses or []) if s not in zustaende]
+        if unbekannt:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unbekannt in der Konfiguration: {', '.join(unbekannt)}",
+            )
+
+        with SqliteStore(pfad) as gruppen_store:
+            groups = gruppen_store.load_groups()
+
+        with _store() as store:
+            campaign = store.load_campaign(campaign_id)
+            if campaign is None:
+                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
+
+            # None laesst das Feld stehen - das Formular schickt nur, was es
+            # auch zeigt.
+            if meldung.audiences is not None:
+                campaign.target_audiences = list(meldung.audiences)
+            if meldung.cities is not None:
+                campaign.target_cities = list(meldung.cities)
+            if meldung.categories is not None:
+                campaign.target_categories = list(meldung.categories)
+            if meldung.statuses is not None:
+                campaign.target_statuses = list(meldung.statuses)
+            if meldung.min_score is not None:
+                campaign.target_min_score = None if meldung.min_score < 0 else meldung.min_score
+            if meldung.include_unscored is not None:
+                campaign.target_include_unscored = meldung.include_unscored
+            if meldung.auto_assign is not None:
+                campaign.auto_assign = meldung.auto_assign
+
+            campaign.updated_at = datetime.now(UTC)
+            store.save_campaign(campaign)
+
+            regel = auswahl_der_kampagne(campaign, cfg)
+            store.audit("kampagne_auswahl", campaign_id, regel.beschreibung())
+
+            plan = baue_plan(
+                groups,
+                campaign,
+                cfg,
+                vorhandene_gruppen=store.assigned_group_ids(campaign_id),
+                vergebene_codes=store.assigned_codes(),
+                auswahl=regel,
+            )
+
+        return JSONResponse(
+            {
+                "campaign_id": campaign_id,
+                "beschreibung": regel.beschreibung(),
+                "kurz": regel_kurzfassung(regel),
+                "passend": plan.anzahl_neu + plan.bereits_zugeordnet,
+                "bestand": len(groups),
+                "neu": plan.anzahl_neu,
+                "bereits_zugeordnet": plan.bereits_zugeordnet,
+                "nicht_mehr_passend": len(plan.nicht_mehr_passend),
+                "auto_assign": campaign.auto_assign,
+                "regel": {
+                    "audiences": campaign.target_audiences,
+                    "cities": campaign.target_cities,
+                    "categories": campaign.target_categories,
+                    "statuses": campaign.target_statuses,
+                    "min_score": campaign.target_min_score,
+                    "include_unscored": campaign.target_include_unscored,
+                    "auto_assign": campaign.auto_assign,
+                },
+            }
+        )
+
+    @app.post("/kampagnen/{campaign_id}/sync")
+    def kampagne_sync(campaign_id: str, meldung: SyncMeldung, request: Request):  # noqa: ANN202
+        """Wendet die Auswahlregel an - erst als Vorschau, dann im Ernstfall.
+
+        Beide Wege lesen denselben Plan aus ``selection.baue_plan``. Eine
+        zweite Zaehlung koennte von der Ausfuehrung abweichen und damit eine
+        falsche Zahl versprechen - bei einer unumkehrbaren Vergabe der
+        schlechteste Fehler.
+        """
+        _nur_lokal(request)
+        with SqliteStore(pfad) as gruppen_store:
+            groups = gruppen_store.load_groups()
+
+        with _store() as store:
+            campaign = store.load_campaign(campaign_id)
+            if campaign is None:
+                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
+
+            if meldung.dry_run:
+                plan = baue_plan(
+                    groups,
+                    campaign,
+                    cfg,
+                    vorhandene_gruppen=store.assigned_group_ids(campaign_id),
+                    vergebene_codes=store.assigned_codes(),
+                )
+            else:
+                plan = synchronisiere(store, groups, campaign, cfg)
+
+        return JSONResponse(
+            {
+                "campaign_id": campaign_id,
+                "dry_run": meldung.dry_run,
+                "neu": plan.anzahl_neu,
+                "bereits_zugeordnet": plan.bereits_zugeordnet,
+                "nicht_mehr_passend": len(plan.nicht_mehr_passend),
+                "beispiele": [link.tracking_code for _g, link in plan.neu[:5]],
+            }
+        )
+
+    @app.post("/bearbeiten")
+    def bearbeiten_setzen(meldung: BearbeitenMeldung, request: Request):  # noqa: ANN202
+        """Nimmt Gruppen in die Arbeitsliste auf oder schliesst sie aus.
+
+        Der Tracking-Code bleibt dabei unangetastet gueltig. Ein Ausschluss ist
+        eine Entscheidung ueber die eigene Arbeit, kein Widerruf des Codes -
+        der steht moeglicherweise schon in einem veroeffentlichten Beitrag, und
+        ein Klick darauf muss weiter gezaehlt werden und ankommen.
+        """
+        _nur_lokal(request)
+
+        with SqliteStore(pfad) as gruppen_store:
+            bekannt = {g.group_id for g in gruppen_store.load_groups()}
+        fremd = [gid for gid in meldung.group_ids if gid not in bekannt]
+        if fremd:
+            raise HTTPException(status_code=404, detail=f"Unbekannte Gruppe: {fremd[0]}")
+
+        jetzt = datetime.now(UTC)
+        with _store() as store:
+            for group_id in meldung.group_ids:
+                eintrag = store.load_marketing(group_id)
+                eintrag.bearbeiten = meldung.bearbeiten
+                # Der Grund gehoert zum Ausschluss. Bei der Wiederaufnahme
+                # faellt er weg - sonst stuende bei einer bearbeiteten Gruppe
+                # eine Begruendung, warum sie nicht bearbeitet wird.
+                eintrag.ausschlussgrund = "" if meldung.bearbeiten else meldung.grund
+                eintrag.updated_at = jetzt
+                store.save_marketing(eintrag)
+
+            # Eine Zeile je Vorgang, nicht je Gruppe: Ein Sammelausschluss ist
+            # eine Entscheidung. 144 Protokollzeilen daraus zu machen, machte
+            # das Protokoll unlesbar, ohne mehr zu sagen.
+            store.audit(
+                "bearbeiten_gesetzt",
+                f"{len(meldung.group_ids)} Gruppen",
+                "aufgenommen" if meldung.bearbeiten else f"ausgeschlossen: {meldung.grund}",
+            )
+
+        return JSONResponse(
+            {"anzahl": len(meldung.group_ids), "bearbeiten": meldung.bearbeiten,
+             "grund": "" if meldung.bearbeiten else meldung.grund}
+        )
+
     @app.get("/r/{tracking_code}")
     def redirect(tracking_code: str, request: Request):  # noqa: ANN202
         """Zaehlt den Klick und leitet weiter.
@@ -250,22 +722,24 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 store.audit("klick_unbekannter_code", tracking_code)
                 raise HTTPException(status_code=404, detail="Unbekannter Tracking-Code")
 
-            besucher = _visitor_hash(
-                store,
-                request.client.host if request.client else "",
-                request.headers.get("user-agent", ""),
-            )
-            if not store.klick_bereits_gezaehlt(tracking_code, besucher):
-                store.record_event(
-                    TrackingEvent(
-                        tracking_code=tracking_code,
-                        campaign_id=link.campaign_id,
-                        group_id=link.group_id,
-                        event_type=EventType.CLICK,
-                        visitor_hash=besucher,
-                        source="redirect",
-                    )
+            user_agent = request.headers.get("user-agent", "")
+            if not _ist_linkvorschau(user_agent):
+                besucher = _visitor_hash(
+                    store,
+                    request.client.host if request.client else "",
+                    user_agent,
                 )
+                if not store.klick_bereits_gezaehlt(tracking_code, besucher):
+                    store.record_event(
+                        TrackingEvent(
+                            tracking_code=tracking_code,
+                            campaign_id=link.campaign_id,
+                            group_id=link.group_id,
+                            event_type=EventType.CLICK,
+                            visitor_hash=besucher,
+                            source="redirect",
+                        )
+                    )
             ziel = _ziel_url(store, tracking_code, cfg)
 
         # 302, nicht 301: Ein dauerhaft gemerkter Umzug wuerde spaetere Klicks
@@ -274,13 +748,21 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         return RedirectResponse(url=f"{ziel}{trenner}ref={tracking_code}", status_code=302)
 
     @app.post("/events")
-    def melde_ereignis(meldung: EventMeldung):  # noqa: ANN202
+    def melde_ereignis(meldung: EventMeldung, request: Request):  # noqa: ANN202
         """Nimmt ein Ereignis der Zielanwendung entgegen.
 
         Bei ``registration`` mit ``referral_code`` entsteht zugleich die
         Empfehlung - mit allen Pruefungen. Wird sie abgewiesen, ist das
         Ereignis trotzdem gueltig: Der Mensch hat sich ja registriert.
+
+        Ist ``EVENTS_TOKEN`` gesetzt, muss die Kopfzeile ``X-Events-Token``
+        stimmen. 401 statt 404: Anders als bei der Uebersicht ist hier nichts
+        zu verbergen - die Gegenstelle ist eine Anwendung, und sie soll den
+        Unterschied zwischen "falscher Schluessel" und "Weg gibt es nicht"
+        sehen koennen.
         """
+        _pruefe_token(request)
+
         with _store() as store:
             campaign_id = group_id = ""
             tracking_code = meldung.tracking_code
@@ -339,8 +821,17 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             return JSONResponse(antwort)
 
     @app.get("/referral/{user_ref}")
-    def referral_stand(user_ref: str) -> dict[str, Any]:
-        """Empfehlungsstand eines Benutzers - fuer die Anzeige in der App."""
+    def referral_stand(user_ref: str, request: Request) -> dict[str, Any]:
+        """Empfehlungsstand eines Benutzers - fuer die Anzeige in der App.
+
+        Hinter demselben Schluessel wie ``POST /events``. Bisher trug diesen
+        Weg allein nginx, der ihn nicht nach aussen durchlaesst: Wer den Block
+        um ein ``location /`` erweitert, gaebe damit unbeabsichtigt Auskunft
+        ueber die Empfehlungen jedes Benutzers, dessen Kennung jemand raet.
+        Ein Weg, der Auskunft ueber Menschen gibt, soll seinen Schutz selbst
+        mitbringen und ihn nicht von einer Datei nebenan borgen.
+        """
+        _pruefe_token(request)
         with _store() as store:
             referrals = store.referrals_of(user_ref)
             return {

@@ -30,7 +30,11 @@ def classify_group(group: Group, config: AppConfig, phase: int = 1) -> Group:
     group.bundesland = city.bundesland
     group.city_confidence = city.confidence
 
-    category = classify_category(group.name, group.description_snippet, config)
+    # Nach der Stadt, und mit ihr: Ein Wort, das die Stadt benannt hat, darf
+    # nicht ein zweites Mal als Kategoriebegriff zaehlen.
+    category = classify_category(
+        group.name, group.description_snippet, config, city_id=city.city_id
+    )
     group.category = category.category
     group.category_confidence = category.confidence
 

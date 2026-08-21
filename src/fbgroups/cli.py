@@ -27,6 +27,8 @@ from rich.table import Table
 from fbgroups.config import AppConfig, load_config
 from fbgroups.export import export_csv, export_excel
 from fbgroups.marketing.cli import campaign_app, marketing_app
+from fbgroups.marketing.selection import synchronisiere
+from fbgroups.marketing.store import MarketingStore
 from fbgroups.marketing.tracking import app_base_url
 from fbgroups.pipeline import classify_group, process_search_results, run_seed_import
 from fbgroups.providers.base import ProviderState
@@ -69,6 +71,48 @@ def _config() -> AppConfig:
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Konfigurationsfehler:[/red] {exc}")
         raise typer.Exit(code=1) from exc
+
+
+def _auto_zuordnen(config: AppConfig) -> None:
+    """Uebernimmt neu gefundene Gruppen in Kampagnen mit ``auto_assign``.
+
+    Laeuft am Ende von Import und Suchlauf. Ohne diesen Schritt muesste jemand
+    nach jedem Lauf daran denken, ``campaign sync`` aufzurufen - bei woechentlich
+    neuen Gruppen ist das genau die Art Handgriff, die irgendwann ausfaellt und
+    dann monatelang niemandem auffaellt.
+
+    Betroffen sind ausschliesslich Kampagnen, bei denen der Schalter
+    ausdruecklich gesetzt wurde; Vorgabe ist aus. Es wird nur hinzugefuegt, nie
+    entfernt, und kein bestehender Code angefasst. Ein Fehler hier darf einen
+    gelungenen Suchlauf nicht nachtraeglich zunichtemachen - die Gruppen sind
+    zu dem Zeitpunkt bereits gespeichert.
+    """
+    pfad = config.path("sqlite_path")
+    if not pfad.exists():
+        return
+
+    try:
+        with MarketingStore(pfad) as store:
+            kampagnen = store.campaigns_mit_auto_assign()
+            if not kampagnen:
+                return
+
+            with SqliteStore(pfad) as gruppen_store:
+                groups = gruppen_store.load_groups()
+
+            for campaign in kampagnen:
+                plan = synchronisiere(store, groups, campaign, config)
+                if plan.anzahl_neu:
+                    console.print(
+                        f"[green]{campaign.campaign_id}:[/green] {plan.anzahl_neu} neue "
+                        f"Gruppen zugeordnet, Tracking-Codes vergeben "
+                        f"(insgesamt {plan.anzahl_neu + plan.bereits_zugeordnet})."
+                    )
+    except Exception as exc:  # noqa: BLE001 - der Lauf selbst war erfolgreich
+        console.print(
+            f"[yellow]Automatische Kampagnen-Zuordnung uebersprungen:[/yellow] {exc}\n"
+            "[dim]Der Bestand ist gespeichert. Nachholen mit: fbgroups campaign sync ...[/dim]"
+        )
 
 
 @app.command("import-seeds")
@@ -142,6 +186,7 @@ def import_seeds_command(
             f"[green]Gespeichert:[/green] {new_count} neu, {known_count} bereits bekannt "
             f"- Bestand gesamt: {total}"
         )
+        _auto_zuordnen(config)
 
     run_dir = save_run_artifacts(config.path("runs_dir"), run, groups)
     console.print(f"Laufprotokoll: {run_dir}")
@@ -580,6 +625,7 @@ def search_command(
             f"[green]Gespeichert:[/green] {new_count} neu, {known_count} bereits bekannt "
             f"- Bestand gesamt: {total}"
         )
+        _auto_zuordnen(config)
 
     _query_quality_table(run)
 

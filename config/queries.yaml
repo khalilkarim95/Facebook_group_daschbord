@@ -2,7 +2,7 @@
 # Anfrage hartkodiert. Der Builder rendert diese Datei; "fbgroups queries" und
 # "fbgroups search --dry-run" zeigen das Ergebnis, ohne etwas abzufragen.
 #
-# Gesamt Phase 1: 7 bundesweit + 9 Muster x 4 Staedte = 43 Anfragen.
+# Gesamt Phase 1: 18 bundesweit + 16 Muster x 15 Staedte = 258 Anfragen.
 
 settings:
   max_results_per_query: 10
@@ -14,6 +14,11 @@ settings:
   # Der Suchbegriff wird in Anfuehrungszeichen gesetzt: "Syrer Deutschland".
   # Ohne sie liefert die Suche auch Treffer, die die Worte nur einzeln und
   # verstreut enthalten - jeder davon kostet Guthaben, ohne etwas beizutragen.
+  #
+  # Die Kehrseite: In Anfuehrungszeichen ist jede Schreibweise eine eigene
+  # Zeichenkette. "سوريين" findet "السوريين" NICHT. Deshalb stehen unten die
+  # Varianten mit Artikel, ohne Hamza und im Nominativ ausdruecklich daneben -
+  # sie sind keine Dopplung, sondern verschiedene Anfragen.
   quote_phrase: true
 
 # --- A) Bundesweite Anfragen ---
@@ -26,8 +31,28 @@ nationwide:
   - { id: nw_06, text: "Araber in Deutschland",   lang: de, audiences: [arabs] }
   - { id: nw_07, text: "عرب في ألمانيا",            lang: ar, audiences: [arabs] }
 
+  # Erweiterung 18.08.2026. Die Grundlage sind die 310 bereits gefundenen
+  # Gruppennamen: 36x "السوريين" und 36x "العرب" mit Artikel, 24x "المانيا"
+  # ohne Hamza, 24x die Nominativform "السوريون" - und keine einzige Anfrage
+  # deckte diese Schreibweisen ab. Englische Namen ("Arab in Koeln") und die
+  # Adjektivform "Syrische" fehlten ebenso.
+  - { id: nw_08, text: "السوريون في ألمانيا",        lang: ar, audiences: [syrians] }
+  - { id: nw_09, text: "السوريين في المانيا",        lang: ar, audiences: [syrians] }
+  - { id: nw_10, text: "سوريون في المانيا",          lang: ar, audiences: [syrians] }
+  - { id: nw_11, text: "العرب في المانيا",           lang: ar, audiences: [arabs] }
+  - { id: nw_12, text: "الجالية السورية في ألمانيا",  lang: ar, audiences: [syrians] }
+  - { id: nw_13, text: "الجالية العربية في ألمانيا",  lang: ar, audiences: [arabs] }
+  - { id: nw_14, text: "تجمع السوريين في ألمانيا",    lang: ar, audiences: [syrians] }
+  - { id: nw_15, text: "Syrians in Germany",      lang: en, audiences: [syrians] }
+  - { id: nw_16, text: "Arabs in Germany",        lang: en, audiences: [arabs] }
+  - { id: nw_17, text: "Syrische Gemeinde Deutschland",   lang: de, audiences: [syrians] }
+  - { id: nw_18, text: "Arabische Community Deutschland", lang: de, audiences: [arabs] }
+
 # --- B) Stadt-Muster ---
 # {city} = name_de, {city_ar} = name_ar
+# Jedes Muster kostet so viele Credits, wie es freigeschaltete Staedte gibt
+# (Phase 1: 15). Deshalb stehen hier nur Formulierungen, fuer die es in den
+# gefundenen Namen einen Beleg gibt - nicht jede denkbare Variante.
 city_patterns:
   - { id: cp_01, pattern: "Syrer {city}",       lang: de,       audiences: [syrians] }
   - { id: cp_02, pattern: "Syrer in {city}",    lang: de,       audiences: [syrians] }
@@ -38,3 +63,14 @@ city_patterns:
   - { id: cp_07, pattern: "Araber in {city}",   lang: de,       audiences: [arabs] }
   - { id: cp_08, pattern: "عرب {city_ar}",       lang: ar,       audiences: [arabs] }
   - { id: cp_09, pattern: "عرب في {city_ar}",    lang: ar,       audiences: [arabs] }
+
+  # Erweiterung 18.08.2026 - dieselbe Begruendung wie oben, auf Stadtebene.
+  # cp_10 ist der schwerste Einzelposten: "السوريين" mit Artikel ist die
+  # haeufigste Schreibweise im Bestand und war auf Stadtebene nicht gefragt.
+  - { id: cp_10, pattern: "السوريين في {city_ar}",   lang: ar, audiences: [syrians] }
+  - { id: cp_11, pattern: "السوريون في {city_ar}",   lang: ar, audiences: [syrians] }
+  - { id: cp_12, pattern: "العرب في {city_ar}",      lang: ar, audiences: [arabs] }
+  - { id: cp_13, pattern: "الجالية السورية {city_ar}", lang: ar, audiences: [syrians] }
+  - { id: cp_14, pattern: "تجمع السوريين {city_ar}",  lang: ar, audiences: [syrians] }
+  - { id: cp_15, pattern: "Syrische {city}",       lang: de, audiences: [syrians] }
+  - { id: cp_16, pattern: "Arab {city}",           lang: en, audiences: [arabs] }

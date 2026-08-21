@@ -13,7 +13,6 @@ muss sie ein Mensch.
 from __future__ import annotations
 
 import csv
-import re
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -39,12 +38,21 @@ from fbgroups.marketing.models import (
 )
 from fbgroups.marketing.referral import code_fuer_benutzer, setze_status
 from fbgroups.marketing.rewards import bewerte_benutzer, fortschritt, load_reward_rules
+from fbgroups.marketing.selection import (
+    ALLE,
+    Auswahl,
+    Zuordnungsplan,
+    auswahl_der_kampagne,
+    baue_plan,
+    passt,
+    synchronisiere,
+)
 from fbgroups.marketing.store import MarketingStore, UnknownGroupError
 from fbgroups.marketing.tracking import (
     app_base_url,
     app_base_url_quelle,
     ist_lokale_basis,
-    next_tracking_code,
+    slug,
     tracking_url,
 )
 from fbgroups.models import Group
@@ -70,9 +78,8 @@ def _config() -> AppConfig:
 
 
 def _slug(text: str) -> str:
-    """Aus "Batreeq Syrian Germany" wird "batreeq-syrian-germany"."""
-    klein = re.sub(r"[^a-z0-9]+", "-", text.lower().strip())
-    return klein.strip("-") or "kampagne"
+    """Kennung aus dem Namen - dieselbe Funktion wie im Web-Weg."""
+    return slug(text) or "kampagne"
 
 
 def _datum(wert: str | None) -> date | None:
@@ -251,14 +258,25 @@ def campaign_show(campaign_id: str = typer.Argument(...)) -> None:
         _links_tabelle(links, namen)
 
 
-def _links_tabelle(links: list[CampaignGroup], namen: dict[str, Group]) -> None:
+def _links_tabelle(
+    links: list[CampaignGroup],
+    namen: dict[str, Group],
+    grenze: int = 25,
+) -> None:
+    """Zeigt die Links. Bei vielen nur den Anfang - 310 Zeilen liest niemand.
+
+    Die vollstaendige Liste holt ``campaign links --export``; im Terminal
+    scrollte sie nur die Zusammenfassung aus dem Bild.
+    """
+    gezeigt = links if grenze <= 0 else links[:grenze]
+
     table = Table(title="Tracking-Links")
     table.add_column("Tracking-Code")
     table.add_column("Gruppe")
     table.add_column("Stadt")
     table.add_column("Link")
 
-    for link in links:
+    for link in gezeigt:
         group = namen.get(link.group_id)
         table.add_row(
             link.tracking_code,
@@ -267,6 +285,12 @@ def _links_tabelle(links: list[CampaignGroup], namen: dict[str, Group]) -> None:
             link.tracking_url or "[dim](keine APP_BASE_URL gesetzt)[/dim]",
         )
     console.print(table)
+
+    if len(links) > len(gezeigt):
+        console.print(
+            f"[dim]... und {len(links) - len(gezeigt)} weitere. "
+            f"Vollstaendig: campaign links --export data\\exports\\links.csv[/dim]"
+        )
 
 
 @campaign_app.command("set")
@@ -343,10 +367,233 @@ def campaign_status(
     console.print(f"[green]{campaign_id}:[/green] Status ist jetzt {status}.")
 
 
+def _liste_setzen(vorhanden: list[str], neu: list[str] | None) -> list[str] | None:
+    """Wertet eine wiederholbare Option aus. ``None`` heisst "nicht angegeben".
+
+    Der Wert ``alle`` loescht die Einschraenkung. Ohne so ein Wort gaebe es
+    keinen Weg zurueck: Eine leere Liste ist von "nicht angegeben" nicht zu
+    unterscheiden, und genau daran scheiterte bisher jeder Versuch, eine
+    Kampagne wieder zu weiten.
+    """
+    if not neu:
+        return None
+    if any(wert.strip().lower() == ALLE for wert in neu):
+        return []
+    return [wert.strip().lower() for wert in neu if wert.strip()] or vorhanden
+
+
+def _regel_anzeigen(campaign: Campaign, config: AppConfig, treffer: int, gesamt: int) -> None:
+    auswahl = auswahl_der_kampagne(campaign, config)
+    console.print(
+        Panel(
+            f"{auswahl.beschreibung()}\n\n"
+            f"Passende Gruppen: [bold]{treffer}[/bold] von {gesamt} im Bestand\n"
+            f"Neue Gruppen automatisch uebernehmen: "
+            f"[bold]{'ja' if campaign.auto_assign else 'nein'}[/bold]",
+            title=f"Auswahlregel {campaign.campaign_id}",
+        )
+    )
+
+
+@campaign_app.command("target")
+def campaign_target(
+    campaign_id: str = typer.Argument(...),
+    alle: bool = typer.Option(False, "--alle", help="Jede Einschraenkung aufheben."),
+    city: list[str] = typer.Option(
+        None, "--stadt", help=f"Staedte (Kennung). '{ALLE}' hebt die Einschraenkung auf."
+    ),
+    audience: list[str] = typer.Option(
+        None, "--zielgruppe", help=f"Zielgruppen. '{ALLE}' hebt die Einschraenkung auf."
+    ),
+    category: list[str] = typer.Option(
+        None, "--kategorie", help=f"Kategorien. '{ALLE}' hebt die Einschraenkung auf."
+    ),
+    status: list[str] = typer.Option(
+        None, "--status", help=f"Datensatzstatus. '{ALLE}' hebt die Einschraenkung auf."
+    ),
+    min_score: float = typer.Option(None, "--min-score", help="Mindestscore (-1 hebt ihn auf)."),
+    unbewertete: bool = typer.Option(
+        None,
+        "--auch-unbewertete/--nur-bewertete",
+        help="Gruppen ohne Score mitnehmen?",
+    ),
+    auto_assign: bool = typer.Option(
+        None,
+        "--auto-assign/--kein-auto-assign",
+        help="Neu gefundene Gruppen automatisch uebernehmen.",
+    ),
+) -> None:
+    """Legt fest, welche Gruppen die Kampagne erfasst.
+
+    Ohne Angaben zeigt der Befehl die geltende Regel und wie viele Gruppen sie
+    trifft - eine Regel, die man nicht nachlesen kann, aendert niemand gern.
+
+    Die Regel ist von ``audiences``/``cities`` der Kampagne getrennt: Die
+    beschreiben, *wen* die Kampagne bewirbt, die Regel bestimmt, *welche
+    Gruppen* einen Tracking-Code bekommen. Beides war frueher dasselbe Feld -
+    dadurch liess sich eine Kampagne nicht auf den ganzen Bestand weiten, ohne
+    ihre fachliche Beschreibung zu verfaelschen.
+    """
+    config = _config()
+    gruppen_store, store = _stores(config)
+
+    try:
+        campaign = _kampagne_oder_ende(store, campaign_id)
+        groups = gruppen_store.load_groups()
+
+        geaendert: list[str] = []
+
+        if alle:
+            campaign.target_audiences = []
+            campaign.target_cities = []
+            campaign.target_categories = []
+            campaign.target_statuses = []
+            campaign.target_min_score = None
+            campaign.target_include_unscored = True
+            geaendert.append("alle Einschraenkungen aufgehoben")
+
+        for feld, wert, name in (
+            ("target_cities", _liste_setzen(campaign.target_cities, city), "Stadt"),
+            (
+                "target_audiences",
+                _liste_setzen(campaign.target_audiences, audience),
+                "Zielgruppe",
+            ),
+            (
+                "target_categories",
+                _liste_setzen(campaign.target_categories, category),
+                "Kategorie",
+            ),
+            ("target_statuses", _liste_setzen(campaign.target_statuses, status), "Status"),
+        ):
+            if wert is not None:
+                setattr(campaign, feld, wert)
+                geaendert.append(f"{name}: {', '.join(wert) or 'keine Einschraenkung'}")
+
+        if min_score is not None:
+            # -1 statt eines eigenen Schalters: Ein Mindestscore unter 0 ist
+            # fachlich sinnlos und damit als "aufheben" eindeutig.
+            campaign.target_min_score = None if min_score < 0 else min_score
+            geaendert.append(
+                "Mindestscore aufgehoben"
+                if campaign.target_min_score is None
+                else f"Mindestscore {campaign.target_min_score:g}"
+            )
+
+        if unbewertete is not None:
+            campaign.target_include_unscored = unbewertete
+            geaendert.append(
+                "auch unbewertete Gruppen" if unbewertete else "nur bewertete Gruppen"
+            )
+
+        if auto_assign is not None:
+            campaign.auto_assign = auto_assign
+            geaendert.append(
+                "neue Gruppen automatisch uebernehmen"
+                if auto_assign
+                else "neue Gruppen nicht automatisch uebernehmen"
+            )
+
+        if geaendert:
+            campaign.updated_at = datetime.now(UTC)
+            store.save_campaign(campaign)
+
+        auswahl = auswahl_der_kampagne(campaign, config)
+        treffer = sum(1 for g in groups if passt(g, auswahl))
+        _regel_anzeigen(campaign, config, treffer, len(groups))
+
+        if geaendert:
+            console.print(f"[green]Geaendert:[/green] {' · '.join(geaendert)}")
+            zugeordnet = len(store.assigned_group_ids(campaign_id))
+            if treffer > zugeordnet:
+                console.print(
+                    f"[dim]{treffer - zugeordnet} passende Gruppen haben noch keinen Code. "
+                    f"Vergeben mit: fbgroups campaign sync {campaign_id}[/dim]"
+                )
+        else:
+            console.print("[dim]Nichts angegeben - die Regel wurde nur angezeigt.[/dim]")
+    finally:
+        gruppen_store.close()
+        store.close()
+
+
+def _plan_ausgeben(
+    plan: Zuordnungsplan,
+    campaign: Campaign,
+    config: AppConfig,
+    dry_run: bool,
+    campaign_id: str,
+) -> None:
+    """Zeigt und - wenn kein Probelauf - speichert einen Zuordnungsplan."""
+    if plan.neu:
+        namen = {g.group_id: g for g, _ in plan.neu}
+        _links_tabelle([link for _g, link in plan.neu], namen)
+
+    hinweis = "[cyan]--dry-run:[/cyan] nichts gespeichert. " if dry_run else ""
+    console.print(
+        f"{hinweis}[green]{plan.anzahl_neu}[/green] Gruppen neu zugeordnet, "
+        f"{plan.bereits_zugeordnet} waren es bereits (Codes unveraendert). "
+        f"Kampagne {campaign.campaign_id}."
+    )
+
+    if plan.nicht_mehr_passend:
+        console.print(
+            f"[yellow]{len(plan.nicht_mehr_passend)}[/yellow] zugeordnete Gruppen "
+            "entsprechen der Regel nicht mehr. Sie behalten ihren Code - er kann "
+            "in einem veroeffentlichten Beitrag stehen."
+        )
+
+    if not app_base_url(config):
+        console.print(
+            "[yellow]Hinweis:[/yellow] APP_BASE_URL ist nicht gesetzt - die Codes stehen, "
+            "die Links bleiben leer.\nSetzen in .env oder config/settings.yaml, danach: "
+            f"[bold]fbgroups campaign refresh-urls {campaign_id}[/bold]"
+        )
+
+
+@campaign_app.command("sync")
+def campaign_sync(
+    campaign_id: str = typer.Argument(...),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Nur zeigen, nichts speichern."),
+) -> None:
+    """Wendet die Auswahlregel der Kampagne auf den gesamten Bestand an.
+
+    Wiederholbar: Ein zweiter Aufruf ohne neue Gruppen aendert nichts. Genau
+    das macht ihn zum richtigen Befehl nach jedem Import und jedem Suchlauf -
+    und laesst ihn bei 10.000 Gruppen genauso arbeiten wie bei 310.
+
+    Es wird ausschliesslich **hinzugefuegt**. Eine bestehende Zuordnung wird
+    nie entfernt und ein vergebener Code nie neu berechnet: Er steht
+    moeglicherweise in einem veroeffentlichten Beitrag.
+    """
+    config = _config()
+    gruppen_store, store = _stores(config)
+
+    try:
+        campaign = _kampagne_oder_ende(store, campaign_id)
+        groups = gruppen_store.load_groups()
+
+        if dry_run:
+            plan = baue_plan(
+                groups,
+                campaign,
+                config,
+                vorhandene_gruppen=store.assigned_group_ids(campaign_id),
+                vergebene_codes=store.assigned_codes(),
+            )
+        else:
+            plan = synchronisiere(store, groups, campaign, config)
+
+        _plan_ausgeben(plan, campaign, config, dry_run, campaign_id)
+    finally:
+        gruppen_store.close()
+        store.close()
+
+
 @campaign_app.command("add-groups")
 def campaign_add_groups(
     campaign_id: str = typer.Argument(...),
-    top: int = typer.Option(0, "--top", help="Nur die besten N Gruppen (0 = alle passenden)."),
+    top: int = typer.Option(0, "--top", help="Nur N neue Zuordnungen (0 = alle passenden)."),
     city: list[str] = typer.Option(None, "--stadt", help="Nur diese Staedte (Kennung)."),
     audience: list[str] = typer.Option(None, "--zielgruppe", help="Nur diese Zielgruppen."),
     min_score: float = typer.Option(0.0, "--min-score"),
@@ -355,83 +602,54 @@ def campaign_add_groups(
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Nur zeigen, nichts speichern."),
 ) -> None:
-    """Ordnet Gruppen zu und vergibt je Paar einen festen Tracking-Code.
+    """Ordnet Gruppen einmalig zu - mit einer Auswahl nur fuer diesen Aufruf.
 
-    Die Auswahl folgt der Kampagne: Ohne ``--stadt``/``--zielgruppe`` gelten
-    die in der Kampagne hinterlegten Werte. Bereits zugeordnete Gruppen bleiben
-    unveraendert - ihr Code steht moeglicherweise schon in einem Beitrag.
+    Fuer den dauerhaften Fall ist ``campaign target`` + ``campaign sync``
+    gedacht: Dort steht die Regel bei der Kampagne und laesst sich jederzeit
+    erneut anwenden. Dieser Befehl bleibt fuer den einmaligen Griff - etwa
+    "nur die besten zehn dieser einen Stadt, zum Ausprobieren".
+
+    Ohne ``--stadt``/``--zielgruppe`` gilt die gespeicherte Regel der Kampagne.
+    Bereits zugeordnete Gruppen bleiben unveraendert.
     """
     config = _config()
     gruppen_store, store = _stores(config)
 
     try:
         campaign = _kampagne_oder_ende(store, campaign_id)
+        groups = gruppen_store.load_groups()
 
-        staedte = {c.lower() for c in (city or campaign.cities)}
-        zielgruppen = {a.lower() for a in (audience or campaign.audiences)}
+        gespeichert = auswahl_der_kampagne(campaign, config)
         stadt_namen = {
-            c.name_de.lower() for cid, c in config.cities.items() if cid.lower() in staedte
+            c.name_de.lower() for cid, c in config.cities.items() if cid.lower() in
+            {s.lower() for s in (city or [])}
         }
-
-        kandidaten = sort_by_rank(gruppen_store.load_groups())
-        passend = [
-            g
-            for g in kandidaten
-            if (g.score is not None or alle_gruppen)
-            and (g.score or 0.0) >= min_score
-            and (not stadt_namen or (g.city or "").lower() in stadt_namen)
-            and (not zielgruppen or zielgruppen & {t.lower() for t in g.audience_tags})
-        ]
-        if top > 0:
-            passend = passend[:top]
-
-        vergeben = store.assigned_codes(campaign_id)
-        alle_codes = store.assigned_codes()
-        neu: list[tuple[Group, CampaignGroup]] = []
-        bekannt = 0
-
-        for group in passend:
-            vorhanden = store.link_for(campaign_id, group.group_id)
-            if vorhanden is not None:
-                bekannt += 1
-                continue
-
-            code = next_tracking_code(group, config, vergeben | alle_codes)
-            link = CampaignGroup(
-                campaign_id=campaign_id,
-                group_id=group.group_id,
-                tracking_code=code,
-                tracking_url=tracking_url(code, config),
-            )
-            vergeben.add(code)
-            alle_codes.add(code)
-            neu.append((group, link))
-
-        if not dry_run:
-            for _group, link in neu:
-                try:
-                    store.add_link(link)
-                except UnknownGroupError:
-                    console.print(
-                        f"[yellow]Uebersprungen (nicht im Bestand):[/yellow] {link.group_id}"
-                    )
-
-        namen = {g.group_id: g for g, _ in neu}
-        if neu:
-            _links_tabelle([link for _g, link in neu], namen)
-
-        hinweis = "[cyan]--dry-run:[/cyan] nichts gespeichert. " if dry_run else ""
-        console.print(
-            f"{hinweis}[green]{len(neu)}[/green] Gruppen neu zugeordnet, "
-            f"{bekannt} waren es bereits (Codes unveraendert). "
-            f"Kampagne {campaign.campaign_id}."
+        auswahl = Auswahl(
+            audiences=frozenset(a.lower() for a in audience) if audience else gespeichert.audiences,
+            cities=frozenset(stadt_namen) if city else gespeichert.cities,
+            categories=gespeichert.categories,
+            statuses=gespeichert.statuses,
+            min_score=min_score if min_score > 0 else gespeichert.min_score,
+            include_unscored=alle_gruppen or gespeichert.include_unscored,
         )
-        if not app_base_url(config):
-            console.print(
-                "[yellow]Hinweis:[/yellow] APP_BASE_URL ist nicht gesetzt - die Codes stehen, "
-                "die Links bleiben leer.\nSetzen in .env oder config/settings.yaml, danach: "
-                f"[bold]fbgroups campaign refresh-urls {campaign_id}[/bold]"
-            )
+
+        plan = baue_plan(
+            groups,
+            campaign,
+            config,
+            vorhandene_gruppen=store.assigned_group_ids(campaign_id),
+            vergebene_codes=store.assigned_codes(),
+            auswahl=auswahl,
+            top=top,
+        )
+
+        if not dry_run and plan.neu:
+            try:
+                store.add_links([link for _g, link in plan.neu])
+            except UnknownGroupError as exc:
+                console.print(f"[yellow]Nicht im Bestand, uebersprungen:[/yellow] {exc}")
+
+        _plan_ausgeben(plan, campaign, config, dry_run, campaign_id)
     finally:
         gruppen_store.close()
         store.close()
@@ -549,8 +767,20 @@ def marketing_set(
     note: str = typer.Option(None, "--notiz"),
     contacted_now: bool = typer.Option(False, "--kontaktiert-jetzt"),
     posted_now: bool = typer.Option(False, "--gepostet-jetzt"),
+    bearbeiten: bool = typer.Option(
+        None,
+        "--bearbeiten/--ausschliessen",
+        help="Ob die Gruppe in der Arbeitsliste steht. Der Tracking-Code bleibt gueltig.",
+    ),
+    grund: str = typer.Option(None, "--grund", help="Begruendung des Ausschlusses."),
 ) -> None:
-    """Pflegt den Arbeitsstand einer Gruppe. Nicht genannte Felder bleiben."""
+    """Pflegt den Arbeitsstand einer Gruppe. Nicht genannte Felder bleiben.
+
+    ``--ausschliessen`` nimmt die Gruppe aus der Arbeitsliste, ohne den
+    Kooperationsweg anzutasten: Wer in der Gruppe bereits Mitglied ist, bleibt
+    es auch im Datensatz. Und der Tracking-Code bleibt unberuehrt gueltig - er
+    steht moeglicherweise schon in einem veroeffentlichten Beitrag.
+    """
     config = _config()
     gruppen_store, store = _stores(config)
     try:
@@ -574,6 +804,12 @@ def marketing_set(
             eintrag.last_contacted_at = datetime.now(UTC)
         if posted_now:
             eintrag.last_posted_at = datetime.now(UTC)
+        if bearbeiten is not None:
+            eintrag.bearbeiten = bearbeiten
+            # Der Grund gehoert zum Ausschluss und faellt bei der
+            # Wiederaufnahme weg - sonst stuende bei einer bearbeiteten Gruppe
+            # eine Begruendung, warum sie nicht bearbeitet wird.
+            eintrag.ausschlussgrund = "" if bearbeiten else (grund or "")
         eintrag.updated_at = datetime.now(UTC)
 
         store.save_marketing(eintrag)
@@ -581,9 +817,14 @@ def marketing_set(
         gruppen_store.close()
         store.close()
 
+    arbeit = "in Arbeit" if eintrag.bearbeiten else (
+        f"ausgeschlossen ({eintrag.ausschlussgrund})" if eintrag.ausschlussgrund
+        else "ausgeschlossen"
+    )
     console.print(
         f"[green]{group_id}:[/green] {eintrag.marketing_status.value} / "
-        f"Kontakt {eintrag.contact_status.value} / Erlaubnis {eintrag.permission_status.value}"
+        f"Kontakt {eintrag.contact_status.value} / Erlaubnis {eintrag.permission_status.value} / "
+        f"{arbeit}"
     )
 
 

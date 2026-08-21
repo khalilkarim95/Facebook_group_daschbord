@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from fbgroups import cli
 from fbgroups.config import load_config
+from fbgroups.query.builder import build_queries
 from fbgroups.storage.query_cache import QueryCache
 
 PROJEKT = Path(__file__).resolve().parents[1]
@@ -115,8 +116,16 @@ def test_lauf_speichert_und_wiederholt_keine_anfrage(projekt: Path) -> None:
 
 
 def test_gefundene_gruppen_landen_im_bestand(projekt: Path) -> None:
-    """Bis Anfrage 9 (cp_02__berlin) liefert die Offline-Antwort Gruppen."""
-    ergebnis = runner.invoke(cli.app, ["search", "--limit", "9"])
+    """Bis cp_02__berlin liefert die Offline-Antwort Gruppen.
+
+    Die Menge wird aus dem Plan abgeleitet statt festgeschrieben: Kommt eine
+    bundesweite Anfrage hinzu, rueckt cp_02__berlin nach hinten. Eine feste
+    Zahl liesse den Test dann umkippen, obwohl an der Suche nichts kaputt ist.
+    """
+    planned = build_queries(load_config(projekt), phase=1)
+    bis = next(i for i, q in enumerate(planned, 1) if q.query_id == "cp_02__berlin")
+
+    ergebnis = runner.invoke(cli.app, ["search", "--limit", str(bis)])
 
     assert ergebnis.exit_code == 0
     assert (projekt / "data" / "groups.sqlite").exists()

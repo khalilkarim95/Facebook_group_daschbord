@@ -118,6 +118,53 @@ def test_derselbe_besucher_zaehlt_am_selben_tag_nur_einmal(
         assert store.event_counts().get("click") == 1
 
 
+def test_linkvorschau_von_facebook_zaehlt_nicht_als_klick(
+    client: TestClient, bestand: Path
+) -> None:
+    """Facebook ruft einen frisch geposteten Link selbst ab, um Titel, Bild und
+    Beschreibung fuer die Vorschaukarte zu holen - das ist kein Mensch, der
+    geklickt hat. Ein Livetest zeigte 25 Klicks fuer einen einzigen Menschen,
+    alle mit diesem User-Agent."""
+    antwort = client.get(
+        f"/r/{CODE_A}",
+        headers={
+            "user-agent": (
+                "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"
+            )
+        },
+    )
+
+    assert antwort.status_code == 302  # die Vorschau bekommt ihr Ziel trotzdem
+    with MarketingStore(bestand) as store:
+        assert store.event_counts().get("click") is None
+
+
+def test_weitere_vorschau_crawler_zaehlen_auch_nicht(client: TestClient, bestand: Path) -> None:
+    for user_agent in (
+        "WhatsApp/2.24.1 A",
+        "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
+        "TelegramBot (like TwitterBot)",
+    ):
+        client.get(f"/r/{CODE_A}", headers={"user-agent": user_agent})
+
+    with MarketingStore(bestand) as store:
+        assert store.event_counts().get("click") is None
+
+
+def test_echter_klick_zaehlt_auch_nach_einer_linkvorschau(
+    client: TestClient, bestand: Path
+) -> None:
+    """Die Vorschau darf einen echten Klick direkt danach nicht verdecken."""
+    client.get(f"/r/{CODE_A}", headers={"user-agent": "facebookexternalhit/1.1"})
+    client.get(
+        f"/r/{CODE_A}",
+        headers={"user-agent": "Mozilla/5.0 (Linux; Android 14) Chrome/128.0"},
+    )
+
+    with MarketingStore(bestand) as store:
+        assert store.event_counts().get("click") == 1
+
+
 def test_keine_ip_adresse_im_bestand(client: TestClient, bestand: Path) -> None:
     """Gespeichert wird ein taeglich wechselnder Pruefwert, keine Adresse."""
     client.get(f"/r/{CODE_A}", headers={"user-agent": "Testbrowser"})
@@ -432,3 +479,81 @@ def test_praemie_ueber_die_schnittstelle(client: TestClient, bestand: Path, conf
     stand = client.get("/referral/werber").json()
     assert stand["referrals"]["qualified"] == schwelle
     assert len(stand["rewards"]) == 1
+
+
+# --- Schutz von POST /events -------------------------------------------
+
+def test_ohne_schluessel_bleibt_der_weg_offen(client: TestClient) -> None:
+    """Ohne ``EVENTS_TOKEN`` aendert sich nichts.
+
+    Der Entwicklungsfall soll ohne Einrichtung laufen; im Betrieb steht der Weg
+    dann hinter einem Proxy, der nur den eigenen Rechner durchlaesst.
+    """
+    antwort = client.post("/events", json={"event_type": "registration", "user_ref": "u1"})
+
+    assert antwort.status_code == 200
+
+
+def test_mit_schluessel_wird_geprueft(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Der Weg schreibt Registrierungen, Empfehlungen und damit Praemien.
+
+    Ohne Pruefung koennte jeder, der die Adresse kennt, Praemien ausloesen.
+    """
+    monkeypatch.setenv("EVENTS_TOKEN", "geheim")
+
+    ohne = client.post("/events", json={"event_type": "registration", "user_ref": "u2"})
+    falsch = client.post(
+        "/events",
+        json={"event_type": "registration", "user_ref": "u2"},
+        headers={"X-Events-Token": "daneben"},
+    )
+    richtig = client.post(
+        "/events",
+        json={"event_type": "registration", "user_ref": "u2"},
+        headers={"X-Events-Token": "geheim"},
+    )
+
+    assert ohne.status_code == 401
+    assert falsch.status_code == 401
+    assert richtig.status_code == 200
+
+
+def test_abgewiesenes_ereignis_wird_nicht_gespeichert(
+    client: TestClient, bestand: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ein 401 darf nichts hinterlassen - sonst zaehlte der Trichter Fremdes."""
+    monkeypatch.setenv("EVENTS_TOKEN", "geheim")
+    client.post("/events", json={"event_type": "conversion", "user_ref": "eindringling"})
+
+    with MarketingStore(bestand) as store:
+        treffer = store.conn.execute(
+            "SELECT COUNT(*) FROM tracking_events WHERE user_ref = ?", ("eindringling",)
+        ).fetchone()[0]
+
+    assert treffer == 0
+
+
+def test_empfehlungsstand_steht_hinter_demselben_schluessel(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Der Weg gibt Auskunft ueber Menschen - er borgt seinen Schutz nicht.
+
+    Bisher trug ihn allein nginx, der ihn nicht nach aussen durchlaesst. Wer
+    diesen Block einmal um ein ``location /`` erweitert, gaebe damit den
+    Empfehlungsstand jedes Benutzers heraus, dessen Kennung jemand raet - ohne
+    dass es an dieser Datei sichtbar geworden waere.
+    """
+    monkeypatch.setenv("EVENTS_TOKEN", "geheim")
+
+    ohne = client.get("/referral/werber")
+    richtig = client.get("/referral/werber", headers={"X-Events-Token": "geheim"})
+
+    assert ohne.status_code == 401
+    assert richtig.status_code == 200
+
+
+def test_empfehlungsstand_ohne_schluessel_bleibt_offen(client: TestClient) -> None:
+    """Ohne ``EVENTS_TOKEN`` aendert sich nichts - derselbe Entwicklungsfall."""
+    assert client.get("/referral/werber").status_code == 200

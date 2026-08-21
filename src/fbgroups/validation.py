@@ -159,12 +159,29 @@ def determine_status(group: Group) -> RecordStatus:
     """Leitet den Datensatzstatus ab.
 
     Rangfolge (der erste zutreffende Fall gewinnt):
-    ``invalid`` > ``insufficient_data`` > ``duplicate`` > ``validated``.
+    ``invalid`` > ``insufficient_data`` > ``validated``.
+
+    **``duplicate`` wird hier nicht mehr vergeben.** Frueher galt
+    ``times_seen > 1`` als Dublette - eine Verwechslung: ``times_seen`` zaehlt
+    jeden *Fund*, nicht jeden Datensatz, und ``sqlite_store`` haelt das an
+    ``count_distinct_sources`` selbst fest. Echte Dubletten sind an dieser
+    Stelle laengst zusammengefuehrt: ``deduplicate_exact`` laeuft vor der
+    Bewertung, ein ueberlebender Datensatz ist also nie eine offene Dublette.
+    Was ``times_seen > 1`` tatsaechlich anzeigt, ist das Gegenteil eines
+    Mangels - die Gruppe wurde von mehreren Anfragen gefunden, ist also
+    sichtbar und einschlaegig.
+
+    Der Schaden war messbar: Nach der Ausweitung der Suchmuster trugen 146 von
+    273 bewerteten Gruppen den Stempel ``duplicate``, darunter zwei der drei
+    bestbewerteten. Wer auf ``validated`` filterte, verlor mehr als die Haelfte
+    des Bestands - und ausgerechnet die sichtbarsten Gruppen.
+
+    Der Wert bleibt im Enum: Bestandsdaten tragen ihn noch, und eine von Hand
+    festgestellte Dublette bliebe ein gueltiges Urteil. Abgeleitet wird er
+    nicht mehr.
     """
     if group.validation_status is not ValidationStatus.VALID:
         return RecordStatus.INVALID
     if not has_sufficient_data(group):
         return RecordStatus.INSUFFICIENT_DATA
-    if group.times_seen > 1:
-        return RecordStatus.DUPLICATE
     return RecordStatus.VALIDATED

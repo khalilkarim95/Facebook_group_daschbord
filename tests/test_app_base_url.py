@@ -13,6 +13,7 @@ eigenen Computer.
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -48,8 +49,28 @@ def ohne_umgebungsvariable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture()
 def projekt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Vollstaendiges Projekt im Testverzeichnis, mit Kampagne und Code."""
+    """Vollstaendiges Projekt im Testverzeichnis, mit Kampagne und Code.
+
+    Die Basis-URL wird auf ``http://localhost:3000`` festgeschrieben. Diese
+    Tests pruefen das *Verfahren* - Umgebung schlaegt Datei, kein doppelter
+    Schraegstrich, Warnung bei einer lokalen Adresse. Wohin das Projekt gerade
+    zeigt, ist dafuer belanglos: Als die echte Domain in ``settings.yaml``
+    eingetragen wurde, gingen drei Tests kaputt, ohne dass am Verfahren
+    irgendetwas falsch gewesen waere.
+    """
     shutil.copytree(PROJEKT / "config", tmp_path / "config")
+
+    settings = tmp_path / "config" / "settings.yaml"
+    settings.write_text(
+        re.sub(
+            r"^(\s*app_base_url:).*$",
+            r"\1 http://localhost:3000",
+            settings.read_text(encoding="utf-8"),
+            count=1,
+            flags=re.MULTILINE,
+        ),
+        encoding="utf-8",
+    )
 
     pfad = tmp_path / "data" / "groups.sqlite"
     with SqliteStore(pfad) as store:

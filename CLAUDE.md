@@ -178,6 +178,16 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
   *Form* des Namens (vollständig, kurz, keine Satzform). Vergab es zusätzlich
   Punkte für Zielgruppe und Stadt, erreichten beide Bestandteile stets
   gemeinsam ihr Maximum — die zweite Ursache der Häufung.
+- **Ein Stadtname zählt nicht zusätzlich als Kategoriebegriff.**
+  `classify_category` bekommt die erkannte `city_id` und übergeht Begriffe, die
+  ein Name **dieser** Stadt sind. „Essen" ist eine Stadt mit 600.000 Einwohnern
+  *und* der deutsche Kategoriebegriff für Speisen: Jede Gruppe „Syrer in Essen"
+  bekam neben den Stadtpunkten die vollen 16 Kategoriepunkte und stand in der
+  Übersicht als Essensgruppe — 8 von 16 Treffern der Kategorie. Nach der
+  Korrektur stehen sie bei 84 statt 100, also hinter den wirklich besseren
+  Gruppen. Ausgeschlossen wird nur die **erkannte** Stadt: „Arabisches Essen in
+  Berlin" behält seine Kategorie. Ein systematischer Abgleich aller Stadtnamen
+  gegen alle Kategoriebegriffe fand genau diese eine Kollision.
 - **Jede Konfidenz unterscheidet Name und Beschreibungstext.** Zielgruppe,
   Stadt *und* Kategorie liefern 1,0 bei einem Treffer im Namen und 0,5 bei
   einem Treffer im Beschreibungstext. Die Kategorie war binär und vergab für
@@ -201,9 +211,20 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
   Suchtreffern waren solche Fundstellen.
 - **Statusmodell mit drei Achsen**: `validation_status` (valid/invalid/test_data)
   bewertet die URL, `data_quality` (none/minimal/partial/complete) die
-  Metadatenlage, `status` (new/validated/invalid/duplicate/insufficient_data)
+  Metadatenlage, `status` (new/validated/invalid/insufficient_data)
   fasst zusammen. Rangfolge in `validation.determine_status`:
-  invalid > insufficient_data > duplicate > validated.
+  invalid > insufficient_data > validated.
+- **`duplicate` wird nicht mehr abgeleitet.** Die Regel war `times_seen > 1` –
+  aber `times_seen` zählt jeden **Fund**, nicht jeden Datensatz; `sqlite_store.
+  count_distinct_sources` hält das selbst fest. Echte Dubletten sind zu diesem
+  Zeitpunkt längst zusammengeführt (`deduplicate_exact` läuft vor der
+  Bewertung), ein überlebender Datensatz ist also nie eine offene Dublette.
+  Was `times_seen > 1` anzeigt, ist das Gegenteil eines Mangels: Die Gruppe
+  wurde von mehreren Anfragen gefunden. Nach der Ausweitung der Suchmuster
+  trugen 146 von 273 bewerteten Gruppen den Stempel, darunter zwei der drei
+  bestbewerteten – wer auf `validated` filterte, verlor die Hälfte seines
+  Bestands. Der Enum-Wert bleibt (Bestandsdaten, Handurteil), abgeleitet wird
+  er nicht mehr.
 - **Platzhalter werden markiert, nicht gelöscht.** `validation.py` prüft rein
   strukturell (Ziffernfolgen, Wiederholungen, Test-Tokens) und fragt nie bei
   Facebook nach. `test_data` ist ein begründeter Verdacht, keine Existenzaussage.
@@ -228,7 +249,11 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
 
 ```powershell
 & $py -m fbgroups.cli campaign new "Batreeq Syrian Germany" --zielgruppe syrians --stadt berlin
-& $py -m fbgroups.cli campaign add-groups batreeq-syrian-germany --top 20
+& $py -m fbgroups.cli campaign target batreeq-syrian-germany       # Regel anzeigen
+& $py -m fbgroups.cli campaign target batreeq-syrian-germany --alle --auto-assign
+& $py -m fbgroups.cli campaign sync batreeq-syrian-germany --dry-run
+& $py -m fbgroups.cli campaign sync batreeq-syrian-germany   # Regel auf den Bestand anwenden
+& $py -m fbgroups.cli campaign add-groups batreeq-syrian-germany --top 20  # einmaliger Griff
 & $py -m fbgroups.cli campaign links batreeq-syrian-germany --export data\exports\links.csv
 & $py -m fbgroups.cli campaign message batreeq-syrian-germany arabinberlin
 & $py -m fbgroups.cli marketing set arabinberlin --status contacted --kontaktiert-jetzt
@@ -236,6 +261,72 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
 & $py -m fbgroups.cli marketing overview
 ```
 
+- **Beschreibung und Auswahlregel einer Kampagne sind zwei Dinge.**
+  `campaigns.audiences`/`cities` sagen, *wen* die Kampagne bewirbt; die
+  `target_*`-Spalten sagen, *welche Gruppen* einen Tracking-Code bekommen.
+  Solange beides dasselbe Feld war, liess sich eine Kampagne namens „Batreeq
+  Syrian Germany" nicht auf den ganzen Bestand weiten, ohne ihre fachliche
+  Beschreibung zu verfälschen. Bei jedem `target_*`-Feld heisst **leer: keine
+  Einschränkung** – „alle Gruppen" ist damit ein Normalfall der Regel und kein
+  Sonderweg. Auf der Kommandozeile hebt der Wert `alle` eine Einschränkung
+  wieder auf (`--stadt alle`); ohne so ein Wort gäbe es keinen Weg zurück, weil
+  eine leere Liste von „nicht angegeben" nicht zu unterscheiden ist.
+- **Anlegen vergibt keine Codes.** `POST /kampagnen` erzeugt einen Entwurf mit
+  `auto_assign` aus und **null** Zuordnungen; die Codes kommen erst über
+  `POST /kampagnen/{id}/sync`, und der antwortet mit `dry_run: true` als
+  Vorgabe. Ein Tracking-Code ist endgültig — er steht später in
+  veröffentlichten Beiträgen und wird nie zurückgenommen; ein Formular, das
+  beim Speichern still 400 Codes vergäbe, wäre ein Knopf mit unumkehrbarer
+  Wirkung. Vorschau und Ernstfall lesen denselben `selection.baue_plan`: Eine
+  zweite Zählung könnte abweichen, und der Mensch bestätigte dann eine Zahl und
+  bekäme eine andere. Die Auswahlregel einer neuen Kampagne beginnt als Abbild
+  ihrer Beschreibung, nicht leer — leer hieße „keine Einschränkung", also der
+  ganze Bestand.
+- **`auto_assign` greift nur bei `status: active`.** Sonst wäre „pausiert" eine
+  Beschriftung ohne Wirkung, und ein Suchlauf vergäbe Monate später noch Codes
+  für eine Kampagne, die niemand mehr betreibt. Von Hand bleibt jede Kampagne
+  zuordnbar — `campaign sync` fragt nicht nach dem Status, denn dort steht ein
+  Mensch davor.
+- **`campaign sync` ist die Regel, `campaign add-groups` der Schnappschuss.**
+  `add-groups` lief genau einmal und schrieb, was es in dem Moment fand – so
+  kamen 8 Zuordnungen zustande, während der Bestand auf 310 wuchs. `sync`
+  wendet die gespeicherte Regel an, ist wiederholbar und läuft deshalb auch am
+  Ende von `import-seeds` und `search` (nur für Kampagnen mit `auto_assign`,
+  Vorgabe aus). Beide lesen denselben Plan aus `marketing/selection.py` –
+  `--dry-run` und Ernstfall können nicht auseinanderlaufen.
+- **Zugeordnet wird nur hinzugefügt, nie entfernt.** Passt eine Gruppe später
+  nicht mehr zur Regel, behält sie ihren Code und erscheint als
+  `nicht_mehr_passend` im Bericht. Der Code steht möglicherweise in einem
+  veröffentlichten Beitrag.
+- **Die Codevergabe folgt `first_seen_at`, nicht dem Score.** Vorher lief sie
+  in `sort_by_rank`-Reihenfolge – damit bekam dieselbe Gruppe nach jedem
+  `rescore` eine andere Nummer, und „deterministisch" galt nur, solange niemand
+  neu bewertete. `CodeAllocator` merkt sich je Kürzelpaar die höchste vergebene
+  Nummer und zählt weiter: Der Aufwand hängt an der Zahl der **neuen** Codes,
+  nicht am Quadrat der vorhandenen (bei 1000 Gruppen im selben Paar wären das
+  sonst eine halbe Million Vergleiche). Eine frei gewordene Nummer wird
+  bewusst nicht wieder ausgegeben.
+- **`MarketingStore` holt fehlende Migrationsschritte selbst nach.** `GET
+  /r/{code}` und `POST /events` öffnen **nur** diesen Speicher. Ohne den Schritt
+  fehlte auf einem Server, dessen Datei aus einer älteren Fassung stammt, genau
+  die neu hinzugefügte Spalte – und die Weiterleitung stürbe an einer Stelle,
+  an der niemand eine Migration vermutet. Eine hier frisch angelegte Datei
+  bekommt ausserdem ihre `user_version`; ohne sie hielte der nächste
+  `SqliteStore` sie für eine Datei aus grauer Vorzeit.
+- **„Bearbeiten wir sie?" ist eine eigene Achse.** `GroupMarketing.bearbeiten`
+  steht neben `marketing_status`, nicht darin. Dort bedeuten `active`/`inactive`
+  das Ende des Kooperationswegs (Zusammenarbeit läuft / ist beendet); wer damit
+  auch „nicht bearbeiten" ausdrückte, löschte beim Ausschließen die Angabe, dass
+  er in der Gruppe bereits **Mitglied** ist — und finge beim Wiederaufnehmen bei
+  `not_contacted` an. **Der Tracking-Code bleibt bei einem Ausschluss gültig**
+  (`test_ausschliessen_laesst_den_tracking_code_gueltig`): Er steht
+  möglicherweise in einem veröffentlichten Beitrag, und ein Klick darauf muss
+  ankommen und gezählt werden. `POST /bearbeiten` nimmt bewusst eine **Liste**
+  entgegen — beim ersten vollen Bestand waren 144 von 413 Datensätzen ohne
+  verwertbare Daten; das auszusortieren ist ein Zug, keine 144 Klicks.
+  Migrationsschritt 7 schließt genau diese einmalig aus (`ON CONFLICT DO
+  NOTHING` schützt jede von Hand gepflegte Zeile — eine Migration überstimmt
+  kein Menschenurteil).
 - **Der Arbeitsstand steht in `group_marketing`, nicht in `groups`.** Ein
   Suchlauf schreibt jeden gefundenen Datensatz neu; von Hand gepflegte Angaben
   hätten dort keinen sicheren Platz.
@@ -289,6 +380,49 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
   ein dauerhaft gemerkter Umzug führte spätere Klicks am Zähler vorbei). Ein
   unbekannter Code ergibt 404 statt einer stillen Weiterleitung.
 - **`POST /events`** nimmt die Meldungen der Zielanwendung entgegen.
+- **Hinter einem Reverse Proxy braucht uvicorn `--proxy-headers
+  --forwarded-allow-ips 127.0.0.1`.** Ohne das ist `request.client.host` für
+  jeden Besucher `127.0.0.1`; der `visitor_hash` entsteht dann fast nur noch aus
+  dem User-Agent, und zwei Besucher mit demselben Browser am selben Tag zählen
+  als **ein** Klick. nginx muss dazu `X-Forwarded-For $remote_addr` setzen
+  (überschreiben, nicht anhängen – sonst ist der Wert vom Client beeinflussbar).
+  Derselbe Schalter hält auch `_nur_lokal` intakt: ohne ihn hielte der Dienst
+  jeden Aufruf für lokal und gäbe die Arbeitsliste heraus.
+- **Die Übersicht zeigt die Trichterzahlen je Gruppe in derselben Zeile** wie
+  Score und Arbeitsstand – nicht als zweite Bestenliste daneben. Sonst gäbe es
+  einen zweiten Satz Zahlen, den man getrennt filtern und sortieren müsste.
+  Sind Links vergeben, aber kein einziger Klick da, erscheint ein Hinweis: Das
+  ist fast immer eine Domain, die auf eine andere Anwendung zeigt, und es fällt
+  sonst nicht auf, weil der Besucher ja eine Seite sieht.
+- **Die Übersicht hat zwei Zugänge mit verschiedenen Rechten.** Vom selben
+  Rechner (SSH-Tunnel) ist sie bedienbar; von außen zeigt nginx sie hinter
+  Basic Auth **nur lesend** (`UEBERSICHT_TOKEN`, Kopfzeile
+  `X-Uebersicht-Token`, `location = /uebersicht`). Der Unterschied ist kein
+  Rest, sondern der Punkt: `campaign sync` vergibt Tracking-Codes, und ein
+  vergebener Code wird nie zurückgenommen — er steht später in
+  veröffentlichten Beiträgen. Ein abhandengekommenes Passwort soll Zahlen
+  zeigen können und sonst nichts. Die Absicherung liegt dabei **im Dienst**
+  (`_nur_lokal` bewacht jeden schreibenden Weg unverändert weiter), nicht in
+  der nginx-Regel `limit_except`; die ist der zweite Riegel. Das Ausblenden
+  der Knöpfe (`render(..., nur_lesen=True)`) sichert gar nichts — es ist
+  Aufrichtigkeit: Ein Knopf, dessen Weg mit 404 antwortet, sieht aus wie ein
+  Fehler der Seite. Ausgeblendet wird per CSS statt entfernt, weil das Skript
+  mehrere dieser Knöpfe beim Start sucht und sonst die ganze Seite leer bliebe.
+- **Das Geheimnis ist geheim, obwohl nginx die Kopfzeile überschreibt.**
+  `proxy_set_header` macht einen vom Besucher mitgeschickten Wert wirkungslos —
+  aber nur in dem Block, der es aufruft. Ohne eigenen Wert hinge der Schutz
+  daran, dass jeder künftige `location`-Block das Überschreiben nicht vergisst.
+  Ein Weg, der Auskunft gibt, bringt seinen Schutz selbst mit.
+- **Die Tests laufen nicht gegen die `.env` des Rechners.** `load_config` hebt
+  sie über `load_dotenv` in die Prozessumgebung; im Test entschied damit der
+  Arbeitsrechner mit. Wer einen `EVENTS_TOKEN` eingetragen hatte — der
+  Normalfall —, sah neun Tests scheitern, die ausdrücklich den Fall „kein
+  Schlüssel gesetzt" prüfen. Die autouse-Fixture `_ohne_env_datei` in
+  `tests/conftest.py` setzt die betroffenen Werte je Test auf **leer**, nicht
+  gelöscht: `load_dotenv` läuft mit `override=False` und trüge einen gelöschten
+  beim nächsten `load_config` wieder ein. Wer einen Schlüssel braucht, setzt
+  ihn im Test — dann ist er eine Angabe des Tests und keine Eigenschaft des
+  Rechners.
 - **Keine IP-Adressen im Bestand.** Gegen Doppelklicks entsteht aus IP,
   User-Agent und **Tagesdatum** ein HMAC-Prüfwert (16 Zeichen, Zufallsschlüssel
   in `marketing_meta`). Er ist nicht zurückrechenbar und wechselt täglich —

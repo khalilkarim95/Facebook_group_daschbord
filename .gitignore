@@ -6,7 +6,11 @@ __pycache__/
 build/
 dist/
 
+# Secrets: nur die Vorlage gehoert ins Repository. Auch Sicherungskopien
+# wie .env.bak-JJJJ-MM-TT tragen echte Schluessel.
 .env
+.env.*
+!.env.example
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -17,8 +21,14 @@ htmlcov/
 data/cache/
 data/runs/
 data/exports/
+data/backups/
 data/*.sqlite
 data/*.sqlite-journal
+data/*.sqlite-wal
+data/*.sqlite-shm
+# Sicherungskopien des Bestands (bak-vor-reset, bak-vor-zuordnung ...)
+data/*.sqlite.bak*
+data/*.bak-*
 
 # Seeds: Beispieldatei bleibt versioniert, echte Seeds nicht
 data/seeds/*

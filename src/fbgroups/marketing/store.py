@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
     campaign_id      TEXT PRIMARY KEY,
     name             TEXT NOT NULL,
     description      TEXT NOT NULL DEFAULT '',
+    -- Beschreibung: wen bewirbt die Kampagne. NICHT der Zuordnungsfilter -
+    -- der steht in den target_*-Spalten.
     audiences        TEXT NOT NULL DEFAULT '[]',
     cities           TEXT NOT NULL DEFAULT '[]',
     language         TEXT NOT NULL DEFAULT '',
@@ -48,6 +50,15 @@ CREATE TABLE IF NOT EXISTS campaigns (
     status           TEXT NOT NULL DEFAULT 'draft',
     starts_on        TEXT,
     ends_on          TEXT,
+    -- Auswahlregel: welche Gruppen einen Tracking-Code bekommen.
+    -- Leere Liste bzw. NULL heisst: keine Einschraenkung.
+    target_audiences        TEXT NOT NULL DEFAULT '[]',
+    target_cities           TEXT NOT NULL DEFAULT '[]',
+    target_categories       TEXT NOT NULL DEFAULT '[]',
+    target_statuses         TEXT NOT NULL DEFAULT '[]',
+    target_min_score        REAL,
+    target_include_unscored INTEGER NOT NULL DEFAULT 0,
+    auto_assign             INTEGER NOT NULL DEFAULT 0,
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL
 );
@@ -76,6 +87,8 @@ CREATE TABLE IF NOT EXISTS group_marketing (
     join_requested_at TEXT,
     last_contacted_at TEXT,
     last_posted_at    TEXT,
+    bearbeiten        INTEGER NOT NULL DEFAULT 1,
+    ausschlussgrund   TEXT NOT NULL DEFAULT '',
     notes             TEXT NOT NULL DEFAULT '',
     updated_at        TEXT NOT NULL,
     FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
@@ -177,17 +190,65 @@ def _iso(wert: datetime | date | None) -> str | None:
     return wert.isoformat() if wert is not None else None
 
 
+def _schema_version() -> int:
+    """Aktuelle Schema-Version. Import in der Funktion - sonst Ringschluss."""
+    from fbgroups.storage.sqlite_store import SCHEMA_VERSION
+
+    return SCHEMA_VERSION
+
+
 class MarketingStore:
     """Zugriff auf die Marketing-Tabellen derselben SQLite-Datei."""
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
+        vorhanden = self.path.exists()
+
+        # Erst migrieren, dann das eigene Schema anlegen: Ein fehlender
+        # Migrationsschritt liesse sonst eine Tabelle ohne die neue Spalte
+        # zurueck, und "CREATE TABLE IF NOT EXISTS" ergaenzt keine Spalte.
+        if vorhanden:
+            self._auf_stand_bringen()
+
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
         self.conn.executescript(SCHEMA_TRACKING)
+        if not vorhanden:
+            # Eine hier neu entstandene Datei traegt das aktuelle Schema und
+            # muss das auch sagen. Ohne die Versionsnummer hielte der naechste
+            # SqliteStore sie fuer eine Datei aus grauer Vorzeit und
+            # verweigerte den Dienst.
+            self.conn.execute(f"PRAGMA user_version = {_schema_version()}")
         self.conn.commit()
+
+    def _auf_stand_bringen(self) -> None:
+        """Holt fehlende Migrationsschritte nach, bevor gelesen wird.
+
+        Notwendig, weil ``GET /r/{code}`` und ``POST /events`` **nur** diesen
+        Speicher oeffnen. Auf einem Server, dessen Datenbankdatei aus einer
+        aelteren Fassung stammt, fehlte sonst genau die Spalte, die eine
+        Erweiterung gerade hinzugefuegt hat - und die Weiterleitung stuerbe an
+        einer Stelle, an der niemand nach einer Migration sucht.
+
+        Der Import steht in der Funktion, nicht oben in der Datei:
+        ``sqlite_store`` liest von hier das Schema, ein Import auf Modulebene
+        waere ein Ringschluss.
+        """
+        from fbgroups.storage.sqlite_store import SCHEMA_VERSION, SqliteStore
+
+        pruef = sqlite3.connect(self.path)
+        try:
+            version = int(pruef.execute("PRAGMA user_version").fetchone()[0])
+        finally:
+            pruef.close()
+
+        if version != SCHEMA_VERSION:
+            # SqliteStore fuehrt die Schritte aus und meldet einen Stand, der
+            # sich nicht nachholen laesst, als Fehler - genau richtig, das ist
+            # nichts, was ein Redirect stillschweigend uebergehen darf.
+            SqliteStore(self.path).close()
 
     def __enter__(self) -> MarketingStore:
         return self
@@ -205,8 +266,10 @@ class MarketingStore:
             INSERT INTO campaigns (
                 campaign_id, name, description, audiences, cities, language,
                 message_template, landing_page, status, starts_on, ends_on,
-                created_at, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                target_audiences, target_cities, target_categories,
+                target_statuses, target_min_score, target_include_unscored,
+                auto_assign, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(campaign_id) DO UPDATE SET
                 name             = excluded.name,
                 description      = excluded.description,
@@ -218,6 +281,13 @@ class MarketingStore:
                 status           = excluded.status,
                 starts_on        = excluded.starts_on,
                 ends_on          = excluded.ends_on,
+                target_audiences        = excluded.target_audiences,
+                target_cities           = excluded.target_cities,
+                target_categories       = excluded.target_categories,
+                target_statuses         = excluded.target_statuses,
+                target_min_score        = excluded.target_min_score,
+                target_include_unscored = excluded.target_include_unscored,
+                auto_assign             = excluded.auto_assign,
                 updated_at       = excluded.updated_at
             """,
             (
@@ -232,6 +302,13 @@ class MarketingStore:
                 campaign.status.value,
                 _iso(campaign.starts_on),
                 _iso(campaign.ends_on),
+                json.dumps(campaign.target_audiences, ensure_ascii=False),
+                json.dumps(campaign.target_cities, ensure_ascii=False),
+                json.dumps(campaign.target_categories, ensure_ascii=False),
+                json.dumps(campaign.target_statuses, ensure_ascii=False),
+                campaign.target_min_score,
+                int(campaign.target_include_unscored),
+                int(campaign.auto_assign),
                 _iso(campaign.created_at),
                 _iso(campaign.updated_at),
             ),
@@ -313,6 +390,89 @@ class MarketingStore:
         self.conn.commit()
         return True
 
+    def assigned_group_ids(self, campaign_id: str) -> set[str]:
+        """Welche Gruppen dieser Kampagne schon zugeordnet sind.
+
+        Eine Abfrage statt einer je Gruppe: Bei 1000 Gruppen waeren das sonst
+        1000 Einzelabfragen, nur um festzustellen, dass fast alle schon da sind.
+        """
+        return {
+            row["group_id"]
+            for row in self.conn.execute(
+                "SELECT group_id FROM campaign_groups WHERE campaign_id = ?", (campaign_id,)
+            )
+        }
+
+    def add_links(self, links: list[CampaignGroup]) -> int:
+        """Legt viele Zuordnungen in einem Vorgang an. Returns: wie viele neu waren.
+
+        Ein einzelner ``add_link``-Aufruf schreibt und bestaetigt fuer sich; bei
+        302 Zuordnungen sind das 302 Schreibvorgaenge auf die Platte. Hier
+        entsteht **eine** Transaktion: entweder stehen alle Zuordnungen oder
+        keine. Ein Abbruch mittendrin wuerde sonst eine halb zugeordnete
+        Kampagne hinterlassen, deren Codes bereits vergeben sind.
+
+        ``INSERT OR IGNORE`` statt einer Vorabpruefung: Eine bereits vorhandene
+        Zuordnung bleibt unangetastet - ihr Code kann veroeffentlicht sein.
+        """
+        if not links:
+            return 0
+
+        unbekannt = [
+            link.group_id
+            for link in links
+            if self.conn.execute(
+                "SELECT 1 FROM groups WHERE group_id = ?", (link.group_id,)
+            ).fetchone()
+            is None
+        ]
+        if unbekannt:
+            raise UnknownGroupError(", ".join(sorted(unbekannt)[:5]))
+
+        campaign_ids = {link.campaign_id for link in links}
+        for campaign_id in campaign_ids:
+            if self.conn.execute(
+                "SELECT 1 FROM campaigns WHERE campaign_id = ?", (campaign_id,)
+            ).fetchone() is None:
+                raise UnknownCampaignError(campaign_id)
+
+        with self.conn:
+            cursor = self.conn.executemany(
+                """
+                INSERT OR IGNORE INTO campaign_groups
+                    (campaign_id, group_id, tracking_code, tracking_url, added_at)
+                VALUES (?,?,?,?,?)
+                """,
+                [
+                    (
+                        link.campaign_id,
+                        link.group_id,
+                        link.tracking_code,
+                        link.tracking_url,
+                        _iso(link.added_at),
+                    )
+                    for link in links
+                ],
+            )
+        return int(cursor.rowcount or 0)
+
+    def campaigns_mit_auto_assign(self) -> list[Campaign]:
+        """Kampagnen, die neu gefundene Gruppen von selbst uebernehmen.
+
+        Nur **aktive**. Ein Entwurf ist noch nicht entschieden, und eine
+        pausierte oder beendete Kampagne soll gerade nicht weiterwachsen -
+        sonst waere "pausiert" eine Beschriftung ohne Wirkung, und ein
+        Suchlauf vergaebe Monate spaeter noch Codes fuer eine Kampagne, die
+        niemand mehr betreibt. Von Hand bleibt jede Kampagne zuordnbar:
+        ``campaign sync`` fragt nicht nach dem Status, denn dort steht ein
+        Mensch davor.
+        """
+        rows = self.conn.execute(
+            "SELECT * FROM campaigns WHERE auto_assign = 1 AND status = 'active' "
+            "ORDER BY created_at"
+        ).fetchall()
+        return [self._row_to_campaign(row) for row in rows]
+
     def refresh_tracking_urls(self, campaign_id: str, basis_url_bauer) -> int:
         """Schreibt die Links neu, ohne die Codes anzufassen.
 
@@ -361,8 +521,8 @@ class MarketingStore:
             INSERT INTO group_marketing (
                 group_id, marketing_status, contact_status, permission_status,
                 campaign_status, join_requested_at, last_contacted_at,
-                last_posted_at, notes, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                last_posted_at, bearbeiten, ausschlussgrund, notes, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(group_id) DO UPDATE SET
                 marketing_status  = excluded.marketing_status,
                 contact_status    = excluded.contact_status,
@@ -371,6 +531,8 @@ class MarketingStore:
                 join_requested_at = excluded.join_requested_at,
                 last_contacted_at = excluded.last_contacted_at,
                 last_posted_at    = excluded.last_posted_at,
+                bearbeiten        = excluded.bearbeiten,
+                ausschlussgrund   = excluded.ausschlussgrund,
                 notes             = excluded.notes,
                 updated_at        = excluded.updated_at
             """,
@@ -383,6 +545,8 @@ class MarketingStore:
                 _iso(eintrag.join_requested_at),
                 _iso(eintrag.last_contacted_at),
                 _iso(eintrag.last_posted_at),
+                int(eintrag.bearbeiten),
+                eintrag.ausschlussgrund,
                 eintrag.notes,
                 _iso(eintrag.updated_at),
             ),
@@ -715,6 +879,13 @@ class MarketingStore:
             status=row["status"],
             starts_on=row["starts_on"],
             ends_on=row["ends_on"],
+            target_audiences=json.loads(row["target_audiences"]),
+            target_cities=json.loads(row["target_cities"]),
+            target_categories=json.loads(row["target_categories"]),
+            target_statuses=json.loads(row["target_statuses"]),
+            target_min_score=row["target_min_score"],
+            target_include_unscored=bool(row["target_include_unscored"]),
+            auto_assign=bool(row["auto_assign"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -740,6 +911,8 @@ class MarketingStore:
             join_requested_at=row["join_requested_at"],
             last_contacted_at=row["last_contacted_at"],
             last_posted_at=row["last_posted_at"],
+            bearbeiten=bool(row["bearbeiten"]),
+            ausschlussgrund=row["ausschlussgrund"],
             notes=row["notes"],
             updated_at=row["updated_at"],
         )

@@ -27,32 +27,35 @@ def test_scoring_gewichte_ergeben_100(config) -> None:
 
 
 def test_anzahl_geplanter_anfragen(config) -> None:
-    """7 bundesweit + 9 Muster je freigeschalteter Stadt.
+    """Bundesweite Anfragen + ein Muster je freigeschalteter Stadt.
 
-    Die Zahl wird aus der Konfiguration abgeleitet statt festgeschrieben:
-    Jede neue Stadt kostet 9 Credits, und diese Rechnung muss stimmen -
-    nicht ein bestimmter Ausbaustand.
+    Auch die Zahl der Muster kommt aus der Konfiguration, nicht aus dem Test:
+    Geprueft wird die Rechnung - jedes Muster kostet so viele Credits, wie es
+    freigeschaltete Staedte gibt -, nicht ein bestimmter Ausbaustand. Sonst
+    braeche jede neue Formulierung einen Test, ohne dass etwas kaputt waere.
     """
     staedte = len(config.cities_for_phase(1))
+    bundesweit = len(config.queries["nationwide"])
+    muster = len(config.queries["city_patterns"])
     planned = build_queries(config, phase=1)
 
-    assert len([q for q in planned if q.scope == "nationwide"]) == 7
-    assert len([q for q in planned if q.scope == "city"]) == 9 * staedte
-    assert len(planned) == 7 + 9 * staedte
+    assert len([q for q in planned if q.scope == "nationwide"]) == bundesweit
+    assert len([q for q in planned if q.scope == "city"]) == muster * staedte
+    assert len(planned) == bundesweit + muster * staedte
 
 
 def test_bundesweite_anfragen_stehen_in_der_konfiguration(config) -> None:
-    """Die vereinbarten Anfragen kommen aus der YAML, nicht aus dem Code."""
-    texte = {q.text for q in build_queries(config, phase=1) if q.scope == "nationwide"}
-    assert texte == {
-        "Syrer Deutschland",
-        "Syrer in Deutschland",
-        "سوريين في ألمانيا",
-        "السوريين في ألمانيا",
-        "Araber Deutschland",
-        "Araber in Deutschland",
-        "عرب في ألمانيا",
-    }
+    """Die vereinbarten Anfragen kommen aus der YAML, nicht aus dem Code.
+
+    Verglichen wird gegen die Datei selbst statt gegen eine Liste im Test -
+    eine zweite Liste hier waere eine zweite Wahrheit ueber dieselben Anfragen.
+    """
+    aus_datei = {eintrag["text"] for eintrag in config.queries["nationwide"]}
+    gebaut = {q.text for q in build_queries(config, phase=1) if q.scope == "nationwide"}
+
+    assert gebaut == aus_datei
+    assert "Syrer Deutschland" in gebaut  # Grundanfrage bleibt bestehen
+    assert "السوريين في ألمانيا" in gebaut
 
 
 def test_stadtplatzhalter_werden_ersetzt(config) -> None:
@@ -69,9 +72,15 @@ def test_stadtplatzhalter_werden_ersetzt(config) -> None:
     assert not any("{" in text for text in texte)
 
 
-def test_alle_drei_sprachen_vertreten(config) -> None:
+def test_deutsch_arabisch_und_umschrift_vertreten(config) -> None:
+    """Die drei Schreibweisen des Zielmarkts bleiben abgedeckt.
+
+    Teilmenge statt Gleichheit: Eine weitere Sprache (etwa englische
+    Gruppennamen) ist eine Erweiterung, kein Fehler. Faellt dagegen eine der
+    drei weg, ist ein ganzer Teil des Marktes unsichtbar.
+    """
     sprachen = {q.lang for q in build_queries(config, phase=1)}
-    assert sprachen == {"de", "ar", "translit"}
+    assert {"de", "ar", "translit"} <= sprachen
 
 
 def test_builder_ist_deterministisch(config) -> None:

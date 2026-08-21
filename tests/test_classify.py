@@ -118,3 +118,34 @@ def test_namenstreffer_schlaegt_mehrere_texttreffer(config) -> None:
         config,
     )
     assert ergebnis.category == "wohnen"
+
+
+def test_stadtname_zaehlt_nicht_als_kategoriebegriff(config) -> None:
+    """Ein Wort bringt nur einmal Punkte.
+
+    "Essen" ist eine Stadt mit 600.000 Einwohnern und zugleich der deutsche
+    Kategoriebegriff fuer Speisen. Ohne den Ausschluss bekam jede Gruppe
+    "Syrer in Essen" neben den Stadtpunkten die vollen Kategoriepunkte und
+    stand in der Uebersicht als Essensgruppe - 8 von 16 Treffern der Kategorie
+    im echten Bestand.
+    """
+    ergebnis = classify_category("Syrer in Essen", None, config, city_id="essen")
+
+    assert ergebnis.category != "essen"
+
+
+def test_speisebegriff_bleibt_ausserhalb_seiner_stadt_gueltig(config) -> None:
+    """Ausgeschlossen wird nur der Name der *erkannten* Stadt.
+
+    Sonst waere die Kategorie fuer eine echte Essensgruppe verloren, bloss weil
+    irgendwo in Deutschland eine Stadt so heisst.
+    """
+    ergebnis = classify_category("Arabisches Essen in Berlin", None, config, city_id="berlin")
+
+    assert ergebnis.category == "essen"
+
+
+def test_ohne_erkannte_stadt_bleibt_alles_beim_alten(config) -> None:
+    ergebnis = classify_category("Arabisches Essen", None, config)
+
+    assert ergebnis.category == "essen"
