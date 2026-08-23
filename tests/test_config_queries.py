@@ -21,9 +21,30 @@ def test_phase1_staedte(config) -> None:
     assert namen < {c.name_de for c in config.cities.values()}
 
 
-def test_scoring_gewichte_ergeben_100(config) -> None:
+def test_passungs_gewichte_ergeben_100(config) -> None:
+    """Die Passung ergibt 100 - die Resonanz kommt getrennt obendrauf.
+
+    Zwei Bloecke mit verschiedener Aufgabe: Zielgruppe, Stadt, Kategorie, Name
+    und Groesse beurteilen, ob die Gruppe zu uns gehoert; die
+    ``resonanz_*``-Gewichte, was sie tatsaechlich gebracht hat. Beide zusammen
+    auf 100 zu pruefen hiesse, das Einschalten der Resonanz als Fehler zu
+    melden - oder umgekehrt die Passung zu verwaessern, sobald ein
+    Resonanz-Gewicht steigt.
+    """
     weights = config.get("scoring", "weights")
-    assert sum(float(v) for v in weights.values()) == 100.0
+    passung = {k: float(v) for k, v in weights.items() if not k.startswith("resonanz_")}
+    assert sum(passung.values()) == 100.0
+
+
+def test_resonanz_gewichte_sind_abschaltbar(config) -> None:
+    """Sie duerfen fehlen oder 0 sein - dann ist die Bewertung die bisherige.
+
+    Geprueft wird die Rechnung, nicht der aktuelle Ausbaustand: Ob der Nutzer
+    die Resonanz eingeschaltet hat, ist seine Entscheidung und kein Testfall.
+    """
+    weights = config.get("scoring", "weights")
+    resonanz = {k: float(v) for k, v in weights.items() if k.startswith("resonanz_")}
+    assert all(v >= 0 for v in resonanz.values())
 
 
 def test_anzahl_geplanter_anfragen(config) -> None:

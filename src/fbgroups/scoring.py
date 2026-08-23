@@ -22,6 +22,9 @@ Alle Gewichte stehen in ``config/settings.yaml``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
 from fbgroups.config import AppConfig
 from fbgroups.models import DataQuality, Group, RecordStatus, ScoreBreakdown, ValidationStatus
 from fbgroups.validation import assess_data_quality, determine_status, has_sufficient_data
@@ -32,6 +35,12 @@ DEFAULT_WEIGHTS = {
     "city_match": 15.0,
     "category_match": 8.0,
     "name_quality": 7.0,
+    # Gemessene Resonanz. Vorgabe 0: Ohne uebergebene Zahlen bleibt die
+    # Bewertung exakt die bisherige - wer die Bestandteile will, schaltet sie
+    # in config/settings.yaml ein, wie bei jedem anderen Gewicht auch.
+    "resonanz_engagement": 0.0,
+    "resonanz_reichweite": 0.0,
+    "resonanz_aktualitaet": 0.0,
 }
 
 # Klartext fuer die Begruendung im Export.
@@ -41,6 +50,9 @@ _LABELS = {
     "category_match": "Kategorie",
     "member_count": "Mitgliederzahl",
     "name_quality": "Name",
+    "resonanz_engagement": "Resonanz",
+    "resonanz_reichweite": "Reichweite",
+    "resonanz_aktualitaet": "Aktualitaet",
 }
 
 _NICHT_BEWERTBAR = {
@@ -56,6 +68,113 @@ _TRUNCATION_MARKERS = ("...", "…", "..")
 # Satzzeichen eines Beitrags, nicht eines Gruppennamens. "؟" ist das arabische
 # Fragezeichen; ohne diese Zeichen bliebe die Haelfte der Faelle unerkannt.
 _SENTENCE_MARKERS = ("?", "؟", "!")
+
+
+@dataclass(frozen=True)
+class Resonanz:
+    """Was eine Gruppe tatsaechlich gebracht hat - gemessen, nicht geschaetzt.
+
+    Die Zahlen stammen aus den eigenen Tracking-Ereignissen: jemand hat den
+    Link in dieser Gruppe angeklickt und sich danach registriert. Das ist das
+    einzige Aktivitaetsmass, das dieses Projekt ohne facebook.com erheben
+    kann - und es beantwortet die eigentliche Frage besser als eine
+    Beitragszahl: Eine Gruppe mit 500 Mitgliedern, die 40 Registrierungen
+    bringt, ist mehr wert als eine mit 5.000, die zwei bringt.
+
+    ``beitraege`` ist die Zahl der **veroeffentlichten** Beitraege. Sie
+    entscheidet, ob ueberhaupt gemessen wurde: Ohne Beitrag sagen null Klicks
+    nichts ueber die Gruppe aus, sondern nur ueber uns.
+
+    Das Modul kennt dabei weder MarketingStore noch Datenbank - die Zahlen
+    werden hereingereicht. Der Kern bleibt frei von der Marketing-Erweiterung,
+    so wie diese den Bestand nicht veraendert.
+    """
+
+    beitraege: int = 0
+    klicks: int = 0
+    registrierungen: int = 0
+    letzte_regung: datetime | None = None
+    # Aeltester veroeffentlichter Beitrag dieser Gruppe. Er sagt, seit wann
+    # gemessen wird; ein Beitrag von heute Morgen hatte noch keine Gelegenheit,
+    # Klicks zu sammeln.
+    erster_beitrag_am: datetime | None = None
+
+
+def _tage_seit(zeitpunkt: datetime | None, jetzt: datetime) -> float | None:
+    """Tage zwischen damals und jetzt - unabhaengig von der Zeitzonenangabe.
+
+    Aus der Datenbank kommen die Zeitpunkte mit Zeitzone, aus einem Test
+    gelegentlich ohne. Ein direkter Vergleich der beiden wirft einen
+    TypeError, und der faellt erst im Betrieb auf.
+    """
+    if zeitpunkt is None:
+        return None
+    if zeitpunkt.tzinfo is None:
+        zeitpunkt = zeitpunkt.replace(tzinfo=UTC)
+    return max((jetzt - zeitpunkt).total_seconds() / 86400.0, 0.0)
+
+
+def _resonanz_faktoren(
+    resonanz: Resonanz, config: AppConfig, jetzt: datetime
+) -> dict[str, float] | None:
+    """Die drei Resonanz-Faktoren (0-1) - oder ``None``, wenn nicht messbar.
+
+    ``None`` heisst ausdruecklich **nicht** "null Resonanz". Es heisst: Wir
+    haben noch nicht gemessen. Beide Faelle gleich zu behandeln waere der
+    schwerste Fehler an dieser Stelle - eine Gruppe, in der wir nie gepostet
+    haben, stuende dann neben einer, deren Beitrag niemand angeklickt hat.
+    Nicht messbar sind zwei Faelle:
+
+    * **Kein veroeffentlichter Beitrag.** Null Klicks sind dann eine Aussage
+      ueber uns, nicht ueber die Gruppe.
+    * **Der Beitrag ist zu frisch.** Wer vor zwei Stunden gepostet hat, hat
+      noch keine Klicks - eine Null waere hier eine Behauptung ueber die
+      Zukunft. Die Schonfrist steht in ``resonanz.schonfrist_tage``.
+    """
+    if resonanz.beitraege <= 0:
+        return None
+
+    schonfrist = float(config.get("scoring", "resonanz", "schonfrist_tage", default=3) or 0)
+    alter = _tage_seit(resonanz.erster_beitrag_am, jetzt)
+    if alter is not None and alter < schonfrist:
+        return None
+
+    ziel_quote = float(config.get("scoring", "resonanz", "ziel_quote", default=0.15) or 0.15)
+    mindest_klicks = float(config.get("scoring", "resonanz", "mindest_klicks", default=20) or 1)
+    ziel_klicks = float(
+        config.get("scoring", "resonanz", "ziel_klicks_je_beitrag", default=25) or 1
+    )
+    halbwert = float(config.get("scoring", "resonanz", "aktualitaet_tage", default=30) or 30)
+
+    # Engagement: die Registrierungsquote, gemessen an einer erreichbaren
+    # Zielquote - nicht an 100 %. Eine Quote von 15 % ist hervorragend; wer
+    # dagegen auf 1,0 normiert, gibt selbst der besten Gruppe ein Sechstel
+    # der Punkte und macht den Bestandteil wirkungslos.
+    #
+    # Der zweite Faktor ist die Belastbarkeit: 1 Klick und 1 Registrierung
+    # sind 100 % und beweisen nichts. Erst ab "mindest_klicks" zaehlt die
+    # Quote voll - darunter anteilig.
+    quote = resonanz.registrierungen / resonanz.klicks if resonanz.klicks else 0.0
+    belastbar = min(1.0, resonanz.klicks / mindest_klicks) if mindest_klicks > 0 else 1.0
+    engagement = min(1.0, quote / ziel_quote) * belastbar if ziel_quote > 0 else 0.0
+
+    # Reichweite: Klicks je veroeffentlichtem Beitrag. Je Beitrag, nicht
+    # absolut - sonst gewaenne die Gruppe, in der wir am oeftesten gepostet
+    # haben, statt der, die am besten wirkt.
+    je_beitrag = resonanz.klicks / resonanz.beitraege
+    reichweite = min(1.0, je_beitrag / ziel_klicks) if ziel_klicks > 0 else 0.0
+
+    # Aktualitaet: linearer Abfall bis "aktualitaet_tage". Eine Gruppe, die
+    # vor einem halben Jahr zuletzt reagiert hat, ist heute keine gute Wahl -
+    # auch wenn ihre Gesamtzahlen gut aussehen.
+    tage = _tage_seit(resonanz.letzte_regung, jetzt)
+    aktualitaet = 0.0 if tage is None else max(0.0, 1.0 - tage / halbwert) if halbwert > 0 else 0.0
+
+    return {
+        "resonanz_engagement": round(engagement, 4),
+        "resonanz_reichweite": round(reichweite, 4),
+        "resonanz_aktualitaet": round(aktualitaet, 4),
+    }
 
 
 def _member_count_factor(member_count: int, config: AppConfig) -> float:
@@ -108,8 +227,19 @@ def _reason(points: dict[str, float], score: float, score_max: float, fehlend: l
     return satz
 
 
-def score_group(group: Group, config: AppConfig) -> Group:
-    """Berechnet Score, Begruendung, Datenqualitaet und Status einer Gruppe."""
+def score_group(
+    group: Group,
+    config: AppConfig,
+    resonanz: Resonanz | None = None,
+) -> Group:
+    """Berechnet Score, Begruendung, Datenqualitaet und Status einer Gruppe.
+
+    ``resonanz`` sind die gemessenen Tracking-Zahlen dieser Gruppe. Ohne sie
+    bleibt die Bewertung genau die bisherige: Die Bestandteile erscheinen dann
+    als "unbekannt", wie jede andere fehlende Angabe auch. Der Aufrufer holt
+    die Zahlen (siehe ``marketing.resonanz.resonanz_je_gruppe``) - dieses
+    Modul kennt die Marketing-Erweiterung nicht und soll sie nicht kennen.
+    """
     group.data_quality = assess_data_quality(group)
 
     # 1. Ungueltige, erfundene oder geprueft tote URLs werden nicht bewertet.
@@ -164,6 +294,16 @@ def score_group(group: Group, config: AppConfig) -> Group:
     if group.member_count_hint is not None:
         faktoren["member_count"] = _member_count_factor(group.member_count_hint, config)
 
+    # Gemessene Resonanz. Liegt sie nicht vor oder ist sie noch nicht
+    # messbar, bleiben die Bestandteile "unbekannt" - sie senken dann die
+    # erreichbare Punktzahl, statt eine Null zu behaupten. Der Unterschied
+    # zwischen "wirkt nicht" und "noch nicht gemessen" ist hier der ganze
+    # Punkt; siehe _resonanz_faktoren.
+    if resonanz is not None:
+        gemessen = _resonanz_faktoren(resonanz, config, datetime.now(UTC))
+        if gemessen is not None:
+            faktoren.update(gemessen)
+
     parts: dict[str, tuple[float, float]] = {
         name: (weights[name], faktor) for name, faktor in faktoren.items() if name in weights
     }
@@ -206,14 +346,18 @@ def sort_by_rank(groups: list[Group]) -> list[Group]:
     return sorted(groups, key=_rangfolge)
 
 
-def score_all(groups: list[Group], config: AppConfig) -> list[Group]:
+def score_all(
+    groups: list[Group],
+    config: AppConfig,
+    resonanz: dict[str, Resonanz] | None = None,
+) -> list[Group]:
     """Bewertet alle Gruppen und sortiert sie - die beste zuerst.
 
     Nicht bewertbare Datensaetze stehen am Ende - sie sind kein schlechtes
     Ergebnis, sondern ein offener Punkt fuer die manuelle Nachpflege.
     """
     for group in groups:
-        score_group(group, config)
+        score_group(group, config, (resonanz or {}).get(group.group_id))
 
     return sorted(groups, key=_rangfolge)
 

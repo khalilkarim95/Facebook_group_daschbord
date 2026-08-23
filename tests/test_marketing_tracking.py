@@ -214,7 +214,8 @@ def test_meldung_ordnet_der_gruppe_zu(client: TestClient, bestand: Path) -> None
 
 def test_ganze_kette_vom_klick_bis_zur_conversion(client: TestClient, bestand: Path) -> None:
     client.get(f"/r/{CODE_A}")
-    for event_type in ("landing_visit", "registration", "activation", "qualified", "conversion"):
+    for event_type in ("landing_visit", "registration", "download",
+                       "activation", "qualified", "conversion"):
         client.post(
             "/events",
             json={"event_type": event_type, "user_ref": "u1", "tracking_code": CODE_A},
@@ -228,6 +229,7 @@ def test_ganze_kette_vom_klick_bis_zur_conversion(client: TestClient, bestand: P
         "click": 1,
         "landing_visit": 1,
         "registration": 1,
+        "download": 1,
         "activation": 1,
         "qualified": 1,
         "conversion": 1,

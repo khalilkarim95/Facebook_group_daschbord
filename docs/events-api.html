@@ -281,7 +281,7 @@
   <div class="meta">
     <span><b>Endpoint</b> POST https://go.b-tarikak.de/events</span>
     <span><b>Auth</b> X-Events-Token</span>
-    <span><b>Version</b> 2026-08-18</span>
+    <span><b>Version</b> 2026-08-23</span>
   </div>
 </header>
 
@@ -313,6 +313,7 @@ X-Events-Token: &lt;secret&gt;
 {
   "event_type":    "registration",
   "user_ref":      "usr_9f21c4",
+  "anon_ref":      "anon-3f9c1a80b26d4e17",
   "tracking_code": "FB-SYR-BER-001",
   "referral_code": "",
   "occurred_at":   "2026-08-18T14:31:07Z"
@@ -329,15 +330,29 @@ X-Events-Token: &lt;secret&gt;
           <td><code>event_type</code></td>
           <td>enum</td>
           <td>yes</td>
-          <td>One of the six stages below. Anything else is rejected with 422.</td>
+          <td>One of the seven stages below. Anything else is rejected with 422.</td>
         </tr>
         <tr>
           <td><code>user_ref</code></td>
           <td>string ≤ 128</td>
           <td>effectively</td>
           <td>
-            Your opaque user id. Without it the event cannot be attributed to a
-            person, and referrals and rewards do not run.
+            Your opaque user id. Absent before an account exists — a download
+            by a logged-out visitor is a real event and is attributed through
+            <code>anon_ref</code>. Referrals and rewards need it.
+          </td>
+        </tr>
+        <tr>
+          <td><code>anon_ref</code></td>
+          <td>string ≤ 128</td>
+          <td>until there is a user</td>
+          <td>
+            The id the web app gives itself in the browser before anyone signs
+            up. Send it <em>alone</em> on <code>landing_visit</code>, and
+            <em>together with</em> <code>user_ref</code> on
+            <code>registration</code> — that one call is what tells the service
+            the anonymous visitor and the new account are one person. See
+            <em>Attribution</em>.
           </td>
         </tr>
         <tr>
@@ -384,10 +399,18 @@ X-Events-Token: &lt;secret&gt;
 </section>
 
 <section>
-  <h2>The six stages</h2>
+  <h2>The seven stages</h2>
   <p>
-    The order is the funnel. Each stage is reported at most once per user; the
-    service does not deduplicate them, so a repeated call is counted twice.
+    The order is the order of the funnel display, <em>not</em> a sequence to be
+    walked. Every stage is counted on its own and none requires another: a
+    registration with no download is a real state, so is a download by someone
+    who never registered, and "10 registrations, 3 downloads" does not mean
+    seven registrations went wrong. The only thing the stages share is the
+    attribution — which Facebook group each one is owed to.
+  </p>
+  <p>
+    Reported at most once per user, and — except for <code>download</code> —
+    not deduplicated by the service, so a repeated call is counted twice.
   </p>
 
   <div class="stages">
@@ -403,12 +426,18 @@ X-Events-Token: &lt;secret&gt;
       <span class="idx">02</span>
       <div class="body">
         <span class="name">landing_visit</span>
-        <span class="who">Send from the web app</span>
+        <span class="who">Web app → API → here</span>
         <p>
           A visitor loads b-tarikak.de with a <code>?ref=</code> parameter. This
           is the only stage that closes the gap between "clicked in Facebook"
           and "actually arrived" — without it, a broken landing page looks
           exactly like an uninterested audience.
+        </p>
+        <p>
+          It is also where the attribution is <em>born</em>: it carries the
+          tracking code and the browser's <code>anon_ref</code>, and every
+          later stage inherits the group through that id. Skip it and the whole
+          rest of the funnel arrives with no group attached.
         </p>
       </div>
     </div>
@@ -422,22 +451,63 @@ X-Events-Token: &lt;secret&gt;
           weight: it also issues the user's own referral code and, if
           <code>referral_code</code> was supplied, records who invited them.
         </p>
+        <p>
+          <b>Send <code>anon_ref</code> with it.</b> This is the moment the
+          person changes name — from a browser id to a user id — and this call
+          is the only place both are known at once. Without it the attribution
+          ends here: the download that follows carries only the user id, which
+          the service has never seen next to a tracking code.
+        </p>
       </div>
     </div>
     <div class="stage">
       <span class="idx">04</span>
       <div class="body">
-        <span class="name">activation</span>
-        <span class="who">Send from the API</span>
+        <span class="name">download</span>
+        <span class="who">Wherever the download is set going</span>
         <p>
-          The account becomes usable. <em>Proposed for b-tarikak:</em> identity
-          verification passes (<code>btarikak-verify</code>). Confirm or replace
-          — see the decision below.
+          The app download was triggered. Independent of
+          <code>registration</code> in both directions — report it for someone
+          who never signs up, and expect people who sign up and never tap it.
+        </p>
+        <p>
+          <b>Report it as late as the platform allows.</b> There are three
+          different things one could count, and they are not the same number:
+          a tap on a button, a transfer actually starting, and the app being
+          on a phone. If you serve the file yourself, fire this from the file
+          handler, not the button. If the link goes to a store, the store is
+          the last thing you can observe — say so in the code comment, because
+          the number then means "sent to the store", and nobody reading a
+          report later can tell that from the name alone. The proof that the
+          app really landed is <code>activation</code>, and only the app itself
+          can give it.
+        </p>
+        <p>
+          <b>Counted once per person.</b> The one stage the service
+          deduplicates besides <code>click</code>: reloading, a second device,
+          a reinstall. Downloads are repeatable by nature, and without the
+          limit one determined thumb would outrank a group that brought four
+          people. A duplicate is answered with
+          <code>200 {"gezaehlt": false}</code> — it arrived, it did not count.
         </p>
       </div>
     </div>
     <div class="stage">
       <span class="idx">05</span>
+      <div class="body">
+        <span class="name">activation</span>
+        <span class="who">Send from the API</span>
+        <p>
+          The app was opened for the first time — the only evidence that it is
+          really on a device. Send it from the mobile app on first launch.
+          <em>Previously proposed:</em> identity verification passes
+          (<code>btarikak-verify</code>). Pick one and keep it — see the
+          decision below.
+        </p>
+      </div>
+    </div>
+    <div class="stage">
+      <span class="idx">06</span>
       <div class="body">
         <span class="name">qualified</span>
         <span class="who">Send from the API</span>
@@ -448,7 +518,7 @@ X-Events-Token: &lt;secret&gt;
       </div>
     </div>
     <div class="stage">
-      <span class="idx">06</span>
+      <span class="idx">07</span>
       <div class="body">
         <span class="name">conversion</span>
         <span class="who">Send from the API</span>
@@ -463,7 +533,7 @@ X-Events-Token: &lt;secret&gt;
   <div class="note decide">
     <span class="tag">Needs a decision</span>
     <p>
-      Stages 04–06 are named generically because the tracking service is not
+      Stages 05–07 are named generically because the tracking service is not
       specific to this product. Their meaning for b-tarikak is a business
       choice, not a technical one, and it must be made once and kept: changing
       it later makes old and new numbers incomparable without any visible sign
@@ -476,17 +546,110 @@ X-Events-Token: &lt;secret&gt;
   <h2>Attribution</h2>
   <p>
     Send <code>tracking_code</code> on the first event where you know it —
-    normally <code>landing_visit</code> or <code>registration</code>. On later
-    events you may omit it: when <code>tracking_code</code> is empty and
-    <code>user_ref</code> is present, the service reuses that user's first known
-    attribution.
+    normally <code>landing_visit</code>. On later events you may omit it: when
+    <code>tracking_code</code> is empty, the service reuses the first known
+    attribution of that person. The <em>first</em> one wins; it is the one that
+    brought them in.
   </p>
   <p>
-    This matters because by the time a delivery completes, your application no
-    longer knows which Facebook group brought the person — and those late stages
-    are the interesting ones. The <em>first</em> attribution wins: it is the one
-    that brought the person in.
+    "That person" is the part that has to be got right, because a person
+    changes name halfway through:
   </p>
+
+  <div class="scroll">
+    <pre><code>go.b-tarikak.de/r/FB-SYR-KLN-002        click     (recorded here)
+        ↓ 302
+b-tarikak.de/?ref=FB-SYR-KLN-002
+        ↓
+landing_visit   anon_ref=anon-3f9c…  tracking_code=FB-SYR-KLN-002
+        ↓
+registration    user_ref=user-8472   anon_ref=anon-3f9c…     ← the join
+        ↓
+download        user_ref=user-8472                            → FB-SYR-KLN-002
+        ↓
+activation      user_ref=user-8472                            → FB-SYR-KLN-002</code></pre>
+  </div>
+
+  <p>
+    The <code>registration</code> line is the whole mechanism. It is the only
+    call that knows both names, and it is what lets the service answer
+    "which group?" for every later stage. Leave <code>anon_ref</code> off it
+    and the chain breaks exactly there: the download arrives under a user id
+    that has never appeared beside a tracking code, and it is filed with no
+    group.
+  </p>
+  <p>
+    A stage with no code and no recognisable person is stored
+    <em>unattributed</em>, never guessed onto a group. A wrong number is worse
+    than a missing one — it moves a group up a ranking that decides where the
+    next 300 posts are written.
+  </p>
+  <p>
+    The response tells you where the event landed:
+    <code>{"gespeichert": "download", "gezaehlt": true, "tracking_code":
+    "FB-SYR-KLN-002"}</code>. An empty <code>tracking_code</code> means it was
+    stored without a group — worth logging, because it is the first sign that
+    the join above is not happening.
+  </p>
+</section>
+
+<section>
+  <h2>Who sends what</h2>
+  <p>
+    The token is a server secret and must never reach a web build: anything the
+    browser can read, a visitor can read — and <code>qualified</code> and
+    <code>conversion</code> move referral status and hand out rewards. So the
+    browser reports to your own API without a secret, and your API relays with
+    one.
+  </p>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>Stage</th><th>Produced by</th><th>Reaches this service via</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>click</code></td><td>this service</td><td>—</td></tr>
+        <tr>
+          <td><code>landing_visit</code></td>
+          <td>Flutter web app</td>
+          <td><code>POST /api/v1/tracking/events</code> → btarikak-api → here</td>
+        </tr>
+        <tr>
+          <td><code>registration</code></td>
+          <td>btarikak-api</td>
+          <td>direct, with the token</td>
+        </tr>
+        <tr>
+          <td><code>download</code></td>
+          <td>web app, or whatever serves the file</td>
+          <td><code>POST /api/v1/tracking/events</code> → btarikak-api → here</td>
+        </tr>
+        <tr>
+          <td><code>activation</code></td>
+          <td>mobile app, first launch</td>
+          <td>btarikak-api → here</td>
+        </tr>
+        <tr>
+          <td><code>qualified</code>, <code>conversion</code></td>
+          <td>btarikak-api</td>
+          <td>direct, with the token</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="tag">The relay is narrow on purpose</span>
+    <p>
+      <code>POST /api/v1/tracking/events</code> accepts
+      <code>landing_visit</code> and <code>download</code> and nothing else,
+      and it never takes a <code>user_ref</code> from the request body — it
+      reads one from the caller's access token if there is a valid one. A
+      public route that accepted <code>registration</code> or
+      <code>qualified</code> would be a rewards faucet.
+    </p>
+  </div>
 </section>
 
 <section>
@@ -565,9 +728,10 @@ X-Events-Token: &lt;secret&gt;
   <div class="note warn">
     <span class="tag">Retries duplicate</span>
     <p>
-      Only clicks are deduplicated. A retried <code>registration</code> is
-      counted twice and inflates the funnel. Prefer an outbox row marked sent
-      over a blind retry; if you must retry blind, cap it at two attempts.
+      Only <code>click</code> and <code>download</code> are deduplicated. A
+      retried <code>registration</code> is counted twice and inflates the
+      funnel. Prefer an outbox row marked sent over a blind retry; if you must
+      retry blind, cap it at two attempts.
     </p>
   </div>
 </section>
@@ -596,10 +760,17 @@ X-Events-Token: &lt;secret&gt;
     <pre><code>curl -i -X POST https://go.b-tarikak.de/events \
   -H "Content-Type: application/json" \
   -H "X-Events-Token: $EVENTS_TOKEN" \
-  -d '{"event_type":"landing_visit","user_ref":"connectivity-check"}'
+  -d '{"event_type":"landing_visit","anon_ref":"check-1","tracking_code":"FB-SYR-KLN-002"}'
 
 # expected: HTTP/1.1 200 OK
-#           {"gespeichert":"landing_visit"}</code></pre>
+#           {"gespeichert":"landing_visit","gezaehlt":true,"tracking_code":"FB-SYR-KLN-002"}
+
+# And the stage that used to be missing entirely. Note it carries no
+# tracking_code: it inherits the one from the visit above.
+curl -s -X POST https://go.b-tarikak.de/events   -H "Content-Type: application/json"   -H "X-Events-Token: $EVENTS_TOKEN"   -d '{"event_type":"download","anon_ref":"check-1"}'
+
+# expected: {"gespeichert":"download","gezaehlt":true,"tracking_code":"FB-SYR-KLN-002"}
+#           An empty tracking_code here means the attribution did not carry.</code></pre>
   </div>
   <div class="note good">
     <span class="tag">Already confirmed</span>
@@ -618,9 +789,18 @@ X-Events-Token: &lt;secret&gt;
   <h2>Open questions</h2>
   <ol>
     <li>
-      What are <code>activation</code>, <code>qualified</code> and
-      <code>conversion</code> for b-tarikak? Proposals above; the decision is
-      yours and should be recorded once.
+      What are <code>qualified</code> and <code>conversion</code> for
+      b-tarikak? Proposals above; the decision is yours and should be recorded
+      once. <code>activation</code> now has a concrete meaning — first launch
+      of the app — which is worth keeping, because it is the only stage that
+      proves the app actually reached a phone.
+    </li>
+    <li>
+      Where exactly does <code>download</code> fire? Today the app is not
+      distributed through a store, so nothing observes a real transfer.
+      Whoever adds the download button decides, and writes the decision into
+      the code: the difference between "tapped a button" and "the file started
+      moving" is invisible in a report that only shows a number.
     </li>
     <li>
       Does the app need to display a user's referral standing? A read endpoint
@@ -628,9 +808,10 @@ X-Events-Token: &lt;secret&gt;
       exposed publicly. Say so and it will be opened behind the same token.
     </li>
     <li>
-      Is <code>landing_visit</code> feasible in the Flutter web app? It is the
-      cheapest stage to add and the one that separates "the page is broken" from
-      "the audience is wrong".
+      <s>Is <code>landing_visit</code> feasible in the Flutter web app?</s>
+      Answered on 23.08.2026: it is implemented, reported through
+      <code>POST /api/v1/tracking/events</code> so that no secret ships inside
+      the web build.
     </li>
   </ol>
 </section>

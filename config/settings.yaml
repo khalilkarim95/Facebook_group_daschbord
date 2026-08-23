@@ -65,6 +65,51 @@ scoring:
     # 27 Gruppen gemeinsam auf dem Hoechstwert standen.
     name_quality: 12
 
+    # -- Gemessene Resonanz --------------------------------------------
+    # Was die Gruppe tatsaechlich gebracht hat. Die Zahlen stammen aus den
+    # eigenen Tracking-Ereignissen (Klick -> Registrierung) und sind das
+    # einzige Aktivitaetsmass, das dieses Projekt ohne facebook.com erheben
+    # kann: Mitgliederzahl, Beitraege je Woche und aktive Poster stehen
+    # ausschliesslich dort. Die Meta Groups API, die sie geliefert haette,
+    # wurde am 22.04.2024 vollstaendig abgeschaltet.
+    #
+    # Sie beantworten die eigentliche Frage ohnehin genauer: nicht "wie viel
+    # wird dort geredet?", sondern "wie viele Menschen kommen von dort zu
+    # uns?". Eine Gruppe mit 500 Mitgliedern und 40 Registrierungen ist mehr
+    # wert als eine mit 5.000 und zwei.
+    #
+    # Die vier oberen Bestandteile (100 Punkte) beurteilen die PASSUNG - ob
+    # die Gruppe zu uns gehoert. Diese drei (75 Punkte) beurteilen die
+    # WIRKUNG. Zusammen 175; der Score wird bewusst nicht auf 100 normiert
+    # (siehe scoring.py, Regel 3). Eine Gruppe ohne veroeffentlichten Beitrag
+    # erreicht damit hoechstens 100 - und "100 von 100" steht zu Recht hinter
+    # "130 von 175".
+    #
+    # Auf 0 setzen schaltet den Bestandteil vollstaendig ab; die Bewertung ist
+    # dann exakt die bisherige.
+    resonanz_engagement: 50    # Registrierungen je Klick - das Entscheidende
+    resonanz_reichweite: 15    # Klicks je veroeffentlichtem Beitrag
+    resonanz_aktualitaet: 10   # wie frisch die letzte Regung ist
+
+  # Schwellen der Resonanz. Sie stehen hier und nicht im Code: Eine geaenderte
+  # Zielquote ist eine fachliche Entscheidung.
+  resonanz:
+    # Eine Registrierungsquote, die als "voll" gilt. NICHT 1,0: 15 % sind
+    # hervorragend. Wer auf 100 % normiert, gibt selbst der besten Gruppe ein
+    # Sechstel der Punkte und macht den Bestandteil wirkungslos.
+    ziel_quote: 0.15
+    # Ab so vielen Klicks zaehlt die Quote voll, darunter anteilig. 1 Klick
+    # und 1 Registrierung sind 100 % und beweisen nichts.
+    mindest_klicks: 20
+    # Klicks je Beitrag, die als volle Reichweite gelten.
+    ziel_klicks_je_beitrag: 25
+    # Nach so vielen Tagen ohne Klick ist die Aktualitaet auf 0 gefallen.
+    aktualitaet_tage: 30
+    # Solange der aelteste Beitrag juenger ist, gilt die Gruppe als NICHT
+    # gemessen. Wer vor zwei Stunden gepostet hat, hat noch keine Klicks -
+    # eine Null waere hier eine Behauptung ueber die Zukunft.
+    schonfrist_tage: 3
+
   # Punkte (0-1 Anteil) je Mitglieder-Groessenklasse. Erste passende Regel
   # gewinnt. Wirkungslos, solange "member_count: 0" gilt - die Klassen bleiben
   # stehen, damit ein Wiedereinschalten eine reine Zahlenaenderung ist.

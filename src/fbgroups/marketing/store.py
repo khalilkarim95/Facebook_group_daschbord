@@ -27,7 +27,9 @@ from fbgroups.marketing.models import (
     Campaign,
     CampaignGroup,
     CampaignStatus,
+    EventType,
     GroupMarketing,
+    PostStatus,
     Referral,
     ReferralStatus,
     Reward,
@@ -71,12 +73,23 @@ CREATE TABLE IF NOT EXISTS campaign_groups (
     tracking_code TEXT NOT NULL UNIQUE,
     tracking_url  TEXT NOT NULL DEFAULT '',
     added_at      TEXT NOT NULL,
+    -- Protokoll des Beitrags. Am Paar, nicht an der Gruppe: Dieselbe Gruppe
+    -- kann in zwei Kampagnen stehen und traegt dann zwei Beitraege.
+    post_status     TEXT NOT NULL DEFAULT 'offen',
+    posted_at       TEXT,
+    last_attempt_at TEXT,
+    post_attempts   INTEGER NOT NULL DEFAULT 0,
+    post_error      TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (campaign_id, group_id),
     FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
     FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_campaign_groups_group ON campaign_groups(group_id);
+
+-- Die Arbeitsliste fragt immer nach einer Kampagne und einem Stand.
+CREATE INDEX IF NOT EXISTS idx_campaign_groups_post
+    ON campaign_groups(campaign_id, post_status);
 
 CREATE TABLE IF NOT EXISTS group_marketing (
     group_id          TEXT PRIMARY KEY,
@@ -177,6 +190,32 @@ CREATE TABLE IF NOT EXISTS marketing_meta (
 );
 """
 
+# Dritter Teil: der Uebergang vom anonymen Besucher zum angemeldeten Benutzer.
+#
+# Ein Mensch traegt auf dem Weg durch den Trichter nacheinander verschiedene
+# Kennungen: erst die des Browsers, den die Web-App sich selbst vergibt
+# ("anon-..."), spaeter die Benutzerkennung der Anwendung ("user-8472").
+# Ohne diese Tabelle sind das fuer die Auswertung zwei verschiedene Menschen -
+# und die Zuordnung zur Facebook-Gruppe, die allein am ersten Besuch haengt,
+# geht beim Registrieren verloren. Genau dort ist sie verloren gegangen.
+#
+# Gespeichert wird nur, dass zwei undurchsichtige Kennungen zusammengehoeren.
+# Es kommt kein Feld hinzu, das einen Menschen benennt: ``user_ref`` ist und
+# bleibt eine Kennung aus der Zielanwendung.
+SCHEMA_IDENTITAETEN = """
+CREATE TABLE IF NOT EXISTS user_identities (
+    -- Eine der Kennungen, unter denen derselbe Mensch aufgetreten ist.
+    user_ref   TEXT PRIMARY KEY,
+    -- Die gemeinsame Kennung der Gruppe. Ohne Zeile gilt jede Kennung als
+    -- ihre eigene Identitaet - die Tabelle bleibt leer, solange niemand
+    -- zweimal auftritt.
+    identity   TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_identities ON user_identities(identity);
+"""
+
 
 class UnknownGroupError(KeyError):
     """Die Gruppe steht nicht im Bestand - ohne sie gibt es nichts zu bewerben."""
@@ -215,6 +254,7 @@ class MarketingStore:
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
         self.conn.executescript(SCHEMA_TRACKING)
+        self.conn.executescript(SCHEMA_IDENTITAETEN)
         if not vorhanden:
             # Eine hier neu entstandene Datei traegt das aktuelle Schema und
             # muss das auch sagen. Ohne die Versionsnummer hielte der naechste
@@ -506,6 +546,111 @@ class MarketingStore:
         ).fetchall()
         return [self._row_to_link(row) for row in rows]
 
+    # -- Protokoll des Beitrags ------------------------------------------
+    def set_post_status(
+        self,
+        campaign_id: str,
+        group_id: str,
+        status: PostStatus,
+        fehler: str = "",
+    ) -> CampaignGroup | None:
+        """Haelt fest, was beim Beitrag herauskam. Returns: der neue Stand.
+
+        ``posted_at`` wird nur beim **ersten** Erfolg gesetzt und danach nie
+        ueberschrieben: Die Klicks eines Tracking-Codes gehen auf den Beitrag
+        zurueck, der zuerst stand. Ein spaeteres erneutes Posten aendert daran
+        nichts, und ein Datum, das mitwandert, machte die Frage "seit wann
+        laeuft dieser Link?" unbeantwortbar.
+
+        ``post_attempts`` zaehlt jeden Ausgang mit, auch den Erfolg - die Zahl
+        beantwortet "wie oft haben wir es angefasst?", nicht "wie oft ist es
+        schiefgegangen?". Der Grund des letzten Fehlschlags steht daneben.
+
+        Der Fehlertext wird beim Erfolg geleert. Bliebe er stehen, zeigte die
+        Uebersicht neben einem veroeffentlichten Beitrag den Grund, aus dem er
+        beim vorletzten Mal nicht ging.
+        """
+        jetzt = datetime.now(UTC)
+        cursor = self.conn.execute(
+            """
+            UPDATE campaign_groups
+               SET post_status     = ?,
+                   post_error      = ?,
+                   last_attempt_at = ?,
+                   post_attempts   = post_attempts + 1,
+                   posted_at       = CASE
+                       WHEN ? = 'veroeffentlicht' AND posted_at IS NULL THEN ?
+                       ELSE posted_at
+                   END
+             WHERE campaign_id = ? AND group_id = ?
+            """,
+            (
+                status.value,
+                "" if status is PostStatus.VEROEFFENTLICHT else fehler,
+                _iso(jetzt),
+                status.value,
+                _iso(jetzt),
+                campaign_id,
+                group_id,
+            ),
+        )
+        self.conn.commit()
+        if cursor.rowcount == 0:
+            return None
+        return self.link_for(campaign_id, group_id)
+
+    def offene_links(self, campaign_id: str) -> list[CampaignGroup]:
+        """Die noch zu erledigenden Beitraege einer Kampagne.
+
+        Ausgeschlossene Gruppen (``group_marketing.bearbeiten = 0``) bleiben
+        draussen: Sie sind bereits als "daran arbeiten wir nicht" beurteilt,
+        und in der Arbeitsliste verdeckten sie die brauchbaren. Ihr
+        Tracking-Code bleibt davon unberuehrt gueltig.
+
+        ``uebersprungen`` erscheint ebenfalls nicht - es ist ein Urteil ueber
+        diese Gruppe, kein offener Posten.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT cg.* FROM campaign_groups AS cg
+            LEFT JOIN group_marketing AS gm ON gm.group_id = cg.group_id
+             WHERE cg.campaign_id = ?
+               AND cg.post_status IN ('offen', 'fehlgeschlagen')
+               AND COALESCE(gm.bearbeiten, 1) = 1
+             ORDER BY cg.tracking_code
+            """,
+            (campaign_id,),
+        ).fetchall()
+        return [self._row_to_link(row) for row in rows]
+
+    def post_counts(self, campaign_id: str) -> dict[str, int]:
+        """Wie viele Beitraege je Stand - fuer die Fortschrittsanzeige."""
+        zaehler = {status.value: 0 for status in PostStatus}
+        for row in self.conn.execute(
+            "SELECT post_status, COUNT(*) AS n FROM campaign_groups "
+            "WHERE campaign_id = ? GROUP BY post_status",
+            (campaign_id,),
+        ):
+            zaehler[row["post_status"]] = row["n"]
+        return zaehler
+
+    def fehlgeschlagene_zuruecksetzen(self, campaign_id: str) -> int:
+        """Stellt die fehlgeschlagenen Beitraege wieder in die Arbeitsliste.
+
+        Nur ``fehlgeschlagen``. ``uebersprungen`` bleibt stehen: Dort hat ein
+        Mensch entschieden, dass diese Gruppe nicht passt - ein Sammelbefehl
+        macht diese Entscheidung nicht rueckgaengig. ``post_attempts`` und der
+        Fehlertext bleiben erhalten; sie sind das Gedaechtnis darueber, was
+        beim letzten Mal schiefging.
+        """
+        cursor = self.conn.execute(
+            "UPDATE campaign_groups SET post_status = 'offen' "
+            "WHERE campaign_id = ? AND post_status = 'fehlgeschlagen'",
+            (campaign_id,),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
     def remove_link(self, campaign_id: str, group_id: str) -> int:
         cursor = self.conn.execute(
             "DELETE FROM campaign_groups WHERE campaign_id = ? AND group_id = ?",
@@ -612,30 +757,134 @@ class MarketingStore:
         ).fetchone()
         return row is not None
 
-    def erste_zuordnung(self, user_ref: str) -> tuple[str, str, str]:
-        """Kampagne, Gruppe und Code, ueber die dieser Benutzer erstmals kam.
+    # -- Identitaeten ---------------------------------------------------
+    def identitaet(self, user_ref: str) -> str:
+        """Die gemeinsame Kennung aller Auftritte dieses Menschen.
 
-        Spaetere Meldungen ("qualified", "conversion") tragen den Tracking-Code
-        meist nicht mehr mit - die Zielanwendung kennt zu dem Zeitpunkt nur
-        noch ihren Benutzer. Ohne diese Erbschaft blieben genau die Stufen
-        ohne Gruppe, um die es geht: Welche Gruppe bringt *qualifizierte*
-        Benutzer? Massgeblich ist der **erste** Fund - er hat den Menschen
-        gebracht, nicht ein spaeterer Link.
+        Ohne Eintrag ist eine Kennung ihre eigene Identitaet. Die Tabelle
+        bleibt damit leer, solange niemand unter zwei Kennungen auftritt -
+        gespeichert wird nur, was tatsaechlich zusammengehoert.
         """
+        if not user_ref:
+            return ""
         row = self.conn.execute(
-            "SELECT campaign_id, group_id, tracking_code FROM tracking_events "
-            "WHERE user_ref = ? AND tracking_code <> '' "
+            "SELECT identity FROM user_identities WHERE user_ref = ?", (user_ref,)
+        ).fetchone()
+        return str(row["identity"]) if row else user_ref
+
+    def kennungen(self, user_ref: str) -> list[str]:
+        """Alle Kennungen, unter denen dieser Mensch aufgetreten ist."""
+        if not user_ref:
+            return []
+        ident = self.identitaet(user_ref)
+        rows = self.conn.execute(
+            "SELECT user_ref FROM user_identities WHERE identity = ?", (ident,)
+        ).fetchall()
+        return sorted({user_ref, ident, *(str(row["user_ref"]) for row in rows)})
+
+    def verknuepfe_kennung(self, alias_ref: str, user_ref: str) -> bool:
+        """Haelt fest, dass ``alias_ref`` und ``user_ref`` derselbe Mensch sind.
+
+        Gerufen wird das an genau einer Stelle: wenn eine Meldung beide
+        Kennungen mitbringt - der anonyme Besucher, der sich gerade
+        registriert hat. Die **Benutzerkennung gewinnt** als gemeinsame
+        Identitaet: Sie ist die bestaendige; die anonyme verschwindet mit dem
+        Browserspeicher.
+
+        Nichts wird dabei ueberschrieben. Die alten Ereignisse behalten die
+        Kennung, unter der sie gemeldet wurden - erst beim Lesen werden sie
+        zusammengefuehrt. Eine Zuordnung, die einmal in der Datenbank steht,
+        darf sich nicht nachtraeglich aendern; sie ist die Grundlage von
+        Zahlen, die jemand schon gesehen hat.
+
+        Liefert ``True``, wenn dadurch eine neue Verbindung entstanden ist.
+        """
+        if not alias_ref or not user_ref or alias_ref == user_ref:
+            return False
+
+        ziel = self.identitaet(user_ref)
+        quelle = self.identitaet(alias_ref)
+        if ziel == quelle:
+            return False
+
+        jetzt = _iso(datetime.now(UTC))
+        # Erst die bereits verbundenen Kennungen der anonymen Seite
+        # umhaengen, dann beide Enden selbst eintragen. Andernfalls verloere
+        # eine dritte Kennung, die frueher schon an ``alias_ref`` haengt,
+        # ihren Anschluss.
+        self.conn.execute(
+            "UPDATE user_identities SET identity = ? WHERE identity = ?", (ziel, quelle)
+        )
+        for ref in (user_ref, alias_ref):
+            self.conn.execute(
+                "INSERT INTO user_identities (user_ref, identity, created_at) VALUES (?,?,?) "
+                "ON CONFLICT(user_ref) DO UPDATE SET identity = excluded.identity",
+                (ref, ziel, jetzt),
+            )
+        self.conn.commit()
+        return True
+
+    def erste_zuordnung(self, user_ref: str) -> tuple[str, str, str]:
+        """Kampagne, Gruppe und Code, ueber die dieser Mensch erstmals kam.
+
+        Spaetere Meldungen ("download", "qualified", "conversion") tragen den
+        Tracking-Code meist nicht mehr mit - die Zielanwendung kennt zu dem
+        Zeitpunkt nur noch ihren Benutzer. Ohne diese Erbschaft blieben genau
+        die Stufen ohne Gruppe, um die es geht: Welche Gruppe bringt Benutzer,
+        die die App wirklich holen? Massgeblich ist der **erste** Fund - er hat
+        den Menschen gebracht, nicht ein spaeterer Link.
+
+        Gesucht wird ueber **alle** Kennungen desselben Menschen. Der erste
+        Besuch traegt die anonyme Kennung des Browsers, die Registrierung die
+        Benutzerkennung der Anwendung; nur ueber die eigene Kennung gesucht,
+        endete die Zuordnung genau an diesem Uebergang - und jeder Download
+        danach stand ohne Gruppe da.
+        """
+        refs = self.kennungen(user_ref)
+        if not refs:
+            return "", "", ""
+        platzhalter = ",".join("?" * len(refs))
+        row = self.conn.execute(
+            "SELECT campaign_id, group_id, tracking_code FROM tracking_events "  # noqa: S608
+            f"WHERE user_ref IN ({platzhalter}) AND tracking_code <> '' "  # noqa: S608
             "ORDER BY occurred_at, event_id LIMIT 1",
-            (user_ref,),
+            tuple(refs),
         ).fetchone()
         if row is None:
             return "", "", ""
         return row["campaign_id"], row["group_id"], row["tracking_code"]
 
+    def ereignis_bereits_gezaehlt(self, event_type: EventType, user_ref: str) -> bool:
+        """Gab es dieses Ereignis fuer diesen Menschen schon?
+
+        Nur fuer die Stufen aus ``EINMAL_JE_MENSCH``. Geprueft wird ueber alle
+        Kennungen desselben Menschen - sonst zaehlte derselbe Download vor und
+        nach dem Registrieren zweimal.
+        """
+        refs = self.kennungen(user_ref)
+        if not refs:
+            return False
+        platzhalter = ",".join("?" * len(refs))
+        row = self.conn.execute(
+            "SELECT 1 FROM tracking_events "  # noqa: S608
+            f"WHERE event_type = ? AND user_ref IN ({platzhalter}) LIMIT 1",  # noqa: S608
+            (event_type.value, *refs),
+        ).fetchone()
+        return row is not None
+
     def events_for_user(self, user_ref: str) -> list[TrackingEvent]:
         rows = self.conn.execute(
             "SELECT * FROM tracking_events WHERE user_ref = ? ORDER BY occurred_at",
             (user_ref,),
+        ).fetchall()
+        return [self._row_to_event(row) for row in rows]
+
+    def events_for_code(self, tracking_code: str) -> list[TrackingEvent]:
+        """Alle Ereignisse, die diesem Tracking-Code zugeordnet sind."""
+        rows = self.conn.execute(
+            "SELECT * FROM tracking_events WHERE tracking_code = ? "
+            "ORDER BY occurred_at, event_id",
+            (tracking_code,),
         ).fetchall()
         return [self._row_to_event(row) for row in rows]
 
@@ -648,10 +897,11 @@ class MarketingStore:
     def counts_by(self, spalte: str) -> dict[tuple[str, str], int]:
         """Ereigniszahlen je Gruppe bzw. Kampagne.
 
-        ``spalte`` ist ``group_id`` oder ``campaign_id`` - beides sind eigene
-        Spaltennamen dieser Tabelle, keine Eingabe von aussen.
+        ``spalte`` ist ``group_id``, ``campaign_id`` oder ``tracking_code`` -
+        alle drei sind eigene Spaltennamen dieser Tabelle, keine Eingabe von
+        aussen.
         """
-        if spalte not in {"group_id", "campaign_id"}:
+        if spalte not in {"group_id", "campaign_id", "tracking_code"}:
             raise ValueError(f"Unzulaessige Spalte: {spalte}")
         rows = self.conn.execute(
             f"SELECT {spalte} AS schluessel, event_type, COUNT(*) AS anzahl "  # noqa: S608
@@ -898,6 +1148,11 @@ class MarketingStore:
             tracking_code=row["tracking_code"],
             tracking_url=row["tracking_url"],
             added_at=row["added_at"],
+            post_status=row["post_status"],
+            posted_at=row["posted_at"],
+            last_attempt_at=row["last_attempt_at"],
+            post_attempts=row["post_attempts"],
+            post_error=row["post_error"],
         )
 
     @staticmethod

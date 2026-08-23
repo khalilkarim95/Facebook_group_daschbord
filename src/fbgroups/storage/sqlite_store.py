@@ -15,10 +15,11 @@ import sqlite3
 from pathlib import Path
 
 from fbgroups.marketing.store import SCHEMA as MARKETING_SCHEMA
+from fbgroups.marketing.store import SCHEMA_IDENTITAETEN as MARKETING_IDENTITAETEN_SCHEMA
 from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEMA
 from fbgroups.models import Group, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 10
 
 # Schritte, die eine aeltere Datei nachholt, ohne dass der Bestand neu
 # aufgebaut werden muss. Handgepflegte Notizen bleiben so erhalten.
@@ -78,6 +79,35 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
         ON CONFLICT(group_id) DO NOTHING
         """,
     ),
+    # Protokoll des Beitrags am Paar aus Kampagne und Gruppe.
+    #
+    # Bewusst KEINE Uebernahme aus group_marketing.last_posted_at: Das Feld
+    # gilt fuer die Gruppe, der neue Stand fuer das Paar. Eine Gruppe in zwei
+    # Kampagnen bekaeme sonst beide Beitraege als erledigt gemeldet, obwohl
+    # nur einer geschrieben wurde - und die Arbeitsliste verschwiege eine
+    # offene Aufgabe. Bestehende Zuordnungen starten deshalb auf 'offen'.
+    # Das ist die vorsichtige Richtung: Eine Gruppe zu viel in der Liste
+    # kostet einen Blick, eine zu wenig kostet einen Beitrag.
+    #
+    # Nichts an den Tracking-Daten wird angefasst - weder Codes noch URLs
+    # noch Ereignisse. Die Spalten kommen additiv dazu.
+    8: (
+        "ALTER TABLE campaign_groups ADD COLUMN post_status TEXT NOT NULL DEFAULT 'offen'",
+        "ALTER TABLE campaign_groups ADD COLUMN posted_at TEXT",
+        "ALTER TABLE campaign_groups ADD COLUMN last_attempt_at TEXT",
+        "ALTER TABLE campaign_groups ADD COLUMN post_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE campaign_groups ADD COLUMN post_error TEXT NOT NULL DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS idx_campaign_groups_post "
+        "ON campaign_groups(campaign_id, post_status)",
+    ),
+    # Der Uebergang vom anonymen Besucher zum angemeldeten Benutzer.
+    #
+    # Rein additiv: eine neue Tabelle, kein Feld an den Ereignissen, keine
+    # Zeile veraendert. Bestehende Ereignisse behalten ihre Kennung und ihren
+    # Tracking-Code; die Tabelle wirkt erst auf Meldungen, die *beide*
+    # Kennungen mitbringen. Ein Bestand, der bis hierher gelaufen ist,
+    # rechnet danach exakt dieselben Zahlen aus wie vorher.
+    9: (MARKETING_IDENTITAETEN_SCHEMA,),
 }
 
 SCHEMA = """
@@ -183,6 +213,7 @@ class SqliteStore:
         # nachdem, welcher Speicher sie zuerst oeffnet.
         self.conn.executescript(MARKETING_SCHEMA)
         self.conn.executescript(MARKETING_TRACKING_SCHEMA)
+        self.conn.executescript(MARKETING_IDENTITAETEN_SCHEMA)
         self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
 

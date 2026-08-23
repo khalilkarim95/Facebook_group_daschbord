@@ -334,7 +334,27 @@ def rescore_command(
 
         for group in groups:
             classify_group(group, config, phase)
-        bewertet = score_all(groups, config)
+
+        # Die gemessene Resonanz wird hier geholt und hereingereicht: Der Kern
+        # in scoring.py kennt die Marketing-Erweiterung nicht. Fehlt die
+        # Tabelle (eine Datei aus alter Zeit), bleibt die Bewertung die
+        # bisherige, statt den ganzen Lauf abzubrechen.
+        try:
+            from fbgroups.marketing.resonanz import resonanz_je_gruppe
+            from fbgroups.marketing.store import MarketingStore
+
+            with MarketingStore(config.path("sqlite_path")) as mstore:
+                gemessen = resonanz_je_gruppe(mstore)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]Resonanz nicht lesbar ({exc}) - ohne sie bewertet.[/yellow]")
+            gemessen = {}
+
+        bewertet = score_all(groups, config, gemessen)
+        if gemessen:
+            console.print(
+                f"[dim]Gemessene Resonanz fuer {len(gemessen)} Gruppen mit "
+                f"veroeffentlichtem Beitrag.[/dim]"
+            )
 
         geaendert = [g for g in bewertet if g.score != vorher[g.group_id]]
         if dry_run:
@@ -815,14 +835,36 @@ def config_check_command() -> None:
     table.add_row("Geplante Anfragen", str(len(build_queries(config, 1))))
     console.print(table)
 
+    # Zwei Bloecke mit verschiedener Aufgabe: Die Passung beurteilt, ob die
+    # Gruppe zu uns gehoert (Zielgruppe, Stadt, Kategorie, Name, Groesse), die
+    # Resonanz, was sie tatsaechlich gebracht hat. Nur der erste Block soll
+    # 100 ergeben - beide zusammen zu pruefen hiesse, das Einschalten der
+    # Resonanz als Fehler zu melden.
     weights = config.get("scoring", "weights", default={}) or {}
-    total = sum(float(v) for v in weights.values())
+    passung = {k: float(v) for k, v in weights.items() if not k.startswith("resonanz_")}
+    resonanz = {k: float(v) for k, v in weights.items() if k.startswith("resonanz_")}
+
+    total = sum(passung.values())
     if abs(total - 100.0) > 0.01:
         console.print(
-            f"[yellow]Warnung: Summe der Scoring-Gewichte ist {total}, erwartet 100.[/yellow]"
+            f"[yellow]Warnung: Summe der Passungs-Gewichte ist {total}, erwartet 100.[/yellow]"
         )
     else:
-        console.print("[green]Scoring-Gewichte ergeben 100.[/green]")
+        console.print("[green]Passungs-Gewichte ergeben 100.[/green]")
+
+    aktiv = sum(resonanz.values())
+    if aktiv > 0:
+        teile = ", ".join(
+            f"{name.removeprefix('resonanz_')} {gewicht:g}"
+            for name, gewicht in resonanz.items()
+            if gewicht > 0
+        )
+        console.print(
+            f"[green]Gemessene Resonanz eingeschaltet:[/green] "
+            f"{aktiv:g} zusaetzliche Punkte ({teile})."
+        )
+    else:
+        console.print("[dim]Gemessene Resonanz abgeschaltet (alle Gewichte 0).[/dim]")
 
     seeds_dir = config.path("seeds_dir")
     seed_files = sorted(p.name for p in seeds_dir.glob("*") if p.suffix.lower() in {".csv", ".txt"})

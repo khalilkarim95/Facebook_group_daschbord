@@ -6,8 +6,9 @@ Zwei Unterbefehle, die an die bestehende Anwendung angehaengt werden:
     fbgroups marketing ...   Arbeitsstand je Gruppe pflegen
 
 Kein Befehl dieses Moduls ruft facebook.com auf, veroeffentlicht etwas oder
-verschickt etwas. ``campaign message`` gibt die Textvorlage aus - abschicken
-muss sie ein Mensch.
+verschickt etwas. ``campaign message`` gibt die Textvorlage aus, ``campaign
+next`` legt sie zusaetzlich in die Zwischenablage und oeffnet die Gruppe im
+Browser - einfuegen und abschicken muss beides ein Mensch.
 """
 
 from __future__ import annotations
@@ -22,7 +23,14 @@ from rich.panel import Panel
 from rich.table import Table
 
 from fbgroups.config import AppConfig, load_config
-from fbgroups.marketing.analytics import funnel, kennzahlen, top_campaigns, top_groups
+from fbgroups.marketing.analytics import (
+    code_bericht,
+    funnel,
+    kennzahlen,
+    top_campaigns,
+    top_groups,
+)
+from fbgroups.marketing.beitrag import beitragstext, in_zwischenablage, oeffne_im_browser
 from fbgroups.marketing.models import (
     MARKETING_FORTSCHRITT,
     Campaign,
@@ -33,6 +41,7 @@ from fbgroups.marketing.models import (
     GroupMarketing,
     MarketingStatus,
     PermissionStatus,
+    PostStatus,
     ReferralStatus,
     RewardStatus,
 )
@@ -736,9 +745,10 @@ def campaign_message(
         console.print(f"[red]{group_id} ist dieser Kampagne nicht zugeordnet.[/red]")
         raise typer.Exit(code=1)
 
-    text = (campaign.message_template or "").replace("{link}", link.tracking_url)
-    text = text.replace("{tracking_code}", link.tracking_code)
-    text = text.replace("{landing_page}", campaign.landing_page)
+    # Derselbe Textbauer wie queue, next und die Uebersicht - eine zweite
+    # Fassung koennte abweichen, und der Unterschied fiele erst auf, wenn
+    # ein Beitrag mit dem falschen Code veroeffentlicht ist.
+    text = beitragstext(campaign, link)
 
     console.print(
         Panel(
@@ -747,6 +757,321 @@ def campaign_message(
             subtitle="von Hand einfuegen und absenden",
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Arbeitsliste: welcher Beitrag steht noch aus?
+# ---------------------------------------------------------------------------
+
+_POST_FARBE = {
+    PostStatus.OFFEN: "yellow",
+    PostStatus.VEROEFFENTLICHT: "green",
+    PostStatus.FEHLGESCHLAGEN: "red",
+    PostStatus.UEBERSPRUNGEN: "dim",
+}
+
+
+def _gruppen_nach_id(gruppen_store: SqliteStore) -> dict[str, Group]:
+    return {g.group_id: g for g in gruppen_store.load_groups()}
+
+
+def _fortschritt_zeile(zaehler: dict[str, int]) -> str:
+    """Eine Zeile mit allen Staenden - immer alle vier, auch die leeren.
+
+    Ein Stand, der bei 0 verschwindet, laesst die Zeile je nach Datenlage
+    anders aussehen; man vergleicht dann zwei Laeufe und sucht die Spalte.
+    """
+    gesamt = sum(zaehler.values())
+    teile = [
+        f"[{_POST_FARBE[status]}]{zaehler.get(status.value, 0)} {status.value}[/]"
+        for status in PostStatus
+    ]
+    return " · ".join(teile) + f"  (von {gesamt})"
+
+
+def _nach_rang(links: list[CampaignGroup], gruppen: dict[str, Group]) -> list[CampaignGroup]:
+    """Beste Gruppen zuerst.
+
+    Wer die Liste nicht zu Ende bringt - und bei 300 Gruppen bringt sie
+    niemand an einem Tag zu Ende -, hat dann die wertvollsten Beitraege
+    geschrieben und nicht die alphabetisch ersten. Gruppen ohne Datensatz
+    wandern ans Ende statt zu verschwinden: Ein Beitrag, der nicht in der
+    Liste steht, wird nie geschrieben.
+    """
+    bekannt = [gruppen[link.group_id] for link in links if link.group_id in gruppen]
+    reihenfolge = {g.group_id: i for i, g in enumerate(sort_by_rank(bekannt))}
+    return sorted(links, key=lambda link: reihenfolge.get(link.group_id, len(reihenfolge)))
+
+
+@campaign_app.command("queue")
+def campaign_queue(
+    campaign_id: str = typer.Argument(...),
+    alle: bool = typer.Option(
+        False, "--alle", help="Auch die erledigten und uebersprungenen zeigen."
+    ),
+    limit: int = typer.Option(0, "--limit", help="Hoechstens so viele Zeilen (0 = alle)."),
+) -> None:
+    """Zeigt die Arbeitsliste: welcher Beitrag steht in welcher Gruppe noch aus.
+
+    Ohne ``--alle`` erscheinen nur die offenen und die fehlgeschlagenen. Genau
+    darum geht es: Bei 300 Gruppen ist die Frage nicht "was gibt es?", sondern
+    "was fehlt noch?".
+    """
+    config = _config()
+    gruppen_store, store = _stores(config)
+    try:
+        _kampagne_oder_ende(store, campaign_id)
+        links = store.links_for_campaign(campaign_id) if alle else store.offene_links(campaign_id)
+        zaehler = store.post_counts(campaign_id)
+        gruppen = _gruppen_nach_id(gruppen_store)
+        staende = store.load_all_marketing()
+    finally:
+        gruppen_store.close()
+        store.close()
+
+    console.print(_fortschritt_zeile(zaehler))
+
+    if not links:
+        console.print(
+            "[yellow]Dieser Kampagne ist noch keine Gruppe zugeordnet.[/yellow]"
+            if alle
+            else "[green]Nichts offen.[/green]"
+        )
+        return
+
+    links = _nach_rang(links, gruppen)
+    if limit > 0:
+        links = links[:limit]
+
+    tabelle = Table(show_header=True, header_style="bold")
+    tabelle.add_column("#", justify="right", width=4)
+    tabelle.add_column("Gruppe")
+    tabelle.add_column("Tracking-Code")
+    tabelle.add_column("Stand")
+    tabelle.add_column("Beitrag")
+    tabelle.add_column("Grund")
+
+    for nummer, link in enumerate(links, start=1):
+        group = gruppen.get(link.group_id)
+        stand = staende.get(link.group_id)
+        post = PostStatus(link.post_status)
+        tabelle.add_row(
+            str(nummer),
+            (group.name if group else link.group_id) or "(ohne Namen)",
+            link.tracking_code,
+            stand.marketing_status.value if stand else MarketingStatus.NOT_CONTACTED.value,
+            f"[{_POST_FARBE[post]}]{post.value}[/]",
+            link.post_error or "",
+        )
+
+    console.print(tabelle)
+
+
+@campaign_app.command("fortschritt")
+def campaign_fortschritt(campaign_id: str = typer.Argument(...)) -> None:
+    """Wie weit die Kampagne beim Veroeffentlichen ist."""
+    config = _config()
+    with MarketingStore(config.path("sqlite_path")) as store:
+        campaign = _kampagne_oder_ende(store, campaign_id)
+        zaehler = store.post_counts(campaign_id)
+        offen = len(store.offene_links(campaign_id))
+
+    console.print(Panel(_fortschritt_zeile(zaehler), title=campaign.name))
+    # Nicht dasselbe wie die Summe der offenen oben: Ausgeschlossene Gruppen
+    # zaehlen dort mit, stehen aber nicht in der Arbeitsliste. Ohne diese Zeile
+    # wundert man sich, warum 40 offene Beitraege nur 12 Zeilen ergeben.
+    console.print(
+        f"In der Arbeitsliste: [bold]{offen}[/bold] "
+        "(ausgeschlossene Gruppen zaehlen nicht mit)"
+    )
+
+
+@campaign_app.command("posted")
+def campaign_posted(
+    campaign_id: str = typer.Argument(...),
+    group_id: str = typer.Argument(...),
+    fehler: str = typer.Option(None, "--fehler", help="Grund - macht daraus einen Fehlschlag."),
+    ueberspringen: bool = typer.Option(False, "--ueberspringen", help="Gruppe passt nicht."),
+) -> None:
+    """Traegt das Ergebnis eines Beitrags nach - fuer eine einzelne Gruppe."""
+    if fehler and ueberspringen:
+        console.print("[red]--fehler und --ueberspringen schliessen einander aus.[/red]")
+        raise typer.Exit(code=2)
+
+    status = (
+        PostStatus.FEHLGESCHLAGEN
+        if fehler
+        else PostStatus.UEBERSPRUNGEN
+        if ueberspringen
+        else PostStatus.VEROEFFENTLICHT
+    )
+
+    config = _config()
+    with MarketingStore(config.path("sqlite_path")) as store:
+        _kampagne_oder_ende(store, campaign_id)
+        link = store.set_post_status(campaign_id, group_id, status, fehler or "")
+
+    if link is None:
+        console.print(f"[red]{group_id} ist dieser Kampagne nicht zugeordnet.[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"[{_POST_FARBE[status]}]{status.value}[/] · {link.tracking_code} · "
+        f"Versuch {link.post_attempts}"
+    )
+
+
+@campaign_app.command("retry")
+def campaign_retry(campaign_id: str = typer.Argument(...)) -> None:
+    """Stellt die fehlgeschlagenen Beitraege zurueck in die Arbeitsliste.
+
+    ``uebersprungen`` bleibt stehen - dort hat ein Mensch entschieden, dass
+    die Gruppe nicht passt.
+    """
+    config = _config()
+    with MarketingStore(config.path("sqlite_path")) as store:
+        _kampagne_oder_ende(store, campaign_id)
+        anzahl = store.fehlgeschlagene_zuruecksetzen(campaign_id)
+
+    console.print(f"[green]{anzahl}[/green] wieder offen. Uebersprungene bleiben unberuehrt.")
+
+
+# Staende, in denen ein Beitrag ueberhaupt moeglich ist: Bei Facebook muss man
+# aufgenommen sein, bevor man posten kann.
+_POSTEN_MOEGLICH: frozenset[MarketingStatus] = frozenset(
+    {
+        MarketingStatus.MEMBER,
+        MarketingStatus.CONTACTED,
+        MarketingStatus.INTERESTED,
+        MarketingStatus.APPROVED,
+        MarketingStatus.ACTIVE,
+    }
+)
+
+
+@campaign_app.command("next")
+def campaign_next(
+    campaign_id: str = typer.Argument(...),
+    limit: int = typer.Option(0, "--limit", help="Hoechstens so viele Gruppen (0 = alle)."),
+    nur_mitglied: bool = typer.Option(
+        False,
+        "--nur-mitglied",
+        help="Nur Gruppen, in denen wir laut Arbeitsstand aufgenommen sind.",
+    ),
+    kein_browser: bool = typer.Option(False, "--kein-browser", help="Nichts oeffnen."),
+    keine_zwischenablage: bool = typer.Option(
+        False, "--keine-zwischenablage", help="Nichts kopieren."
+    ),
+) -> None:
+    """Arbeitet die Liste Gruppe fuer Gruppe ab - Text bereit, Gruppe offen.
+
+    Je Gruppe: der fertige Text mit **ihrem** Tracking-Link liegt in der
+    Zwischenablage, die Gruppe steht im Browser. Einfuegen, absenden, eine
+    Taste druecken - der Ausgang wird sofort protokolliert und die naechste
+    Gruppe kommt. Das Programm sieht Facebook dabei nie; es weiss nur, was
+    der Mensch ihm sagt.
+
+    Der Tracking-Code steht nirgends im Code: Er kommt fuer jede Gruppe aus
+    ihrer Zuordnung. Ob 3 Gruppen oder 300 - der Ablauf ist derselbe.
+
+    ``uebersprungen`` ist ein eigener Ausgang und kein Fehlschlag: "passt
+    nicht" ist ein Urteil, und ``campaign retry`` holt es spaeter nicht
+    versehentlich zurueck.
+    """
+    config = _config()
+    gruppen_store, store = _stores(config)
+    try:
+        campaign = _kampagne_oder_ende(store, campaign_id)
+        links = store.offene_links(campaign_id)
+        gruppen = _gruppen_nach_id(gruppen_store)
+        staende = store.load_all_marketing()
+    finally:
+        gruppen_store.close()
+
+    try:
+        if not campaign.message_template:
+            console.print(
+                "[red]Diese Kampagne hat keine Textvorlage.[/red]\n"
+                f"Setzen mit:  fbgroups campaign set {campaign_id} --vorlage ..."
+            )
+            raise typer.Exit(code=2)
+
+        if nur_mitglied:
+            links = [
+                link
+                for link in links
+                if (
+                    staende.get(link.group_id) or GroupMarketing(group_id=link.group_id)
+                ).marketing_status
+                in _POSTEN_MOEGLICH
+            ]
+
+        if not links:
+            console.print("[green]Nichts offen.[/green]")
+            return
+
+        links = _nach_rang(links, gruppen)
+        if limit > 0:
+            links = links[:limit]
+
+        gesamt = len(links)
+        for nummer, link in enumerate(links, start=1):
+            group = gruppen.get(link.group_id)
+            name = (group.name if group else "") or link.group_id
+            text = beitragstext(campaign, link)
+
+            kopiert = False if keine_zwischenablage else in_zwischenablage(text)
+            geoeffnet = (
+                False
+                if kein_browser or group is None
+                else oeffne_im_browser(group.url_canonical)
+            )
+
+            hinweise = [link.tracking_code]
+            if kopiert:
+                hinweise.append("Text kopiert")
+            if geoeffnet:
+                hinweise.append("Gruppe geoeffnet")
+
+            console.print()
+            console.print(
+                Panel(text, title=f"[{nummer}/{gesamt}]  {name}", subtitle=" · ".join(hinweise))
+            )
+            # Ohne Browser (oder wenn er nicht aufging) bleibt die URL das
+            # Einzige, womit man weiterkommt.
+            if group is not None and not geoeffnet:
+                console.print(f"[dim]{group.url_canonical}[/dim]")
+
+            antwort = (
+                console.input(
+                    "[bold][Enter][/bold] veroeffentlicht · [bold]f[/bold] Fehler · "
+                    "[bold]u[/bold] ueberspringen · [bold]q[/bold] Schluss  > "
+                )
+                .strip()
+                .lower()
+            )
+
+            if antwort == "q":
+                # nummer - 1: Diese Gruppe wurde gerade nicht bearbeitet.
+                console.print(f"[dim]Abgebrochen nach {nummer - 1} von {gesamt}.[/dim]")
+                break
+            if antwort == "u":
+                store.set_post_status(campaign_id, link.group_id, PostStatus.UEBERSPRUNGEN)
+                console.print("[dim]uebersprungen[/dim]")
+            elif antwort == "f":
+                grund = console.input("Grund: ").strip()
+                store.set_post_status(
+                    campaign_id, link.group_id, PostStatus.FEHLGESCHLAGEN, grund
+                )
+                console.print(f"[red]fehlgeschlagen[/red] · {grund}")
+            else:
+                store.set_post_status(campaign_id, link.group_id, PostStatus.VEROEFFENTLICHT)
+                console.print(f"[green]veroeffentlicht[/green] · {link.tracking_code}")
+
+        console.print()
+        console.print(_fortschritt_zeile(store.post_counts(campaign_id)))
+    finally:
+        store.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1023,6 +1348,8 @@ def marketing_overview() -> None:
     table.add_row("Tracking-Codes", str(len(links)))
     table.add_row("Clicks", str(zahlen["clicks"]))
     table.add_row("Registrations", str(zahlen["registrations"]))
+    table.add_row("Downloads", str(zahlen["downloads"]))
+    table.add_row("Activations", str(zahlen["activated"]))
     table.add_row("Qualified Users", str(zahlen["qualified"]))
     table.add_row("Conversions", str(zahlen["conversions"]))
     table.add_row("Referrals", f"{zahlen['referrals']}  (qualifiziert: "
@@ -1074,6 +1401,7 @@ def marketing_analytics(
         table.add_column(titel.split()[-1])
         table.add_column("Clicks", justify="right")
         table.add_column("Registrations", justify="right")
+        table.add_column("Downloads", justify="right")
         table.add_column("Qualified", justify="right")
         table.add_column("Conversions", justify="right")
         table.add_column("Rate", justify="right")
@@ -1083,6 +1411,7 @@ def marketing_analytics(
                 zeile.label[:38],
                 str(zeile.clicks),
                 str(zeile.registrations),
+                str(zeile.downloads),
                 str(zeile.qualified),
                 str(zeile.conversions),
                 f"{rate} %" if rate is not None else "[dim]-[/dim]",
@@ -1106,19 +1435,100 @@ def marketing_analytics(
         with output.open("w", encoding="utf-8-sig", newline="") as fh:
             writer = csv.writer(fh, delimiter=";")
             writer.writerow(
-                ["ebene", "schluessel", "name", "clicks", "registrations",
-                 "qualified", "conversions", "conversion_rate"]
+                ["ebene", "schluessel", "name", "clicks", "landing_visits",
+                 "registrations", "downloads", "activations", "qualified",
+                 "conversions", "conversion_rate"]
             )
             for ebene, zeilen in (("group", gruppen_liste), ("campaign", kampagnen_liste)):
                 for zeile in zeilen:
                     writer.writerow(
                         [
                             ebene, zeile.schluessel, zeile.label, zeile.clicks,
-                            zeile.registrations, zeile.qualified, zeile.conversions,
+                            zeile.landing_visits, zeile.registrations,
+                            zeile.downloads, zeile.activations, zeile.qualified,
+                            zeile.conversions,
                             zeile.conversion_rate if zeile.conversion_rate is not None else "",
                         ]
                     )
         console.print(f"[green]CSV:[/green] {output}")
+
+
+@marketing_app.command("code")
+def marketing_code(
+    tracking_code: str = typer.Argument(..., help="z. B. FB-SYR-KLN-002"),
+    benutzer: bool = typer.Option(
+        False, "--benutzer", "-b", help="Die Menschen dahinter einzeln zeigen."
+    ),
+) -> None:
+    """Der Trichter eines einzelnen Tracking-Codes.
+
+    Beantwortet die Frage, die eine Gesamtzahl nicht beantwortet: Gehoeren
+    dieser Download und diese Aktivierung wirklich zu **diesem** Code? Mit
+    ``--benutzer`` steht die Begruendung daneben - je Mensch die Kennungen,
+    unter denen er aufgetreten ist, und die Stufen, die auf ihn entfallen.
+    """
+    config = _config()
+    gruppen_store, store = _stores(config)
+    try:
+        namen = {g.group_id: (g.name or g.group_id) for g in gruppen_store.load_groups()}
+        bericht = code_bericht(store, tracking_code, namen)
+    finally:
+        gruppen_store.close()
+        store.close()
+
+    if not bericht.group_id and not bericht.zahlen:
+        console.print(
+            f"[yellow]{tracking_code}[/yellow] ist keiner Gruppe zugeordnet und hat "
+            f"keine Ereignisse.\n"
+            f"Vergebene Codes zeigt: fbgroups campaign links <kampagne>"
+        )
+        raise typer.Exit(code=1)
+
+    kopf = Table(title=f"Tracking-Code {tracking_code}", show_header=False, box=None)
+    kopf.add_row("Facebook-Gruppe", bericht.group_name or "[dim]unbekannt[/dim]")
+    kopf.add_row("Gruppen-ID", bericht.group_id or "[dim]-[/dim]")
+    kopf.add_row("Kampagne", bericht.campaign_id or "[dim]-[/dim]")
+    console.print(kopf)
+
+    stufen = Table(title="Trichter")
+    stufen.add_column("Stufe")
+    stufen.add_column("Anzahl", justify="right")
+    stufen.add_column("Woher", style="dim")
+    for stufe, anzahl in bericht.stufen:
+        stufen.add_row(stufe.value, str(anzahl), _WOHER.get(stufe.value, ""))
+    console.print(stufen)
+
+    if not benutzer:
+        console.print("[dim]Mit --benutzer steht daneben, wer dahintersteckt.[/dim]")
+        return
+
+    if not bericht.benutzer:
+        console.print("[dim]Noch niemand - bisher nur Klicks, und die tragen "
+                      "keine Kennung.[/dim]")
+        return
+
+    wege = Table(title="Menschen hinter diesem Code")
+    wege.add_column("Kennungen")
+    wege.add_column("Stufen")
+    for weg in bericht.benutzer:
+        wege.add_row(
+            "\n".join(weg.kennungen),
+            " -> ".join(stufe.value for stufe in weg.stufen),
+        )
+    console.print(wege)
+
+
+# Wer die Stufe erzeugt. Steht in der Ausgabe, weil die haeufigste Frage bei
+# einer Null lautet "ist das kaputt oder meldet es nur niemand?".
+_WOHER: dict[str, str] = {
+    "click": "Redirect-Dienst (hier)",
+    "landing_visit": "Web-App ueber die API",
+    "registration": "API",
+    "download": "API",
+    "activation": "mobile App ueber die API",
+    "qualified": "API",
+    "conversion": "API",
+}
 
 
 # ---------------------------------------------------------------------------

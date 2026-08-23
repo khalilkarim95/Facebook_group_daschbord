@@ -77,6 +77,13 @@ class ScoreBreakdown(BaseModel):
     category_match: float = 0.0
     member_count: float = 0.0
     name_quality: float = 0.0
+    # -- Gemessene Resonanz ------------------------------------------------
+    # Was die Gruppe tatsaechlich gebracht hat, nicht was sie verspricht. Die
+    # Zahlen stammen aus den eigenen Tracking-Ereignissen - dem einzigen
+    # Aktivitaetsmass, das dieses Projekt ohne facebook.com erheben kann.
+    resonanz_engagement: float = 0.0
+    resonanz_reichweite: float = 0.0
+    resonanz_aktualitaet: float = 0.0
 
     def total(self) -> float:
         return round(
@@ -84,7 +91,10 @@ class ScoreBreakdown(BaseModel):
             + self.city_match
             + self.category_match
             + self.member_count
-            + self.name_quality,
+            + self.name_quality
+            + self.resonanz_engagement
+            + self.resonanz_reichweite
+            + self.resonanz_aktualitaet,
             2,
         )
 

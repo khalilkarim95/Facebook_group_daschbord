@@ -36,16 +36,19 @@ from pydantic import BaseModel, Field
 
 from fbgroups.config import AppConfig, load_config
 from fbgroups.marketing.dashboard import (
+    _beitrag_gesamtstand,
     regel_kurzfassung,
     render,
     sammle_daten,
     status_label,
 )
 from fbgroups.marketing.models import (
+    EINMAL_JE_MENSCH,
     Campaign,
     CampaignStatus,
     EventType,
     MarketingStatus,
+    PostStatus,
     ReferralStatus,
     TrackingEvent,
 )
@@ -177,6 +180,22 @@ class BearbeitenMeldung(BaseModel):
     grund: str = Field(default="", max_length=200)
 
 
+class BeitragMeldung(BaseModel):
+    """Was beim Beitrag in einer Gruppe herauskam.
+
+    Nur die beiden Ausgaenge, die ein Klick in der Uebersicht erzeugen kann.
+    ``uebersprungen`` fehlt bewusst: Das ist ein Urteil ueber die Gruppe und
+    gehoert an die Stelle, an der man sie ohnehin betrachtet - die
+    Kommandozeile (``campaign posted --ueberspringen``). Ein Knopf mehr in der
+    Zeile machte die haeufige Handlung schwerer zu treffen.
+    """
+
+    campaign_id: str = Field(min_length=1, max_length=64)
+    group_id: str = Field(min_length=1, max_length=64)
+    status: PostStatus
+    grund: str = Field(default="", max_length=200)
+
+
 class EventMeldung(BaseModel):
     """Was die Zielanwendung meldet.
 
@@ -184,10 +203,21 @@ class EventMeldung(BaseModel):
     E-Mail-Adressen oder Telefonnummern gehoeren nicht hierher und werden auch
     nicht gespeichert, wenn sie faelschlich mitgeschickt wuerden - das Modell
     kennt schlicht keine solchen Felder.
+
+    ``anon_ref`` ist die Kennung, unter der derselbe Mensch **vorher** anonym
+    unterwegs war - die, die sich die Web-App im Browser gibt, bevor es ein
+    Konto gibt. Sie ist der Grund, warum die Zuordnung den Uebergang zum
+    angemeldeten Benutzer ueberlebt: Der erste Besuch traegt sie, die
+    Registrierung traegt beide, alles danach nur noch ``user_ref``. Wer sie
+    weglaesst, verliert die Gruppe genau an dieser Stelle.
+
+    Vor der Anmeldung darf ``anon_ref`` auch allein stehen: Ein Download ohne
+    Konto ist ein gueltiger Fall und wird ueber sie zugeordnet.
     """
 
     event_type: EventType
     user_ref: str = Field(default="", max_length=128)
+    anon_ref: str = Field(default="", max_length=128)
     tracking_code: str = Field(default="", max_length=64)
     referral_code: str = Field(default="", max_length=64)
     occurred_at: datetime | None = None
@@ -455,6 +485,48 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
 
         return JSONResponse(
             {"status": meldung.status.value, "label": status_label(meldung.status.value)}
+        )
+
+    @app.post("/beitrag")
+    def beitrag_eintragen(meldung: BeitragMeldung, request: Request):  # noqa: ANN202
+        """Traegt ein, dass ein Beitrag steht - oder warum nicht.
+
+        Wie ``/stand`` ein Weg fuer den Menschen, der es gerade getan hat:
+        Dieser Dienst sieht Facebook nicht und kann nicht wissen, ob ein
+        Beitrag veroeffentlicht wurde. Er glaubt, was der Mensch ihm sagt.
+
+        Nur von diesem Rechner - die Uebersicht von aussen ist schreibgeschuetzt.
+        """
+        _nur_lokal(request)
+
+        if meldung.status not in (PostStatus.VEROEFFENTLICHT, PostStatus.FEHLGESCHLAGEN):
+            raise HTTPException(status_code=422, detail="Nur veroeffentlicht oder fehlgeschlagen")
+
+        with _store() as store:
+            link = store.set_post_status(
+                meldung.campaign_id, meldung.group_id, meldung.status, meldung.grund
+            )
+            if link is None:
+                raise HTTPException(status_code=404, detail="Unbekannte Zuordnung")
+
+            store.audit(
+                "beitrag_" + meldung.status.value, meldung.group_id, link.tracking_code
+            )
+            # Der Gesamtstand der Gruppe aus derselben Funktion wie die
+            # Uebersicht - eine zweite Fassung im JavaScript koennte abweichen,
+            # und die Zeile zeigte dann etwas anderes als der Filter.
+            alle = store.links_for_group(meldung.group_id)
+            gesamtstand = _beitrag_gesamtstand(
+                [{"status": eintrag.post_status.value} for eintrag in alle]
+            )
+
+        return JSONResponse(
+            {
+                "status": link.post_status.value,
+                "fehler": link.post_error,
+                "versuche": link.post_attempts,
+                "gesamtstand": gesamtstand,
+            }
         )
 
     @app.post("/kampagnen")
@@ -751,6 +823,18 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
     def melde_ereignis(meldung: EventMeldung, request: Request):  # noqa: ANN202
         """Nimmt ein Ereignis der Zielanwendung entgegen.
 
+        **Jede Stufe steht fuer sich.** Kein Ereignis setzt ein anderes
+        voraus, keines erzeugt ein anderes mit: Eine Registrierung ohne
+        Download ist gueltig, ein Download ohne Registrierung ebenso. Das
+        Einzige, was sie verbindet, ist die Zuordnung - die Frage, welcher
+        Facebook-Gruppe dieses Ereignis zu verdanken ist.
+
+        Zugeordnet wird in dieser Reihenfolge: mitgeschickter Tracking-Code,
+        sonst der erste bekannte Code dieses Menschen ueber alle seine
+        Kennungen hinweg. Findet sich keiner, bleibt das Ereignis **ohne**
+        Zuordnung - es einer beliebigen Gruppe zuzuschlagen waere eine
+        erfundene Zahl, und erfundene Zahlen sind schlimmer als fehlende.
+
         Bei ``registration`` mit ``referral_code`` entsteht zugleich die
         Empfehlung - mit allen Pruefungen. Wird sie abgewiesen, ist das
         Ereignis trotzdem gueltig: Der Mensch hat sich ja registriert.
@@ -764,32 +848,76 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         _pruefe_token(request)
 
         with _store() as store:
-            campaign_id = group_id = ""
-            tracking_code = meldung.tracking_code
+            # Unter welcher Kennung dieses Ereignis steht. Vor der Anmeldung
+            # gibt es nur die anonyme; sie ist dann die einzige Spur, die den
+            # Menschen mit seinem ersten Besuch verbindet.
+            kennung = meldung.user_ref or meldung.anon_ref
 
-            if tracking_code:
-                link = store.resolve_code(tracking_code)
+            # Beide Kennungen in einer Meldung heisst: derselbe Mensch, neuer
+            # Name. Das muss VOR der Zuordnung geschehen - sonst sucht die
+            # Erbschaft im naechsten Schritt noch in der falschen Haelfte.
+            if meldung.user_ref and meldung.anon_ref:
+                store.verknuepfe_kennung(meldung.anon_ref, meldung.user_ref)
+
+            campaign_id = group_id = ""
+            tracking_code = ""
+
+            if meldung.tracking_code:
+                link = store.resolve_code(meldung.tracking_code)
                 if link is not None:
                     campaign_id, group_id = link.campaign_id, link.group_id
-            elif meldung.user_ref:
-                # Ohne Code die erste bekannte Zuordnung des Benutzers erben -
-                # sonst blieben spaete Stufen ohne Gruppe, und genau die sind
-                # die interessanten.
-                campaign_id, group_id, tracking_code = store.erste_zuordnung(meldung.user_ref)
+                    tracking_code = meldung.tracking_code
+                else:
+                    # Ein Code, den es nicht gibt (Tippfehler, alter Beitrag,
+                    # abgeschnittene URL). Ihn zu speichern erfaende eine
+                    # Spalte in jeder Auswertung je Code; verworfen wird er
+                    # zugunsten der Erbschaft, die den Menschen kennt.
+                    store.audit("ereignis_unbekannter_code", meldung.tracking_code,
+                                meldung.event_type.value)
+
+            if not tracking_code and kennung:
+                # Ohne Code die erste bekannte Zuordnung dieses Menschen erben -
+                # ueber alle seine Kennungen hinweg. Sonst blieben spaete
+                # Stufen ohne Gruppe, und genau die sind die interessanten.
+                campaign_id, group_id, tracking_code = store.erste_zuordnung(kennung)
+
+            # Ein Ereignis, das je Mensch nur einmal zaehlt (Download), wird
+            # beim zweiten Mal nicht gespeichert. Die Meldung ist trotzdem
+            # angekommen - die Antwort sagt beides.
+            if meldung.event_type in EINMAL_JE_MENSCH and kennung and (
+                store.ereignis_bereits_gezaehlt(meldung.event_type, kennung)
+            ):
+                return JSONResponse(
+                    {
+                        "gespeichert": meldung.event_type.value,
+                        "gezaehlt": False,
+                        "grund": "bereits gezaehlt",
+                        "tracking_code": tracking_code,
+                    }
+                )
 
             store.record_event(
                 TrackingEvent(
                     tracking_code=tracking_code,
                     campaign_id=campaign_id,
                     group_id=group_id,
-                    user_ref=meldung.user_ref,
+                    user_ref=kennung,
                     event_type=meldung.event_type,
                     occurred_at=meldung.occurred_at or datetime.now(UTC),
                     source="api",
                 )
             )
 
-            antwort: dict[str, Any] = {"gespeichert": meldung.event_type.value}
+            # ``tracking_code`` in der Antwort ist kein Geheimnis - er steht in
+            # veroeffentlichten Facebook-Beitraegen. Er ist der Beleg: Die
+            # meldende Anwendung sieht, welcher Gruppe ihr Ereignis
+            # zugeschlagen wurde, und kann das protokollieren, statt es
+            # spaeter aus zwei Datenbanken zusammensuchen zu muessen.
+            antwort: dict[str, Any] = {
+                "gespeichert": meldung.event_type.value,
+                "gezaehlt": True,
+                "tracking_code": tracking_code,
+            }
 
             if meldung.event_type is EventType.REGISTRATION and meldung.user_ref:
                 # Jeder Registrierte bekommt seinen eigenen Empfehlungscode.

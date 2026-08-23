@@ -32,8 +32,26 @@ class Zeile:
         return self.wert(EventType.CLICK)
 
     @property
+    def landing_visits(self) -> int:
+        return self.wert(EventType.LANDING_VISIT)
+
+    @property
     def registrations(self) -> int:
         return self.wert(EventType.REGISTRATION)
+
+    @property
+    def downloads(self) -> int:
+        """Wie viele Menschen von hier aus die App geholt haben.
+
+        Unabhaengig von ``registrations``: Beide Zahlen zaehlen dasselbe
+        Publikum an verschiedenen Stellen. "10 Registrierungen, 3 Downloads"
+        heisst nicht, dass sieben Registrierungen fehlerhaft sind.
+        """
+        return self.wert(EventType.DOWNLOAD)
+
+    @property
+    def activations(self) -> int:
+        return self.wert(EventType.ACTIVATION)
 
     @property
     def qualified(self) -> int:
@@ -105,6 +123,7 @@ def kennzahlen(store: MarketingStore) -> dict[str, int]:
         "clicks": counts.get(EventType.CLICK.value, 0),
         "landing_visits": counts.get(EventType.LANDING_VISIT.value, 0),
         "registrations": counts.get(EventType.REGISTRATION.value, 0),
+        "downloads": counts.get(EventType.DOWNLOAD.value, 0),
         "activated": counts.get(EventType.ACTIVATION.value, 0),
         "qualified": counts.get(EventType.QUALIFIED.value, 0),
         "conversions": counts.get(EventType.CONVERSION.value, 0),
@@ -112,3 +131,92 @@ def kennzahlen(store: MarketingStore) -> dict[str, int]:
         "referrals_qualified": referrals.get("qualified", 0) + referrals.get("converted", 0),
         "rewards": len(store.all_rewards()),
     }
+
+
+@dataclass
+class Benutzerweg:
+    """Ein Mensch und die Stufen, die er unter diesem Code erreicht hat.
+
+    ``kennungen`` nennt alle Namen, unter denen er aufgetreten ist - erst der
+    anonyme Besuch, spaeter das Konto. Sie stehen nebeneinander, damit sich
+    nachvollziehen laesst, **warum** ein Download zu diesem Code gehoert, statt
+    es glauben zu muessen.
+    """
+
+    user_ref: str
+    kennungen: list[str] = field(default_factory=list)
+    stufen: list[EventType] = field(default_factory=list)
+
+    def hat(self, event_type: EventType) -> bool:
+        return event_type in self.stufen
+
+
+@dataclass
+class CodeBericht:
+    """Der Trichter eines einzelnen Tracking-Codes.
+
+    Die Zahlen stehen je Code getrennt und werden nirgends zusammengeworfen:
+    ``FB-SYR-KLN-002`` mit zwei Downloads und ``FB-SYR-BER-001`` mit fuenf
+    sind zwei Zeilen, nie eine Summe mit sieben.
+    """
+
+    tracking_code: str
+    campaign_id: str = ""
+    group_id: str = ""
+    group_name: str = ""
+    zahlen: dict[str, int] = field(default_factory=dict)
+    benutzer: list[Benutzerweg] = field(default_factory=list)
+
+    def wert(self, event_type: EventType) -> int:
+        return self.zahlen.get(event_type.value, 0)
+
+    @property
+    def stufen(self) -> list[tuple[EventType, int]]:
+        """Alle Stufen in der Reihenfolge der Anzeige, auch die leeren.
+
+        Eine fehlende Stufe erscheint als 0 und nicht gar nicht: "keine
+        Downloads" ist eine Aussage, eine fehlende Zeile ist ein Raetsel.
+        """
+        return [(stufe, self.wert(stufe)) for stufe in FUNNEL_ORDER]
+
+
+def code_bericht(
+    store: MarketingStore, tracking_code: str, labels: dict[str, str] | None = None
+) -> CodeBericht:
+    """Alles, was zu einem Tracking-Code gehoert - Zahlen und Menschen dahinter.
+
+    Beantwortet die Frage, an der die letzte Fassung gescheitert ist: Gehoeren
+    dieser Download und diese Aktivierung wirklich zu **diesem** Code? Die
+    Benutzerwege sind die Begruendung: Sie zeigen je Mensch, welche Stufen
+    unter diesem Code auf ihn entfallen.
+    """
+    bericht = CodeBericht(tracking_code=tracking_code)
+
+    link = store.resolve_code(tracking_code)
+    if link is not None:
+        bericht.campaign_id = link.campaign_id
+        bericht.group_id = link.group_id
+        bericht.group_name = (labels or {}).get(link.group_id, "")
+
+    for (code, event_type), anzahl in store.counts_by("tracking_code").items():
+        if code == tracking_code:
+            bericht.zahlen[event_type] = anzahl
+
+    # Je Mensch die Stufen sammeln. Der Klick hat keine Kennung - er gehoert
+    # zum Code, nicht zu einer Person, und erscheint deshalb nur in den
+    # Zahlen, nicht in den Wegen.
+    wege: dict[str, Benutzerweg] = {}
+    for event in store.events_for_code(tracking_code):
+        if not event.user_ref:
+            continue
+        ident = store.identitaet(event.user_ref)
+        weg = wege.setdefault(
+            ident, Benutzerweg(user_ref=ident, kennungen=store.kennungen(ident))
+        )
+        if event.event_type not in weg.stufen:
+            weg.stufen.append(event.event_type)
+
+    for weg in wege.values():
+        weg.stufen.sort(key=FUNNEL_ORDER.index)
+    bericht.benutzer = sorted(wege.values(), key=lambda w: (-len(w.stufen), w.user_ref))
+    return bericht

@@ -7,7 +7,9 @@ gegeben, welcher Link gehoert zu welcher Gruppe.
 
 Das Modul veroeffentlicht nichts und verschickt nichts. Es verwaltet
 ausschliesslich die Vorbereitung; jeder Beitrag und jede Anfrage wird von Hand
-geschrieben und von Hand gesendet.
+geschrieben und von Hand gesendet. ``PostStatus`` haelt fest, was dabei
+herauskam - es ist ein Protokoll ueber die eigene Arbeit, keine Steuerung
+eines Automaten.
 """
 
 from __future__ import annotations
@@ -198,11 +200,25 @@ class EventType(StrEnum):
     ``CLICK`` entsteht im eigenen Redirect-Dienst. Alles danach meldet die
     Anwendung, in der sich die Leute registrieren - dieses Projekt kann es
     nicht wissen.
+
+    **Jede Stufe steht fuer sich.** Sie sind keine Kette, die man der Reihe
+    nach durchlaufen muss: Wer sich registriert und die App nie herunterlaedt,
+    ist ein gueltiger Zustand; wer herunterlaedt, ohne sich je registriert zu
+    haben, ebenso. Die Reihenfolge in ``FUNNEL_ORDER`` ist die der Anzeige,
+    keine Bedingung - kein Ereignis setzt ein anderes voraus, und keines
+    erzeugt ein anderes mit.
+
+    ``DOWNLOAD`` heisst: Der Bezug der App wurde ausgeloest. Was genau der
+    ausloesende Moment ist, entscheidet die meldende Anwendung; sie soll ihn
+    so spaet wie moeglich setzen (siehe ``docs/events-api.html``). Der Beweis,
+    dass die App wirklich auf einem Geraet liegt, ist ``ACTIVATION`` - nur die
+    App selbst kann ihn erbringen.
     """
 
     CLICK = "click"
     LANDING_VISIT = "landing_visit"
     REGISTRATION = "registration"
+    DOWNLOAD = "download"
     ACTIVATION = "activation"
     QUALIFIED = "qualified"
     CONVERSION = "conversion"
@@ -210,14 +226,34 @@ class EventType(StrEnum):
 
 # Reihenfolge des Trichters. Steht hier und nicht in der Auswertung, damit
 # Trichter und Ereignisse nicht auseinanderlaufen koennen.
+#
+# Sie ordnet die *Anzeige*, nicht den Ablauf: Die Zahlen einer Stufe werden
+# unabhaengig von jeder anderen gezaehlt. "Registrierungen 10, Downloads 3"
+# bedeutet nicht, dass sieben Registrierungen fehlerhaft sind - es bedeutet,
+# dass drei der Leute die App geholt haben.
 FUNNEL_ORDER: tuple[EventType, ...] = (
     EventType.CLICK,
     EventType.LANDING_VISIT,
     EventType.REGISTRATION,
+    EventType.DOWNLOAD,
     EventType.ACTIVATION,
     EventType.QUALIFIED,
     EventType.CONVERSION,
 )
+
+# Ereignisse, die je Mensch hoechstens einmal zaehlen.
+#
+# Ein Download ist von Natur aus wiederholbar: neu laden, zweites Geraet,
+# Neuinstallation. Ohne diese Schranke ueberholte ein einzelner Mensch mit
+# fuenf Versuchen eine Gruppe, die vier Menschen gebracht hat - und genau
+# diese Rangfolge ist der Zweck des ganzen Projekts.
+#
+# ``registration``, ``qualified`` und ``conversion`` stehen bewusst **nicht**
+# darin: Sie sind seit dem 18.08.2026 im Betrieb, und ihre Bedeutung
+# stillschweigend zu aendern machte alte und neue Zahlen unvergleichbar.
+# ``activation`` ebenso - die meldende App bestimmt selbst, was "erstmals
+# geoeffnet" heisst, und meldet es einmal.
+EINMAL_JE_MENSCH: frozenset[EventType] = frozenset({EventType.DOWNLOAD})
 
 
 class TrackingEvent(BaseModel):
@@ -313,6 +349,28 @@ class Reward(BaseModel):
     note: str = ""
 
 
+class PostStatus(StrEnum):
+    """Ob der Beitrag dieser Kampagne in dieser Gruppe erledigt ist.
+
+    Gehoert zum **Paar** aus Kampagne und Gruppe, nicht zur Gruppe: Dieselbe
+    Gruppe kann in zwei Kampagnen stehen und traegt dann zwei Beitraege mit
+    zwei verschiedenen Tracking-Codes. In ``GroupMarketing`` gespeichert
+    verdeckte der zweite Beitrag den ersten, und die Arbeitsliste haette eine
+    offene Aufgabe als erledigt gemeldet.
+
+    ``UEBERSPRUNGEN`` ist kein Fehlschlag: Die Gruppe passt gerade nicht (falsche
+    Sprache, Thema daneben, Leitung verbietet Werbung). Sie erscheint deshalb
+    nicht mehr in der Arbeitsliste, aber ``campaign retry`` holt allein die
+    fehlgeschlagenen zurueck - eine bewusste Entscheidung wird nicht durch einen
+    Sammelbefehl rueckgaengig gemacht.
+    """
+
+    OFFEN = "offen"
+    VEROEFFENTLICHT = "veroeffentlicht"
+    FEHLGESCHLAGEN = "fehlgeschlagen"
+    UEBERSPRUNGEN = "uebersprungen"
+
+
 class CampaignGroup(BaseModel):
     """Zuordnung Kampagne <-> Gruppe samt ihrem Tracking-Code.
 
@@ -326,3 +384,17 @@ class CampaignGroup(BaseModel):
     tracking_code: str
     tracking_url: str = ""
     added_at: datetime = Field(default_factory=_utcnow)
+    # -- Protokoll des Beitrags -------------------------------------------
+    # Getrennt von ``added_at``: Eine Zuordnung entsteht durch die Regel, ein
+    # Beitrag durch einen Menschen. Zwischen beidem liegen oft Wochen.
+    post_status: PostStatus = PostStatus.OFFEN
+    # Wann er veroeffentlicht wurde. Nur bei Erfolg gesetzt und danach nie
+    # ueberschrieben - der erste Beitrag ist der, auf den die Klicks zurueckgehen.
+    posted_at: datetime | None = None
+    # Wann zuletzt etwas versucht wurde, gleich mit welchem Ausgang. Trennt
+    # "noch nie angefasst" von "gestern gescheitert".
+    last_attempt_at: datetime | None = None
+    post_attempts: int = 0
+    # Warum es nicht ging - im Klartext, wie ein Mensch es aufschreibt
+    # ("Gruppe erlaubt keine Links", "Beitrag wartet auf Freigabe").
+    post_error: str = ""

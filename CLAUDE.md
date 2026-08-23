@@ -46,6 +46,7 @@ $env:PYTHONIOENCODING="utf-8"        # sonst bricht arabische Terminalausgabe
 & $py -m fbgroups.cli import-seeds data\seeds\pruefliste.csv   # ausgefuellt zurueck
 & $py -m fbgroups.cli rescore --dry-run   # Wirkung geaenderter Gewichte zeigen
 & $py -m fbgroups.cli rescore        # Bestand neu bewerten, ohne Suchanfrage
+                                     # holt dabei die gemessene Resonanz mit
 & $py -m fbgroups.cli report
 & $py -m fbgroups.cli export --format both
 & $py -m fbgroups.cli queries --all
@@ -142,6 +143,45 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
   Ersatzwert für fehlende Daten — eine frühere Fassung vergab bei unbekannter
   Mitgliederzahl einen „neutralen" Faktor und erzeugte damit für jede Gruppe
   ohne Metadaten denselben Score (8,75).
+- **Die Aktivitaet einer Gruppe wird gemessen, nicht von Facebook geholt.**
+  Mitgliederzahl, Beitraege je Woche, aktive Poster und letzter Beitrag stehen
+  ausschliesslich auf facebook.com. Die **Meta Groups API wurde am 22.04.2024
+  vollstaendig abgeschaltet** (angekuendigt mit Graph API v19 im Januar 2024);
+  `groups_access_member_info` und `publish_to_groups` sind ersatzlos entfallen.
+  Auch davor haette sie nicht geholfen: Sie verlangte, dass ein **Admin** der
+  Gruppe die App dort installiert — bei 307 Gruppen, in denen wir Gast sind,
+  war dieser Weg nie offen. Ein Nachbau ueber eine Browsersitzung ist Scraping
+  und faellt unter die harten Projektgrenzen.
+  Gemessen wird stattdessen die **Resonanz**: Klick auf den Tracking-Link,
+  Registrierung in der App. Das beantwortet die eigentliche Frage genauer —
+  nicht "wie viel wird dort geredet?", sondern "wie viele Menschen kommen von
+  dort zu uns?".
+- **`scoring.Resonanz` beschreibt die Zahlen, `marketing/resonanz.py` beschafft
+  sie.** Die Richtung ist Absicht: `scoring.py` kennt weder `MarketingStore`
+  noch die Ereignistabelle, so wie die Marketing-Erweiterung den Bestand nicht
+  veraendert. Der Aufrufer (`rescore`, die Uebersicht) reicht die Zahlen herein.
+  Ein Import in die andere Richtung machte den Kern von einem Aufsatz abhaengig.
+- **"Nicht gemessen" ist etwas anderes als "wirkungslos".** Ohne
+  veroeffentlichten Beitrag liefert `_resonanz_faktoren` `None`, die
+  Bestandteile erscheinen als "unbekannt" und `score_max` sinkt auf 100 statt
+  175. Null Klicks ohne Beitrag sind eine Aussage ueber **uns**, nicht ueber die
+  Gruppe. Dasselbe gilt fuer die Schonfrist (`schonfrist_tage: 3`): Wer vor zwei
+  Stunden gepostet hat, hat noch keine Klicks — eine Null waere hier eine
+  Behauptung ueber die Zukunft. Ein Beitrag **mit** null Klicks ist dagegen ein
+  Ergebnis und wird als solches bewertet (`score_max` 175, Resonanz 0).
+- **Die Zielquote ist 15 %, nicht 100 %** (`resonanz.ziel_quote`). Wer die
+  Registrierungsquote auf 1,0 normiert, gibt selbst der besten Gruppe ein
+  Sechstel der Punkte und macht den Bestandteil wirkungslos. Daneben steht die
+  Belastbarkeit (`mindest_klicks: 20`): 1 Klick mit 1 Registrierung sind 100 %
+  und beweisen nichts — ohne diese Schranke stuende jede zufaellige Gruppe an
+  der Spitze.
+- **Reichweite zaehlt je Beitrag, nicht absolut.** Sonst gewaenne die Gruppe, in
+  der wir am oeftesten gepostet haben, statt der, die am besten wirkt.
+- **Passung (100 Punkte) und Resonanz (75 Punkte) sind zwei Bloecke.**
+  `config-check` prueft nur den ersten auf 100; beide zusammen zu pruefen hiesse,
+  das Einschalten der Resonanz als Fehler zu melden. Der Score wird weiterhin
+  **nicht** auf 100 normiert (Regel 3 in `scoring.py`) — eine Gruppe ohne Beitrag
+  erreicht hoechstens 100, und "100 von 100" steht zu Recht hinter "130 von 175".
 - **Die Mitgliederzahl ist abgeschaltet (`member_count: 0`).** Sie war mit 45
   von 100 das schwerste Kriterium — für eine Kooperation entscheidet die
   Reichweite. Sie ist aber die einzige Angabe, die das Projekt nicht selbst
@@ -256,11 +296,62 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
 & $py -m fbgroups.cli campaign add-groups batreeq-syrian-germany --top 20  # einmaliger Griff
 & $py -m fbgroups.cli campaign links batreeq-syrian-germany --export data\exports\links.csv
 & $py -m fbgroups.cli campaign message batreeq-syrian-germany arabinberlin
+& $py -m fbgroups.cli campaign queue batreeq-syrian-germany   # was steht noch aus?
+& $py -m fbgroups.cli campaign next batreeq-syrian-germany    # Gruppe fuer Gruppe
+& $py -m fbgroups.cli campaign fortschritt batreeq-syrian-germany
+& $py -m fbgroups.cli campaign posted arabinberlin --fehler "erlaubt keine Links"
+& $py -m fbgroups.cli campaign retry batreeq-syrian-germany   # nur die Fehlschlaege
 & $py -m fbgroups.cli marketing set arabinberlin --status contacted --kontaktiert-jetzt
 & $py -m fbgroups.cli marketing list --erlaubnis approved
 & $py -m fbgroups.cli marketing overview
 ```
 
+- **`campaign next` bereitet vor, es veroeffentlicht nicht.** Je Gruppe legt
+  es den fertigen Text in die Zwischenablage und oeffnet die Gruppe im
+  Browser; einfuegen und absenden tut ein Mensch, und der Ausgang wird sofort
+  protokolliert. Der Unterschied ist nicht kosmetisch: Ein Programm, das 300
+  Beitraege selbst absetzt, ist genau das, was Facebooks Spam-Erkennung sucht —
+  gesperrt wuerde das Konto des Nutzers samt aller Gruppen, in die er
+  aufgenommen wurde. `webbrowser.open` ist dabei keine Automatisierung von
+  facebook.com: Es passiert dasselbe wie beim Anklicken eines Links, und die
+  harte Projektgrenze bleibt unangetastet.
+- **Der Beitragsstand gehoert zum Paar aus Kampagne und Gruppe**, nicht zur
+  Gruppe (`campaign_groups`, nicht `group_marketing`). Dieselbe Gruppe kann in
+  zwei Kampagnen stehen und traegt dann zwei Beitraege mit zwei Codes. An der
+  Gruppe gespeichert meldete der eine Beitrag den anderen als erledigt — und
+  die Arbeitsliste verschwiege eine offene Aufgabe.
+- **Bestehende Zuordnungen starten auf `offen`.** Migrationsschritt 8 uebernimmt
+  `group_marketing.last_posted_at` ausdruecklich **nicht**: Das Feld gilt fuer
+  die Gruppe, der neue Stand fuer das Paar. Eine Gruppe zu viel in der Liste
+  kostet einen Blick, eine zu wenig kostet einen Beitrag. Tracking-Codes, URLs
+  und Ereignisse werden dabei nicht angefasst — der Schritt ist rein additiv.
+- **`posted_at` wird nur beim ersten Erfolg gesetzt.** Die Klicks eines Codes
+  gehen auf den Beitrag zurueck, der zuerst stand; ein Datum, das bei jedem
+  erneuten Posten mitwandert, machte die Frage "seit wann laeuft dieser Link?"
+  unbeantwortbar. `post_attempts` zaehlt dagegen **jeden** Ausgang mit, auch den
+  Erfolg — es beantwortet "wie oft angefasst?", nicht "wie oft schiefgegangen?".
+- **`uebersprungen` ist kein Fehlschlag.** "Passt nicht" ist ein Urteil ueber
+  die Gruppe; `campaign retry` holt allein die fehlgeschlagenen zurueck. Deshalb
+  gibt es den Ausgang auch nicht als Knopf in der Uebersicht (`POST /beitrag`
+  nimmt nur `veroeffentlicht` und `fehlgeschlagen`): Ein Urteil gehoert an die
+  Stelle, an der man die Gruppe ohnehin betrachtet.
+- **Ein Erfolg loescht den alten Fehlergrund.** Sonst stuende neben einem
+  veroeffentlichten Beitrag der Grund, aus dem er beim vorletzten Mal nicht ging.
+- **Der Beitragstext entsteht ausschliesslich in `beitrag.beitragstext`.**
+  `campaign message`, `queue`, `next` und die Uebersicht lesen alle dort. Eine
+  zweite Fassung koennte abweichen, und der Unterschied fiele erst auf, wenn ein
+  Beitrag mit dem falschen Code in einer Gruppe steht — zurueckholen laesst er
+  sich dann nicht mehr. Kein Tracking-Code steht im Programm; jeder kommt aus
+  der Zuordnung, ob es drei Gruppen sind oder dreihundert.
+- **In der Arbeitsliste stehen die besten Gruppen oben** (`sort_by_rank`). Bei
+  300 Gruppen bringt niemand die Liste an einem Tag zu Ende; wer abbricht, soll
+  die wertvollsten Beitraege geschrieben haben und nicht die alphabetisch
+  ersten. Gruppen ohne Datensatz wandern ans Ende statt zu verschwinden — ein
+  Beitrag, der nicht in der Liste steht, wird nie geschrieben.
+- **Ausgeschlossene Gruppen (`bearbeiten = 0`) stehen nicht in der Liste**, ihr
+  Tracking-Code bleibt aber gueltig. Deshalb weicht "8 offen" in den Zaehlern
+  von "9 in der Arbeitsliste" ab; `campaign fortschritt` nennt beide Zahlen,
+  sonst wundert man sich ueber die Differenz.
 - **Beschreibung und Auswahlregel einer Kampagne sind zwei Dinge.**
   `campaigns.audiences`/`cities` sagen, *wen* die Kampagne bewirbt; die
   `target_*`-Spalten sagen, *welche Gruppen* einen Tracking-Code bekommen.
@@ -371,10 +462,84 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
 & $py -m pip install -e ".[web]"     # FastAPI/uvicorn, nur fuer den Dienst
 & $py -m fbgroups.cli serve --port 3000
 & $py -m fbgroups.cli marketing analytics --top 10
+& $py -m fbgroups.cli marketing code FB-SYR-KLN-002 --benutzer   # ein Code allein
 & $py -m fbgroups.cli marketing referral list --status qualified
 & $py -m fbgroups.cli marketing rewards --benutzer user-ahmad
 & $py -m fbgroups.cli marketing audit
 ```
+
+### Der Trichter und seine Zuordnung
+
+- **Die Stufen sind unabhängig, die Zuordnung ist die einzige Klammer.**
+  `click`, `landing_visit`, `registration`, `download`, `activation`,
+  `qualified`, `conversion` werden jede für sich gezählt; `FUNNEL_ORDER` ordnet
+  die *Anzeige*, nicht den Ablauf. Eine Registrierung ohne Download ist ein
+  gültiger Zustand, ein Download ohne Registrierung ebenso, und
+  „10 Registrierungen, 3 Downloads" heißt nicht, dass sieben Registrierungen
+  fehlerhaft sind. Kein Ereignis setzt ein anderes voraus, keines erzeugt ein
+  anderes mit — die einzige gemeinsame Frage ist: *welcher Facebook-Gruppe ist
+  dieses Ereignis zu verdanken?*
+- **`user_identities` überbrückt den Kennungswechsel.** Ein Mensch heißt auf
+  dem Weg durch den Trichter nacheinander verschieden: erst `anon-…` (die
+  Kennung, die sich die Web-App im Browser gibt), ab der Registrierung
+  `user-8472`. Die Zuordnung hängt aber am **ersten Besuch** — dort steht der
+  Tracking-Code. Genau an dieser Naht ist die vorige Fassung gescheitert:
+  `erste_zuordnung` suchte nur unter der eigenen Kennung, fand für
+  `user-8472` nichts und schrieb jeden Download ohne Gruppe fort. Meldet eine
+  Anfrage **beide** Kennungen (`user_ref` + `anon_ref`), hält
+  `verknuepfe_kennung` fest, dass sie derselbe Mensch sind; gelesen wird
+  danach über alle Kennungen der Identität. Die Benutzerkennung gewinnt als
+  gemeinsame Identität — sie ist die bestehende, die anonyme verschwindet mit
+  dem Browserspeicher.
+- **Verknüpfen ändert kein gespeichertes Ereignis.** Die Zeilen behalten die
+  Kennung, unter der sie gemeldet wurden; zusammengeführt wird beim Lesen. Eine
+  Zuordnung, die einmal in der Datenbank steht, ist die Grundlage von Zahlen,
+  die jemand schon gesehen hat — sie nachträglich umzuschreiben hieße, eine
+  Auswertung von gestern unbemerkt ungültig zu machen.
+- **Ohne erkennbaren Menschen bleibt ein Ereignis ohne Zuordnung.** Ein
+  Download ohne Vorgeschichte wird gezählt, aber keiner Gruppe zugeschlagen.
+  Eine geratene Zuordnung wäre schlimmer als eine fehlende: Sie schöbe eine
+  Gruppe in einer Rangliste nach oben, nach der sich entscheidet, wo die
+  nächsten 300 Beiträge geschrieben werden. Aus demselben Grund verwirft
+  `POST /events` einen **unbekannten** Tracking-Code (Tippfehler, alter
+  Beitrag) und erbt stattdessen — ein erfundener Code bekäme sonst eine eigene
+  Spalte in jeder Auswertung.
+- **`download` zählt je Mensch einmal** (`EINMAL_JE_MENSCH` in `models.py`).
+  Ein Download ist von Natur aus wiederholbar — neu laden, zweites Gerät,
+  Neuinstallation. Ohne diese Schranke überholte ein einzelner Mensch mit fünf
+  Versuchen eine Gruppe, die vier Menschen gebracht hat. `registration`,
+  `activation`, `qualified` und `conversion` stehen bewusst **nicht** darin:
+  Sie sind seit dem 18.08.2026 im Betrieb, und ihre Bedeutung stillschweigend
+  zu ändern machte alte und neue Zahlen unvergleichbar. Die zweite Meldung
+  bekommt `200` mit `gezaehlt: false` — sie ist angekommen, sie hat nur nicht
+  gezählt.
+- **„Download" ist nicht „installiert".** Drei verschiedene Dinge lassen sich
+  zählen: ein Knopfdruck, ein tatsächlich beginnender Transfer und eine App,
+  die auf einem Gerät liegt. Die ersten beiden kann nur die ausliefernde Stelle
+  unterscheiden (dieses Projekt ruft nichts ab und sieht keine Datei);
+  `download` heißt deshalb **ausgelöst**, so spät gemessen wie die Plattform es
+  erlaubt. Der Beleg, dass die App wirklich angekommen ist, ist `activation` —
+  und den kann allein die App selbst liefern. Deshalb sind es zwei Stufen und
+  nicht eine.
+- **Die Antwort nennt den Code.** `POST /events` gibt `tracking_code` zurück —
+  kein Geheimnis, er steht in veröffentlichten Facebook-Beiträgen. Er ist der
+  Beleg für die meldende Anwendung: Ein leerer Wert heißt „ohne Gruppe
+  gespeichert" und ist das erste sichtbare Zeichen dafür, dass die Verknüpfung
+  nicht stattfindet.
+- **`marketing code <CODE>` beantwortet die Frage, die eine Summe nicht
+  beantwortet.** Mit `--benutzer` steht je Mensch daneben, unter welchen
+  Kennungen er auftrat und welche Stufen auf ihn entfallen — die Begründung
+  dafür, dass dieser Download zu diesem Code gehört, statt sie glauben zu
+  müssen.
+- **Das Geheimnis gehört nicht in die Web-App.** Was der Browser lesen kann,
+  kann ein Besucher lesen. `landing_visit` und `download` meldet die Web-App
+  deshalb an die eigene API (`POST /api/v1/tracking/events`), die mit dem
+  `EVENTS_TOKEN` weiterreicht. Der Weg nimmt **nur** diese beiden Stufen und
+  liest `user_ref` niemals aus dem Rumpf, sondern aus dem Zugangstoken:
+  `qualified` und `conversion` verschieben Empfehlungsstände und schalten
+  Prämien frei — ein öffentlicher Weg, der sie annähme, wäre ein Prämienhahn.
+
+### Weiterleitung und Meldungen
 
 - **`GET /r/{code}`** zählt den Klick und leitet mit **302** weiter (nicht 301:
   ein dauerhaft gemerkter Umzug führte spätere Klicks am Zähler vorbei). Ein

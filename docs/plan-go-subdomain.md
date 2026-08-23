@@ -287,6 +287,70 @@ scp karim@159.195.216.246:/opt/fbgroups/backups/groups-*.sqlite.gz dataackups``
 
 `data/backups/` ist aus dem Repository ausgeschlossen.
 
+## 8.1 Regelmässige Neubewertung (gemessene Resonanz)
+
+Der Score enthält seit 21.08.2026 einen gemessenen Anteil: Klicks und
+Registrierungen je Gruppe. Diese Zahlen ändern sich laufend, der gespeicherte
+Score nicht — `fbgroups rescore` schreibt ihn.
+
+**Warum kein Neuberechnen im Klickpfad:** `GET /r/{code}` und `POST /events`
+öffnen bewusst **nur** den `MarketingStore` (siehe CLAUDE.md). Ein
+`SqliteStore.update_scores` dort hinein zu ziehen, hieße den Weg, an dem das
+Geld hängt, von einer zweiten Migrationskette abhängig zu machen — und der
+Ausfall fiele erst auf, wenn kein Klick mehr ankommt. Ein Timer ist die
+langweiligere und darum bessere Lösung.
+
+`/etc/systemd/system/fbgroups-rescore.service`:
+
+```ini
+[Unit]
+Description=fbgroups: Bestand neu bewerten (gemessene Resonanz)
+After=network.target
+
+[Service]
+Type=oneshot
+User=fbgroups
+WorkingDirectory=/opt/fbgroups/app
+ExecStart=/opt/fbgroups/venv/bin/python -m fbgroups.cli rescore
+```
+
+`/etc/systemd/system/fbgroups-rescore.timer`:
+
+```ini
+[Unit]
+Description=fbgroups: alle 6 Stunden neu bewerten
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:20:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+`RandomizedDelaySec` streut den Start: Läuft der Rescore auf die Minute genau
+mit der Sicherung um 00:15 zusammen, sperren sich zwei Schreiber auf derselben
+SQLite-Datei. `Persistent=true` holt einen verpassten Lauf nach, wenn der
+Server aus war.
+
+```bash
+systemctl daemon-reload
+systemctl enable --now fbgroups-rescore.timer
+systemctl list-timers fbgroups-rescore.timer
+journalctl -u fbgroups-rescore.service -n 20
+```
+
+Die Frequenz ist damit eine Zeile in der Timer-Datei. Sechs Stunden sind ein
+Vorschlag, kein Zwang — der Score ändert sich nur, wenn Klicks entstehen.
+
+Von Hand jederzeit:
+
+```bash
+fbgroups rescore --dry-run   # zeigt, wie viele Gruppen einen anderen Score bekämen
+fbgroups rescore
+```
+
 ## 9. Offene Punkte
 
 - **`/events` ist angebunden** (21.08.2026). Der Weg steht öffentlich hinter
@@ -296,6 +360,64 @@ scp karim@159.195.216.246:/opt/fbgroups/backups/groups-*.sqlite.gz dataackups``
   Adresse wechselt aber, sobald das Compose-Netz neu entsteht, und offen wäre er
   dann für jeden Container. Nachgewiesen mit einem Testereignis
   (`user_ref: test-kette-2026-08-21`): Antwort 200, Empfehlungscode vergeben.
+- **Der Download-Trichter ist angebunden** (23.08.2026). `download` ist eine
+  eigene Stufe, und die Zuordnung überlebt den Wechsel von der anonymen
+  Browserkennung zur Benutzerkennung (`user_identities`, Schema-Version 10).
+  Beim Ausrollen ist **nichts von Hand zu tun**: `MarketingStore` holt den
+  Migrationsschritt beim ersten `/r/` oder `/events` selbst nach, additiv, ohne
+  eine bestehende Zeile anzufassen. Bereits gezählte Ereignisse behalten ihre
+  Zahlen — der Schritt legt nur eine leere Tabelle an.
+
+  Nach dem Ausrollen prüfbar mit einem Testereignis, das die neue Naht trifft:
+
+  ```bash
+  T=$(grep '^EVENTS_TOKEN=' /opt/fbgroups/app/.env | cut -d= -f2)
+  C=FB-SYR-BER-001                      # ein wirklich vergebener Code
+  for J in     '{"event_type":"landing_visit","anon_ref":"probe-1","tracking_code":"'$C'"}'     '{"event_type":"registration","anon_ref":"probe-1","user_ref":"probe-user"}'     '{"event_type":"download","user_ref":"probe-user"}'
+  do curl -s -X POST https://go.b-tarikak.de/events        -H 'Content-Type: application/json' -H "X-Events-Token: $T" -d "$J"; echo; done
+  # Die letzte Antwort muss "tracking_code":"FB-SYR-BER-001" nennen.
+  # Steht dort "", ist die Verknüpfung nicht angekommen.
+  ```
+
+  Danach `fbgroups marketing code FB-SYR-BER-001 --benutzer`; die Probezeile
+  steht dort unter `probe-user`.
+
+  **Die Probe danach wieder entfernen.** Sie schreibt drei echte Ereignisse in
+  den Echtbestand und hebt die Zahlen einer wirklichen Gruppe um je eins an —
+  genau die Zahlen, nach denen entschieden wird, wo die nächsten Beiträge
+  hingehen. Eine Prüfung, die ihre eigenen Spuren stehen lässt, verfälscht das,
+  was sie prüfen sollte:
+
+  ```bash
+  sudo -u fbgroups /opt/fbgroups/venv/bin/python - <<'EOF'
+  import sqlite3
+  conn = sqlite3.connect("/opt/fbgroups/app/data/groups.sqlite")
+  proben = ("probe-1", "probe-user")
+  for tabelle in ("tracking_events", "user_identities", "referral_codes"):
+      cur = conn.execute(
+          f"DELETE FROM {tabelle} WHERE user_ref IN (?,?)", proben)
+      print(tabelle, cur.rowcount)
+  conn.commit()
+  EOF
+  ```
+
+  Erwartet: `tracking_events 3`, `user_identities 2`, `referral_codes 1` — die
+  Registrierung vergibt einen Empfehlungscode, auch an eine Probe.
+
+  **Ein Rückschritt auf die alte Fassung braucht einen Handgriff mehr.** Die
+  Datei trägt danach `user_version = 10`; die alte Fassung erwartet 9, kennt
+  Schritt 9 nicht und lehnt die Datei mit `SchemaVersionError` ab — der Dienst
+  startet dann gar nicht. Weil der Schritt rein additiv ist (eine leere
+  Tabelle, keine geänderte Zeile), genügt es, die Nummer zurückzusetzen; die
+  Tabelle darf stehen bleiben und stört die alte Fassung nicht:
+
+  ```bash
+  sudo -u fbgroups /opt/fbgroups/venv/bin/python -c     "import sqlite3; c=sqlite3.connect('/opt/fbgroups/app/data/groups.sqlite');      c.execute('PRAGMA user_version = 9'); c.commit()"
+  ```
+
+  Beim erneuten Vorrollen holt der Migrationsschritt sich die Nummer selbst
+  wieder; `CREATE TABLE IF NOT EXISTS` findet die Tabelle vor und lässt sie in
+  Ruhe.
 - **`BRAVE_API_KEY` fehlt auf dem Server.** Ohne Belang, solange `brave` in
   `providers.yaml` deaktiviert ist.
 - **Der lokale Bestand ist nur noch eine Kopie.** Ein Suchlauf auf dem

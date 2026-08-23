@@ -37,10 +37,13 @@ from typing import Any
 
 from fbgroups.config import AppConfig
 from fbgroups.marketing.analytics import funnel, kennzahlen
+from fbgroups.marketing.beitrag import beitragstext
 from fbgroups.marketing.models import CampaignStatus, MarketingStatus
+from fbgroups.marketing.resonanz import resonanz_je_gruppe
 from fbgroups.marketing.selection import Auswahl, auswahl_der_kampagne, passt
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.models import Group
+from fbgroups.scoring import Resonanz
 from fbgroups.storage.sqlite_store import SqliteStore
 
 # Klartext fuer die Statusnamen. Die englischen Kennungen stehen in der
@@ -95,7 +98,9 @@ def regel_kurzfassung(auswahl: Auswahl) -> str:
 # Welche Ereignisstufen je Gruppe und Kampagne in der Tabelle stehen. Die
 # Reihenfolge ist die des Trichters; die Namen sind die Werte aus EventType,
 # damit Tabelle und counts_by nicht auseinanderlaufen koennen.
-EREIGNISFELDER: tuple[str, ...] = ("click", "registration", "qualified", "conversion")
+EREIGNISFELDER: tuple[str, ...] = (
+    "click", "registration", "download", "activation", "qualified", "conversion",
+)
 
 _EREIGNIS_LABEL = {
     "click": "Klicks",
@@ -109,6 +114,30 @@ _EREIGNIS_LABEL = {
 def ereignis_label(wert: str) -> str:
     return _EREIGNIS_LABEL.get(wert, wert)
 
+# Reihenfolge der Dringlichkeit: Was oben steht, gewinnt. Ein offener Beitrag
+# neben einem veroeffentlichten heisst "noch offen" - die Gruppe hat noch
+# Arbeit, auch wenn ein Teil erledigt ist.
+_BEITRAG_RANG: tuple[str, ...] = (
+    "offen",
+    "fehlgeschlagen",
+    "uebersprungen",
+    "veroeffentlicht",
+)
+
+
+def _beitrag_gesamtstand(beitraege: list[dict[str, Any]]) -> str:
+    """Der dringlichste Stand aller Zuordnungen dieser Gruppe.
+
+    Ohne Zuordnung gibt es keinen Beitrag zu schreiben - dann steht hier
+    ``ohne``, und die Gruppe faellt aus jedem Beitragsfilter heraus, statt als
+    faelschlich "offen" die Liste zu fuellen.
+    """
+    if not beitraege:
+        return "ohne"
+    staende = {b["status"] for b in beitraege}
+    return next((stand for stand in _BEITRAG_RANG if stand in staende), "ohne")
+
+
 def _gruppe_als_zeile(
     group: Group,
     config: AppConfig,
@@ -118,6 +147,8 @@ def _gruppe_als_zeile(
     ereignisse: dict[str, int] | None = None,
     bearbeiten: bool = True,
     ausschlussgrund: str = "",
+    beitraege: list[dict[str, Any]] | None = None,
+    resonanz: Resonanz | None = None,
 ) -> dict[str, Any]:
     """Eine Tabellenzeile - bereits mit den Bezeichnungen der Konfiguration.
 
@@ -154,6 +185,44 @@ def _gruppe_als_zeile(
         "bearbeiten": bearbeiten,
         "ausschlussgrund": ausschlussgrund,
         "codes": codes,
+        # Je Zuordnung ein Eintrag: Kampagne, Code, fertiger Text, Stand des
+        # Beitrags. Der Text entsteht in beitragstext() - derselben Stelle, die
+        # auch 'campaign message' und 'campaign next' benutzen. Zwei Fassungen
+        # koennten abweichen, und der Unterschied fiele erst auf, wenn ein
+        # Beitrag mit dem falschen Code in einer Gruppe steht.
+        "beitraege": beitraege or [],
+        # Der schlechteste Stand aller Zuordnungen - danach wird gefiltert.
+        # "Diese Gruppe ist erledigt" darf erst gelten, wenn kein Beitrag mehr
+        # aussteht; sonst verschwindet eine offene Aufgabe aus dem Filter.
+        "beitrag_status": _beitrag_gesamtstand(beitraege or []),
+        # Die gemessenen Grundlagen des Scores - dieselben Zahlen, aus denen
+        # scoring._resonanz_faktoren rechnet. Sie stehen hier, damit die Zeile
+        # die Bewertung belegen kann statt sie nur zu behaupten.
+        "resonanz": (
+            None
+            if resonanz is None
+            else {
+                "beitraege": resonanz.beitraege,
+                "klicks": resonanz.klicks,
+                "registrierungen": resonanz.registrierungen,
+                "quote": (
+                    round(resonanz.registrierungen / resonanz.klicks * 100, 1)
+                    if resonanz.klicks
+                    else None
+                ),
+                "letzte_regung": (
+                    resonanz.letzte_regung.isoformat() if resonanz.letzte_regung else None
+                ),
+                "erster_beitrag_am": (
+                    resonanz.erster_beitrag_am.isoformat()
+                    if resonanz.erster_beitrag_am
+                    else None
+                ),
+            }
+        ),
+        # Die Einzelteile des Scores. Bisher stand nur der Satz in
+        # score_reason; fuer eine Tabelle braucht es die Zahlen selbst.
+        "punkte": group.score_breakdown.model_dump(),
         # Verschiedene Anfragen, die diese Gruppe gefunden haben - nicht
         # times_seen. Siehe SqliteStore.count_distinct_sources: times_seen
         # waechst mit jedem Lauf weiter und misst damit das Alter des
@@ -195,11 +264,34 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             for event_type, anzahl, anteil in funnel(mstore)
         ]
         links = {c.campaign_id: mstore.links_for_campaign(c.campaign_id) for c in campaigns}
+        beitrag_zaehler = {c.campaign_id: mstore.post_counts(c.campaign_id) for c in campaigns}
+        # Dieselbe Funktion, die auch 'fbgroups rescore' benutzt - Anzeige und
+        # Bewertung koennen damit nicht auseinanderlaufen.
+        resonanz_je_id = resonanz_je_gruppe(mstore)
 
     codes_je_gruppe: dict[str, list[str]] = {}
-    for campaign_links in links.values():
+    beitraege_je_gruppe: dict[str, list[dict[str, Any]]] = {}
+    kampagne_nach_id = {c.campaign_id: c for c in campaigns}
+    for campaign_id, campaign_links in links.items():
+        campaign = kampagne_nach_id.get(campaign_id)
         for link in campaign_links:
             codes_je_gruppe.setdefault(link.group_id, []).append(link.tracking_code)
+            beitraege_je_gruppe.setdefault(link.group_id, []).append(
+                {
+                    "kampagne": campaign_id,
+                    "kampagne_name": campaign.name if campaign else campaign_id,
+                    "code": link.tracking_code,
+                    "url": link.tracking_url,
+                    "status": link.post_status.value,
+                    "fehler": link.post_error,
+                    "versuche": link.post_attempts,
+                    # Der fertige Text zum Kopieren. Er steht im Dokument,
+                    # damit der Knopf ohne zweiten Aufruf auskommt - bei 300
+                    # Gruppen waeren das sonst 300 Anfragen an den Dienst,
+                    # nur um dreimal etwas zu kopieren.
+                    "text": beitragstext(campaign, link) if campaign else "",
+                }
+            )
 
     # counts_by liefert {(schluessel, event_type): anzahl} - hier einmal nach
     # Gruppe umgedreht, statt fuer jede der 310 Zeilen erneut zu suchen.
@@ -221,6 +313,8 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             ausschlussgrund=(
                 marketing[g.group_id].ausschlussgrund if g.group_id in marketing else ""
             ),
+            beitraege=beitraege_je_gruppe.get(g.group_id, []),
+            resonanz=resonanz_je_id.get(g.group_id),
         )
         for g in groups
     ]
@@ -271,6 +365,12 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
                     "bestand": len(groups),
                 },
                 "gruppen": len(links.get(c.campaign_id, [])),
+                # Wie weit die Kampagne beim Veroeffentlichen ist - in
+                # derselben Zeile wie ihre Trichterzahlen. Ohne Beitrag gibt es
+                # keinen Klick; die beiden Zahlen nebeneinander zeigen sofort,
+                # ob eine schwache Kampagne schwach wirkt oder noch gar nicht
+                # gepostet wurde.
+                "beitraege": beitrag_zaehler.get(c.campaign_id, {}),
                 "klicks": klicks,
                 "registrierungen": klicks_je_kampagne.get((c.campaign_id, "registration"), 0),
                 "qualifiziert": klicks_je_kampagne.get((c.campaign_id, "qualified"), 0),
@@ -293,6 +393,17 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             "schnitt": schnitt,
             "bestwert": max((z["score"] for z in bewertet), default=None),
             "tracking_links": sum(len(v) for v in links.values()),
+            "beitraege_offen": sum(
+                1 for z in zeilen if z["beitrag_status"] in ("offen", "fehlgeschlagen")
+            ),
+            # Zaehlt Beitraege, nicht Gruppen: Eine Gruppe in zwei Kampagnen
+            # traegt zwei Beitraege, und beide sind Arbeit.
+            "beitraege_veroeffentlicht": sum(
+                1
+                for z in zeilen
+                for b in z["beitraege"]
+                if b["status"] == "veroeffentlicht"
+            ),
             **zahlen,
         },
         "erzeugt_am": datetime.now().strftime("%d.%m.%Y %H:%M"),
@@ -333,8 +444,11 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
                 "Bestwert",
             ),
             _kachel(str(k["tracking_links"]), "Tracking-Links"),
+            _kachel(str(k["beitraege_veroeffentlicht"]), "Beiträge"),
+            _kachel(str(k["beitraege_offen"]), "offen"),
             _kachel(str(k["clicks"]), "Klicks"),
             _kachel(str(k["registrations"]), "Registrierungen"),
+            _kachel(str(k["downloads"]), "Downloads"),
             _kachel(str(k["qualified"]), "qualifiziert"),
             _kachel(str(k["referrals"]), "Empfehlungen"),
             _kachel(str(k["rewards"]), "Prämien"),
@@ -439,11 +553,19 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   :root {{
     --bg: #f6f7f9; --karte: #fff; --text: #1a1c1f; --leise: #6b7280;
     --rand: #e3e6ea; --akzent: #2563eb; --gut: #15803d; --mittel: #b45309;
+    --b-offen-bg: #fef3c7;  --b-offen-fg: #92400e;
+    --b-gut-bg: #dcfce7;    --b-gut-fg: #166534;
+    --b-fehler-bg: #fee2e2; --b-fehler-fg: #991b1b;
+    --b-aus-bg: #e5e7eb;    --b-aus-fg: #4b5563;
   }}
   @media (prefers-color-scheme: dark) {{
     :root {{
       --bg: #16181d; --karte: #1e2127; --text: #e8eaed; --leise: #9aa1ab;
       --rand: #2c313a; --akzent: #60a5fa; --gut: #4ade80; --mittel: #fbbf24;
+      --b-offen-bg: #3b2f14;  --b-offen-fg: #fcd34d;
+      --b-gut-bg: #14321f;    --b-gut-fg: #6ee7a8;
+      --b-fehler-bg: #3b1c1c; --b-fehler-fg: #fca5a5;
+      --b-aus-bg: #272b33;    --b-aus-fg: #9aa1ab;
     }}
   }}
   * {{ box-sizing: border-box; }}
@@ -568,11 +690,39 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   }}
   .knopfzelle {{ display: flex; gap: 6px; }}
   .k-regel {{ cursor: pointer; padding: 6px 12px; border-radius: 6px; }}
+  /* Beitragsspalte */
+  .beitrag {{ display: flex; flex-direction: column; gap: 4px; min-width: 210px; }}
+  .b-zeile {{ display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }}
+  .b-marke {{
+    font-size: 11px; padding: 1px 7px; border-radius: 10px; white-space: nowrap;
+  }}
+  .b-offen           {{ background: var(--b-offen-bg);  color: var(--b-offen-fg); }}
+  .b-veroeffentlicht {{ background: var(--b-gut-bg);    color: var(--b-gut-fg); }}
+  .b-fehlgeschlagen  {{ background: var(--b-fehler-bg); color: var(--b-fehler-fg); }}
+  .b-uebersprungen   {{ background: var(--b-aus-bg);    color: var(--b-aus-fg); }}
+  .b-knopf {{
+    cursor: pointer; border: 1px solid var(--rand); background: var(--karte);
+    border-radius: 5px; padding: 2px 7px; font-size: 12px; line-height: 1.5;
+  }}
+  .b-knopf:hover {{ background: var(--bg); }}
+  .b-fehler {{ font-size: 11px; color: var(--b-fehler-fg); }}
+  .b-leer {{ color: var(--leise); font-size: 12px; }}
+  /* Gemessene Resonanz */
+  .res {{ font-size: 12px; line-height: 1.45; white-space: nowrap; }}
+  .res b {{ font-size: 13px; }}
+  .res-leise {{ color: var(--leise); }}
+  .punkte-liste {{
+    margin: 4px 0 0; padding: 0; list-style: none;
+    font-size: 11px; color: var(--leise);
+  }}
+  .punkte-liste li {{ display: flex; gap: 6px; justify-content: space-between; }}
+  .punkte-liste .wert {{ font-variant-numeric: tabular-nums; }}
   /* Nur-Lesen: alles weg, was einen schreibenden Weg ruft. */
   body.nur-lesen .sammel,
   body.nur-lesen th.auswahl, body.nur-lesen td.auswahl,
   body.nur-lesen .knopfzelle, body.nur-lesen .k-status,
-  body.nur-lesen .neu-kampagne {{ display: none; }}
+  body.nur-lesen .neu-kampagne,
+  body.nur-lesen .b-fertig, body.nur-lesen .b-fehlschlag {{ display: none; }}
 </style>
 </head>
 <body{koerper_klasse}>
@@ -590,6 +740,14 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   <select id="f-zielgruppe"><option value="">Alle Zielgruppen</option></select>
   <select id="f-kategorie"><option value="">Alle Kategorien</option></select>
   <select id="f-marketing"><option value="">Jeder Stand</option></select>
+  <select id="f-beitrag">
+    <option value="">Jeder Beitrag</option>
+    <option value="zu-tun">nur zu erledigen</option>
+    <option value="offen">offen</option>
+    <option value="fehlgeschlagen">fehlgeschlagen</option>
+    <option value="veroeffentlicht">veröffentlicht</option>
+    <option value="uebersprungen">übersprungen</option>
+  </select>
   <input type="search" id="f-suche" placeholder="Name durchsuchen – auch arabisch …">
   <label class="schalter"><input type="checkbox" id="f-bewertet" checked> nur bewertete</label>
   <label class="schalter"><input type="checkbox" id="f-bearbeitet" checked> nur bearbeitete</label>
@@ -614,12 +772,29 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
     <th data-sort="zielgruppen">Zielgruppe</th>
     <th data-sort="kategorie">Kategorie</th>
     <th data-sort="marketing_label">Stand</th>
+    <th data-sort="beitrag_status"
+        title="Der Beitrag dieser Kampagne in dieser Gruppe. Der Text trägt den
+Tracking-Link genau dieser Gruppe – er entsteht aus der Zuordnung, nicht aus
+einer Liste im Programm.">Beitrag</th>
     <th class="zahl" data-sort="anfragen"
         title="Von wie vielen verschiedenen Suchanfragen diese Gruppe gefunden
 wurde. Höchstens 16 (9 Stadtmuster + 7 bundesweite) – für jede Stadt gleich,
 also untereinander vergleichbar.">Anfragen</th>
+    <th data-sort="resonanz_quote"
+        title="Gemessene Resonanz: was der Beitrag in dieser Gruppe gebracht hat.
+Mitgliederzahl und Beitragszahlen der Gruppe stehen nur auf facebook.com – die
+Meta Groups API wurde am 22.04.2024 abgeschaltet. Diese Zahlen erheben wir
+selbst und sie beantworten dieselbe Frage genauer.">Resonanz</th>
     <th class="zahl" data-sort="click">Klicks</th>
     <th class="zahl" data-sort="registration">Registr.</th>
+    <th class="zahl" data-sort="download"
+        title="Der Bezug der App wurde ausgeloest. Zaehlt je Mensch einmal und
+haengt an keiner anderen Stufe: Wer sich registriert und nicht herunterlaedt,
+und wer herunterlaedt, ohne sich zu registrieren, sind beide gueltige
+Faelle.">Downl.</th>
+    <th class="zahl" data-sort="activation"
+        title="Die App wurde erstmals geoeffnet - der einzige Beleg dafuer, dass
+sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv.</th>
     <th class="zahl" data-sort="qualified">qualif.</th>
     <th class="zahl" data-sort="conversion">Absch.</th>
   </tr></thead>
@@ -773,9 +948,19 @@ function gefiltert() {{
   const suche = document.getElementById("f-suche").value.trim().toLowerCase();
   const nurBewertet = document.getElementById("f-bewertet").checked;
   const nurBearbeitet = document.getElementById("f-bearbeitet").checked;
+  const beitrag = document.getElementById("f-beitrag").value;
+
+  // "zu-tun" fasst zusammen, wonach man taeglich sucht: was noch aussteht.
+  // Uebersprungene gehoeren nicht dazu - dort hat ein Mensch entschieden.
+  const passtBeitrag = (z) =>
+    !beitrag ||
+    (beitrag === "zu-tun"
+      ? z.beitrag_status === "offen" || z.beitrag_status === "fehlgeschlagen"
+      : z.beitrag_status === beitrag);
 
   return zeilen.filter((z) =>
     (!nurBearbeitet || z.bearbeiten) &&
+    passtBeitrag(z) &&
     (!stadt || z.stadt === stadt) &&
     (!ziel || z.zielgruppen.includes(ziel)) &&
     (!kat || z.kategorie === kat) &&
@@ -788,7 +973,11 @@ function gefiltert() {{
 
 function sortiert(liste) {{
   return [...liste].sort((a, b) => {{
-    let x = a[sortSpalte], y = b[sortSpalte];
+    // Die Resonanzquote liegt eine Ebene tiefer; ohne Beitrag ist sie null
+    // und landet damit hinten - wie jeder andere unbekannte Wert auch.
+    const hol = (z) => sortSpalte === "resonanz_quote"
+      ? (z.resonanz ? z.resonanz.quote : null) : z[sortSpalte];
+    let x = hol(a), y = hol(b);
     if (Array.isArray(x)) {{ x = x.join(); y = y.join(); }}
     // Nicht bewertbare Datensaetze stehen immer hinten - sie sind kein
     // schlechtes Ergebnis, sondern ein offener Punkt.
@@ -805,7 +994,7 @@ function zeichne() {{
     liste.length + " von " + zeilen.length;
 
   document.getElementById("zeilen").innerHTML = liste.length === 0
-    ? "<tr><td colspan='12' class='leer'>Keine Gruppe passt zu diesem Filter.</td></tr>"
+    ? "<tr><td colspan='14' class='leer'>Keine Gruppe passt zu diesem Filter.</td></tr>"
     : liste.map((z) => {{
         const klasse = z.score === null ? "keine" : z.score >= 90 ? "hoch"
                      : z.score >= 70 ? "mittel" : "";
@@ -818,7 +1007,10 @@ function zeichne() {{
             <input type="checkbox" class="waehlen" data-id="${{esc(z.id)}}"
                    ${{gewaehlt.has(z.id) ? "checked" : ""}}>
           </td>
-          <td class="zahl"><span class="punkte ${{klasse}}">${{zahl(z.score)}}</span></td>
+          <td class="zahl">
+            <span class="punkte ${{klasse}}">${{zahl(z.score)}}</span>
+            ${{punkteListe(z)}}
+          </td>
           <td class="name" dir="auto">
             <a href="${{esc(z.url)}}" target="_blank"
                rel="noopener noreferrer">${{esc(z.name)}}</a>${{codes}}
@@ -834,14 +1026,156 @@ function zeichne() {{
                   `<option value="${{s.wert}}"${{s.wert === z.marketing ? " selected" : ""}}>`
                   + esc(s.label) + "</option>").join("")
               + `</select>`}}</td>
+          <td>${{beitragZelle(z)}}</td>
           <td class="zahl">${{z.anfragen}}</td>
+          <td>${{resonanzZelle(z)}}</td>
           <td class="zahl">${{z.click}}</td>
           <td class="zahl">${{z.registration}}</td>
+          <td class="zahl">${{z.download}}</td>
+          <td class="zahl">${{z.activation}}</td>
           <td class="zahl">${{z.qualified}}</td>
           <td class="zahl">${{z.conversion}}</td>
         </tr>`;
       }}).join("");
 }}
+
+// --- Gemessene Resonanz ------------------------------------------------
+
+// Klartext fuer die Score-Bestandteile. Dieselben Namen wie scoring._LABELS -
+// eine zweite Liste liefe beim naechsten neuen Bestandteil auseinander, und
+// die Zeile zeigte dann etwas anderes als der Export.
+const PUNKT_LABEL = {{
+  audience_match: "Zielgruppe",
+  city_match: "Stadt",
+  category_match: "Kategorie",
+  member_count: "Mitglieder",
+  name_quality: "Name",
+  resonanz_engagement: "Resonanz",
+  resonanz_reichweite: "Reichweite",
+  resonanz_aktualitaet: "Aktualität",
+}};
+
+function seit(iso) {{
+  if (!iso) return null;
+  const tage = (Date.now() - new Date(iso).getTime()) / 86400000;
+  if (tage < 1 / 24) return "gerade eben";
+  if (tage < 1) return `vor ${{Math.round(tage * 24)}} Std.`;
+  if (tage < 60) return `vor ${{Math.round(tage)}} Tagen`;
+  return `vor ${{Math.round(tage / 30)}} Monaten`;
+}}
+
+function resonanzZelle(z) {{
+  const r = z.resonanz;
+  if (!r) {{
+    // Kein veroeffentlichter Beitrag: Null Klicks sagen hier nichts ueber die
+    // Gruppe aus, sondern nur ueber uns. Deshalb "–" und nicht "0 %".
+    return '<span class="b-leer">noch nicht gemessen</span>';
+  }}
+  const regung = seit(r.letzte_regung);
+  return `<div class="res">
+    <b>${{r.quote === null ? "–" : r.quote.toLocaleString("de-DE") + " %"}}</b>
+    <span class="res-leise">${{r.registrierungen}}/${{r.klicks}}</span>
+    <div class="res-leise">${{r.beitraege}} Beitr. ·
+      ${{regung ? "letzte Regung " + regung : "keine Regung"}}</div>
+  </div>`;
+}}
+
+function punkteListe(z) {{
+  // Nur die Bestandteile, die tatsaechlich Punkte gebracht haben. Ein
+  // abgeschalteter oder unbekannter Bestandteil steht nicht mit "0" da - das
+  // laese sich als "geprueft und wertlos" missverstehen.
+  const teile = Object.entries(z.punkte || {{}}).filter(([, wert]) => wert > 0);
+  if (!teile.length) return "";
+  return '<ul class="punkte-liste">' + teile.map(([name, wert]) =>
+    `<li><span>${{PUNKT_LABEL[name] || name}}</span>` +
+    `<span class="wert">${{zahl(wert)}}</span></li>`).join("") + '</ul>';
+}}
+
+// --- Beitrag je Gruppe -------------------------------------------------
+// Der fertige Text steht schon im Dokument (siehe sammle_daten): Bei 300
+// Gruppen waeren es sonst 300 Anfragen an den Dienst, nur um dreimal etwas
+// zu kopieren.
+
+const BEITRAG_LABEL = {{
+  offen: "offen",
+  veroeffentlicht: "veröffentlicht",
+  fehlgeschlagen: "fehlgeschlagen",
+  uebersprungen: "übersprungen",
+}};
+
+function beitragZelle(z) {{
+  if (!z.beitraege.length) {{
+    return '<span class="b-leer">kein Tracking-Link</span>';
+  }}
+  return '<div class="beitrag">' + z.beitraege.map((b, i) => {{
+    const erledigt = b.status === "veroeffentlicht";
+    const fehler = b.fehler
+      ? `<span class="b-fehler" title="${{esc(b.fehler)}}">${{esc(b.fehler)}}</span>` : "";
+    return `<div class="b-zeile" data-gruppe="${{esc(z.id)}}"
+                 data-kampagne="${{esc(b.kampagne)}}" data-i="${{i}}">
+      <span class="b-marke b-${{b.status}}" title="${{esc(b.kampagne_name)}}">
+        ${{BEITRAG_LABEL[b.status] || b.status}}</span>
+      <button class="b-knopf b-kopieren" title="Text mit ${{esc(b.code)}} kopieren">Text</button>
+      <button class="b-knopf b-oeffnen" title="Gruppe im Browser öffnen">Gruppe</button>
+      ${{erledigt ? "" : '<button class="b-knopf b-fertig" title="Beitrag steht">✓</button>'}}
+      ${{erledigt ? "" : '<button class="b-knopf b-fehlschlag" title="Ging nicht">✕</button>'}}
+      ${{fehler}}
+    </div>`;
+  }}).join("") + '</div>';
+}}
+
+// Ein Klick auf einen der vier Knoepfe. Delegiert, weil die Zeilen bei jedem
+// Filterwechsel neu entstehen - einzeln gebundene Handler waeren nach dem
+// ersten Tastendruck im Suchfeld verloren.
+document.getElementById("zeilen").addEventListener("click", async (ereignis) => {{
+  const knopf = ereignis.target.closest(".b-knopf");
+  if (!knopf) return;
+  const zeile = knopf.closest(".b-zeile");
+  const gruppe = DATEN.gruppen.find((g) => g.id === zeile.dataset.gruppe);
+  if (!gruppe) return;
+  const beitrag = gruppe.beitraege[Number(zeile.dataset.i)];
+
+  if (knopf.classList.contains("b-kopieren")) {{
+    try {{
+      await navigator.clipboard.writeText(beitrag.text);
+      knopf.textContent = "kopiert";
+      setTimeout(() => {{ knopf.textContent = "Text"; }}, 1200);
+    }} catch (err) {{
+      // Ohne sicheren Kontext verweigert der Browser die Zwischenablage.
+      // Dann bleibt der Text sichtbar statt zu verschwinden.
+      window.prompt("Text kopieren:", beitrag.text);
+    }}
+    return;
+  }}
+
+  if (knopf.classList.contains("b-oeffnen")) {{
+    window.open(gruppe.url, "_blank", "noopener");
+    return;
+  }}
+
+  const fehlschlag = knopf.classList.contains("b-fehlschlag");
+  let grund = "";
+  if (fehlschlag) {{
+    grund = window.prompt("Warum ging es nicht?", beitrag.fehler || "") || "";
+  }}
+  const antwort = await fetch("/beitrag", {{
+    method: "POST",
+    headers: {{ "Content-Type": "application/json" }},
+    body: JSON.stringify({{
+      campaign_id: beitrag.kampagne,
+      group_id: gruppe.id,
+      status: fehlschlag ? "fehlgeschlagen" : "veroeffentlicht",
+      grund: grund,
+    }}),
+  }});
+  if (!antwort.ok) {{ alert("Nicht gespeichert (" + antwort.status + ")."); return; }}
+  const ergebnis = await antwort.json();
+  beitrag.status = ergebnis.status;
+  beitrag.fehler = ergebnis.fehler;
+  beitrag.versuche = ergebnis.versuche;
+  gruppe.beitrag_status = ergebnis.gesamtstand;
+  zeichne();
+}});
 
 // --- Kampagnen ---------------------------------------------------------
 // Anlegen und Zuordnen sind getrennt: Ein Tracking-Code ist endgueltig, er
@@ -1169,6 +1503,7 @@ document.getElementById("zeilen").addEventListener("change", async (ereignis) =>
 
 document.querySelectorAll(".filter select, .filter input")
   .forEach((el) => el.addEventListener("input", zeichne));
+document.getElementById("f-beitrag").addEventListener("change", zeichne);
 document.querySelectorAll("th[data-sort]").forEach((th) =>
   th.addEventListener("click", () => {{
     const spalte = th.dataset.sort;
