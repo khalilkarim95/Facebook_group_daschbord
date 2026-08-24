@@ -72,6 +72,28 @@ def ohne_ollama(_ohne_umgebung, monkeypatch: pytest.MonkeyPatch) -> str:
     return TOTE_ADRESSE
 
 
+def _ps_antwort(*, auf_karte: bool = True, modell: str = "qwen3.5:4b"):
+    """Was Ollama ueber das gerade geladene Modell meldet.
+
+    ``size_vram`` ist der Teil, der im Grafikspeicher liegt. Null heisst: Das
+    Modell rechnet auf der CPU - derselbe Dienst, dieselbe Meldung "verbunden",
+    aber Minuten statt Sekunden je Antwort.
+    """
+    gesamt = 3_100_000_000
+    return httpx.Response(
+        200,
+        json={
+            "models": [
+                {
+                    "name": modell,
+                    "size": gesamt,
+                    "size_vram": gesamt if auf_karte else 0,
+                }
+            ]
+        },
+    )
+
+
 # --- Die Wahl des Anbieters ---------------------------------------------
 
 def test_ollama_ist_der_standard(cfg) -> None:
@@ -158,12 +180,59 @@ def test_verbunden_mit_vorhandenem_modell() -> None:
     respx.get(f"{ADRESSE}/api/tags").mock(
         return_value=httpx.Response(200, json={"models": [{"name": "qwen3.5:4b"}]})
     )
+    respx.get(f"{ADRESSE}/api/ps").mock(return_value=_ps_antwort())
     stand = OllamaModell(adresse=ADRESSE, modell="qwen3.5:4b").status()
 
     assert stand.erreichbar is True
     assert stand.modell_vorhanden is True
     assert stand.meldung == ""
     assert stand.verfuegbare_modelle == ["qwen3.5:4b"]
+    assert stand.laeuft_auf_cpu is False
+
+
+@respx.mock
+def test_auf_der_cpu_ist_keine_gute_nachricht() -> None:
+    """Der zweithaeufigste Einrichtungsfehler - und der unangenehmere.
+
+    Alles meldet "verbunden, Modell liegt vor", aber das Modell rechnet auf der
+    CPU: Eine Antwort dauert dort Minuten statt Sekunden. Wer den Unterschied
+    nicht angezeigt bekommt, wartet auf etwas, das praktisch nicht kommt, und
+    sucht den Fehler an der falschen Stelle.
+    """
+    respx.get(f"{ADRESSE}/api/tags").mock(
+        return_value=httpx.Response(200, json={"models": [{"name": "qwen3.5:4b"}]})
+    )
+    respx.get(f"{ADRESSE}/api/ps").mock(return_value=_ps_antwort(auf_karte=False))
+
+    stand = OllamaModell(adresse=ADRESSE, modell="qwen3.5:4b").status()
+
+    assert stand.erreichbar is True          # der Dienst laeuft ja
+    assert stand.modell_vorhanden is True    # und das Modell liegt da
+    assert stand.laeuft_auf_cpu is True      # nur eben nicht auf der Karte
+    assert "CPU" in stand.meldung
+    assert "ollama ps" in stand.meldung      # womit man es selbst nachsieht
+
+
+@respx.mock
+def test_ohne_geladenes_modell_wird_nichts_behauptet() -> None:
+    """"Nicht feststellbar" ist etwas anderes als "laeuft auf der CPU".
+
+    Ist gerade kein Modell im Speicher, sagt Ollama nichts darueber. Daraus
+    einen CPU-Betrieb zu folgern waere geraten - und der Statusabruf laedt
+    bewusst nichts, nur um es zu erfahren.
+    """
+    respx.get(f"{ADRESSE}/api/tags").mock(
+        return_value=httpx.Response(200, json={"models": [{"name": "qwen3.5:4b"}]})
+    )
+    respx.get(f"{ADRESSE}/api/ps").mock(
+        return_value=httpx.Response(200, json={"models": []})
+    )
+
+    stand = OllamaModell(adresse=ADRESSE, modell="qwen3.5:4b").status()
+
+    assert stand.gpu_anteil is None
+    assert stand.laeuft_auf_cpu is False
+    assert stand.meldung == ""
 
 
 @respx.mock
@@ -185,6 +254,9 @@ def test_die_tag_variante_zaehlt_nicht_als_anderes_modell() -> None:
     """'qwen3.5:4b' und 'qwen3.5:4b-instruct-q4_K_M' sind dasselbe Modell."""
     respx.get(f"{ADRESSE}/api/tags").mock(
         return_value=httpx.Response(200, json={"models": [{"name": "qwen3.5:4b-q4_K_M"}]})
+    )
+    respx.get(f"{ADRESSE}/api/ps").mock(
+        return_value=_ps_antwort(modell="qwen3.5:4b-q4_K_M")
     )
     assert OllamaModell(adresse=ADRESSE, modell="qwen3.5:4b").status().modell_vorhanden
 

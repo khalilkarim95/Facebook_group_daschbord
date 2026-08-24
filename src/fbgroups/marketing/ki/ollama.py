@@ -44,6 +44,10 @@ DEFAULT_MODELL = "qwen3.5:4b"
 # arabischen Beitrag durchaus eine Minute, und ein Abbruch mittendrin sieht
 # aus wie ein Fehler, obwohl nur die Geduld fehlte.
 DEFAULT_TIMEOUT = 180.0
+# Einstellbar ueber marketing.posting.ki.ollama.timeout_sekunden. Auf einem
+# Rechner, auf dem das Modell auf der CPU rechnet, braucht eine Fassung
+# Minuten - und wer das in Kauf nimmt, soll die Grenze heben koennen, ohne den
+# Code zu aendern.
 # Der Statusabruf dagegen muss schnell sein: Die Uebersicht fragt ihn bei
 # jedem Aufruf, und eine Seite, die auf einen nicht laufenden Dienst wartet,
 # ist unbenutzbar. Ollama laeuft auf demselben Rechner - antwortet es nicht
@@ -148,7 +152,53 @@ class OllamaModell:
                 f"Verbunden, aber das Modell '{self.name}' liegt nicht vor.\n"
                 f"Holen mit:  ollama pull {self.name}"
             )
+            return stand
+
+        stand.gpu_anteil = self._gpu_anteil()
+        if stand.laeuft_auf_cpu:
+            # Der zweithaeufigste Fehler, und der unangenehmere: Alles meldet
+            # "verbunden", aber das Modell rechnet auf der CPU. Ein 4B-Modell
+            # braucht dort Minuten je Antwort statt Sekunden - der Knopf haengt,
+            # eine Zeitgrenze schlaegt zu, und niemand sieht warum.
+            stand.meldung = (
+                f"Verbunden, aber '{self.name}' rechnet auf der CPU statt auf der "
+                f"Grafikkarte ({stand.gpu_anteil:.0%} im Grafikspeicher).\n"
+                "Eine Antwort dauert damit Minuten statt Sekunden.\n\n"
+                "Moegliche Gruende:\n"
+                "  - Ollama findet die Grafikkarte nicht (Treiber, CUDA)\n"
+                "  - Zu wenig freier Grafikspeicher fuer dieses Modell\n"
+                "  - Ein anderes Programm belegt die Karte\n\n"
+                "Pruefen mit:  ollama ps      (Spalte PROCESSOR)\n"
+                "Kleineres Modell:  ollama pull qwen2.5:1.5b  "
+                "und OLLAMA_MODEL=qwen2.5:1.5b in .env"
+            )
         return stand
+
+    def _gpu_anteil(self) -> float | None:
+        """Wie viel des geladenen Modells im Grafikspeicher liegt.
+
+        ``None`` heisst "nicht feststellbar": Ist gerade kein Modell geladen,
+        sagt Ollama nichts darueber - und das ist etwas anderes als "laeuft auf
+        der CPU". Ein Statusabruf laedt bewusst nichts, nur um es zu erfahren;
+        er soll billig bleiben und darf nichts erzeugen.
+        """
+        try:
+            antwort = httpx.get(f"{self.adresse}/api/ps", timeout=STATUS_TIMEOUT)
+            antwort.raise_for_status()
+            geladen = antwort.json().get("models", [])
+        except (httpx.HTTPError, ValueError):
+            return None
+
+        for eintrag in geladen:
+            name = str(eintrag.get("name", ""))
+            if name != self.name and name.split(":")[0] != self.name.split(":")[0]:
+                continue
+            gesamt = float(eintrag.get("size", 0) or 0)
+            auf_karte = float(eintrag.get("size_vram", 0) or 0)
+            if gesamt <= 0:
+                return None
+            return auf_karte / gesamt
+        return None
 
     def _nicht_erreichbar_text(self, exc: Exception) -> str:
         return NICHT_ERREICHBAR.format(adresse=self.adresse, modell=self.name) + (

@@ -44,6 +44,12 @@ def bestand(tmp_path: Path) -> Path:
                     name="Syrer in Koeln",
                     city="koeln",
                     audience_tags=["syrians"],
+                    # Mit Score: ``target_include_unscored`` ist standardmaessig
+                    # aus, eine Gruppe ohne Bewertung faellt also aus jeder
+                    # Regel heraus - und der Test pruefte dann nicht die Regel,
+                    # sondern diesen Sonderfall.
+                    score=92.0,
+                    score_max=100.0,
                 ),
                 Group(
                     group_id=GID_B,
@@ -51,6 +57,8 @@ def bestand(tmp_path: Path) -> Path:
                     name="Syrer in Berlin",
                     city="berlin",
                     audience_tags=["syrians"],
+                    score=88.0,
+                    score_max=100.0,
                 ),
             ]
         )
@@ -204,3 +212,83 @@ def test_nach_dem_veroeffentlichen_wird_nicht_mehr_entfernt(
     assert "ausschliessen" in antwort.json()["detail"].lower()
     with MarketingStore(bestand) as store:
         assert store.link_for("erste", GID) is not None
+
+
+# --- "Passt zur Regel" ist etwas anderes als "zugeordnet" ----------------
+
+def test_passende_kampagne_wird_vorgeschlagen(bestand: Path, config) -> None:
+    """Die Frage, die die Spalte beantworten soll: wohin gehoert diese Gruppe?
+
+    Eine Gruppe kann die Auswahlregel einer Kampagne erfuellen, ohne ihr
+    zugeordnet zu sein - genau dann steht ein Tracking-Code aus.
+    """
+    from fbgroups.marketing.dashboard import sammle_daten
+    from fbgroups.marketing.models import CampaignStatus
+
+    with MarketingStore(bestand) as store:
+        zweite = store.load_campaign("zweite")
+        zweite.status = CampaignStatus.ACTIVE
+        zweite.target_cities = ["berlin"]        # trifft nur GID_B
+        store.save_campaign(zweite)
+
+    daten = sammle_daten(config, bestand)
+    berlin = next(z for z in daten["gruppen"] if z["id"] == GID_B)
+    koeln = next(z for z in daten["gruppen"] if z["id"] == GID)
+
+    assert [k["id"] for k in berlin["passt_zu"]] == ["zweite"]
+    assert koeln["passt_zu"] == []               # andere Stadt
+
+
+def test_eine_zugeordnete_gruppe_wird_nicht_nochmal_vorgeschlagen(
+    bestand: Path, config
+) -> None:
+    """Sonst stuende neben der Marke ein Knopf, der nichts mehr bewirkte."""
+    from fbgroups.marketing.dashboard import sammle_daten
+    from fbgroups.marketing.models import CampaignStatus
+
+    with MarketingStore(bestand) as store:
+        erste = store.load_campaign("erste")
+        erste.status = CampaignStatus.ACTIVE
+        store.save_campaign(erste)                # Regel leer = alle Gruppen
+
+    daten = sammle_daten(config, bestand)
+    koeln = next(z for z in daten["gruppen"] if z["id"] == GID)
+
+    assert koeln["kampagnen_text"] == "Erste Kampagne"     # zugeordnet
+    assert "erste" not in [k["id"] for k in koeln["passt_zu"]]
+
+
+def test_eine_pausierte_kampagne_schlaegt_nichts_vor(bestand: Path, config) -> None:
+    """Sie sucht keine Gruppen mehr - ``campaign sync`` naehme sie auch nicht auf.
+
+    Ein Vorschlag waere ein Rat zu einer Zuordnung, die das Programm selbst
+    nicht mehr vornaehme.
+    """
+    from fbgroups.marketing.dashboard import sammle_daten
+    from fbgroups.marketing.models import CampaignStatus
+
+    with MarketingStore(bestand) as store:
+        zweite = store.load_campaign("zweite")
+        zweite.status = CampaignStatus.PAUSED
+        store.save_campaign(zweite)
+
+    daten = sammle_daten(config, bestand)
+
+    for zeile in daten["gruppen"]:
+        assert "zweite" not in [k["id"] for k in zeile["passt_zu"]]
+
+
+def test_die_seite_unterscheidet_marke_und_vorschlag(bestand: Path, config) -> None:
+    from fbgroups.marketing.dashboard import render, sammle_daten
+    from fbgroups.marketing.models import CampaignStatus
+
+    with MarketingStore(bestand) as store:
+        zweite = store.load_campaign("zweite")
+        zweite.status = CampaignStatus.ACTIVE
+        store.save_campaign(zweite)
+
+    seite = render(sammle_daten(config, bestand))
+
+    assert "k-marke" in seite        # zugeordnet
+    assert "k-vorschlag" in seite    # passt zur Regel
+    assert "k-zuordnen" in seite     # alles uebrige

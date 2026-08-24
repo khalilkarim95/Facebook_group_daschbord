@@ -129,6 +129,18 @@ marketing:
         # Zeit je Beitrag - bei besserem Arabisch. Beides ist hier ein
         # Zeilenwechsel, keine Codeaenderung.
         modell: qwen3.5:4b
+        # Wie lange auf eine Fassung gewartet wird.
+        #
+        # Der Wert oben setzt voraus, was der Kommentar sagt: dass das Modell
+        # auf der Karte liegt. Tut es das nicht, rechnet es auf der CPU und
+        # braucht ein Vielfaches - `fbgroups ki status` meldet diesen Fall
+        # ausdruecklich, statt ihn als "verbunden" durchgehen zu lassen.
+        #
+        # Die Grenze zu heben macht die Erzeugung nicht schneller, nur
+        # geduldiger. Der brauchbarere Weg bei CPU-Betrieb ist ein kleineres
+        # Modell (`ollama pull qwen2.5:1.5b`) oder Ollama auf die Karte zu
+        # bringen.
+        timeout_sekunden: 180
 
       anthropic:
         # Nur wirksam bei anbieter: anthropic. Ohne Schluessel und ohne das

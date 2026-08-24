@@ -124,6 +124,23 @@ class Status:
     # Die Modelle, die dort tatsaechlich liegen. Leer heisst "nicht gefragt"
     # oder "nicht erreichbar" - nicht "keine da".
     verfuegbare_modelle: list[str] = field(default_factory=list)
+    # Anteil des geladenen Modells, der auf der Grafikkarte liegt (0.0 bis 1.0).
+    # ``None`` heisst "nicht feststellbar" - etwa weil gerade kein Modell im
+    # Speicher ist oder der Anbieter davon nichts meldet. Das ist etwas anderes
+    # als 0.0, und die Anzeige darf beides nicht verwechseln.
+    gpu_anteil: float | None = None
+
+    @property
+    def laeuft_auf_cpu(self) -> bool:
+        """Rechnet das Modell ohne Grafikkarte?
+
+        Der Unterschied entscheidet ueber die Brauchbarkeit: Auf der Karte
+        antwortet ein 4B-Modell in Sekunden, auf der CPU in Minuten. Beide
+        Faelle melden "verbunden" und "Modell liegt vor" - wer den Unterschied
+        nicht angezeigt bekommt, wartet auf eine Antwort, die praktisch nicht
+        kommt, und sucht den Fehler an der falschen Stelle.
+        """
+        return self.gpu_anteil is not None and self.gpu_anteil < 0.5
 
     @property
     def modell_vorhanden(self) -> bool:

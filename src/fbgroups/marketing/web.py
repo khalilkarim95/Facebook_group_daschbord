@@ -86,11 +86,11 @@ SALT_SCHLUESSEL = "visitor_salt"
 # Wie viele Gruppen ein Klick auf "Text von der KI" hoechstens bearbeitet.
 #
 # Klein, weil ein lokales Modell je Fassung bis zu einer Minute braucht: Drei
-# Fassungen mal drei Gruppen sind schon neun Minuten, und laenger haelt kaum
-# eine Kette aus Browser, Reverse Proxy und Modell durch. Fuer den ganzen
+# Fassungen sind schon drei Minuten, und laenger haelt kaum eine Kette aus
+# Browser, Reverse Proxy und Modell durch. Fuer den ganzen
 # Bestand gibt es ``fbgroups campaign draft`` - dort darf ein Lauf Stunden
 # dauern, und man sieht ihm dabei zu.
-JE_KLICK = 3
+JE_KLICK = 1
 
 # Absenderadressen, die als "derselbe Rechner" gelten. Der Dienst steht
 # oeffentlich - die Tracking-Links zeigen auf ihn -, die Arbeitsliste darf aber

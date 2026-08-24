@@ -24,7 +24,7 @@ import time
 
 from fbgroups.config import AppConfig
 from fbgroups.marketing.ki.basis import KINichtVerfuegbar, Modell, Status
-from fbgroups.marketing.ki.ollama import OllamaModell
+from fbgroups.marketing.ki.ollama import DEFAULT_TIMEOUT, OllamaModell
 
 OLLAMA = "ollama"
 ANTHROPIC = "anthropic"
@@ -64,7 +64,16 @@ def baue_modell(config: AppConfig, anbieter: str = "") -> Modell:
         raise KINichtVerfuegbar(
             f"Unbekannter KI-Anbieter: {name}. Moeglich: {', '.join(ANBIETER)}"
         )
-    return OllamaModell(config)
+    return OllamaModell(
+        config,
+        timeout=float(
+            config.get(
+                "marketing", "posting", "ki", "ollama", "timeout_sekunden",
+                default=DEFAULT_TIMEOUT,
+            )
+            or DEFAULT_TIMEOUT
+        ),
+    )
 
 
 # Kurzlebiger Zwischenspeicher fuer den Statusabruf.

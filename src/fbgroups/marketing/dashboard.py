@@ -147,6 +147,7 @@ def _gruppe_als_zeile(
     ereignisse: dict[str, int] | None = None,
     bearbeiten: bool = True,
     ausschlussgrund: str = "",
+    passt_zu: list[dict[str, str]] | None = None,
     beitraege: list[dict[str, Any]] | None = None,
     resonanz: Resonanz | None = None,
 ) -> dict[str, Any]:
@@ -197,6 +198,11 @@ def _gruppe_als_zeile(
         "kampagnen_text": ", ".join(
             sorted({b["kampagne_name"] for b in (beitraege or [])})
         ),
+        # Kampagnen, deren Auswahlregel diese Gruppe erfasst, ohne dass sie
+        # zugeordnet waere. Das ist die Frage "wohin gehoert sie?" - die
+        # Zuordnung beantwortet nur "wo steht sie schon?". Ohne diese Angabe
+        # muesste man die Regel jeder Kampagne im Kopf nachrechnen.
+        "passt_zu": passt_zu or [],
         # Der schlechteste Stand aller Zuordnungen - danach wird gefiltert.
         # "Diese Gruppe ist erledigt" darf erst gelten, wenn kein Beitrag mehr
         # aussteht; sonst verschwindet eine offene Aufgabe aus dem Filter.
@@ -305,6 +311,26 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
     for (group_id, event_type), anzahl in klicks_je_gruppe.items():
         ereignisse_je_gruppe.setdefault(group_id, {})[event_type] = anzahl
 
+    # Welche Kampagnenregel welche Gruppe erfasst. Einmal je Kampagne ueber den
+    # Bestand statt je Zeile ueber die Kampagnen: Bei 310 Gruppen und zehn
+    # Kampagnen ist das derselbe Aufwand, aber ``auswahl_der_kampagne`` wird
+    # zehnmal aufgerufen statt dreitausendmal.
+    passt_je_gruppe: dict[str, list[dict[str, str]]] = {}
+    for c in campaigns:
+        if c.status is not CampaignStatus.ACTIVE:
+            # Eine pausierte oder beendete Kampagne sucht keine Gruppen mehr.
+            # Sie hier anzubieten hiesse, zu einer Zuordnung zu raten, die
+            # `campaign sync` selbst nicht mehr vornaehme.
+            continue
+        regel = auswahl_der_kampagne(c, config)
+        schon_drin = {link.group_id for link in links.get(c.campaign_id, [])}
+        for g in groups:
+            if g.group_id in schon_drin or not passt(g, regel):
+                continue
+            passt_je_gruppe.setdefault(g.group_id, []).append(
+                {"id": c.campaign_id, "name": c.name}
+            )
+
     zeilen = [
         _gruppe_als_zeile(
             g,
@@ -321,6 +347,7 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             ),
             beitraege=beitraege_je_gruppe.get(g.group_id, []),
             resonanz=resonanz_je_id.get(g.group_id),
+            passt_zu=passt_je_gruppe.get(g.group_id, []),
         )
         for g in groups
     ]
@@ -757,6 +784,20 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
     border: 1px dashed var(--rand); border-radius: 5px;
   }}
   .k-zuordnen:hover {{ color: var(--text); border-style: solid; }}
+  /* Vorschlag statt Zustand: Er sieht wie ein Knopf aus, weil er einer ist -
+     die Marke daneben ist eine Feststellung und darf nicht anklickbar wirken. */
+  .k-vorschlag {{
+    display: inline-block; cursor: pointer; font-size: 11px;
+    padding: 1px 6px; margin: 0 3px 3px 0; border-radius: 5px;
+    background: transparent; color: var(--gut);
+    border: 1px dashed var(--gut);
+  }}
+  .k-vorschlag:hover {{ background: var(--gut); color: var(--bg); border-style: solid; }}
+  .k-offen {{
+    display: inline-block; font-size: 11px; padding: 1px 6px;
+    margin: 0 3px 3px 0; border-radius: 5px; color: var(--leise);
+    border: 1px dashed var(--rand);
+  }}
   .k-kennung code {{ font-size: 11px; }}
   .balkenzelle {{ width: 40%; min-width: 120px; }}
   .balken {{
@@ -1228,25 +1269,52 @@ function resonanzZelle(z) {{
 }}
 
 function kampagnenZelle(z) {{
-  // Welche Kampagnen diese Gruppe erfasst haben - und ein Weg, sie einer
-  // weiteren zuzuordnen. Der Griff fuer den Einzelfall; fuer den Bestand
-  // bleibt die Auswahlregel der Kampagne zustaendig.
+  // Zwei verschiedene Aussagen, und sie duerfen nicht gleich aussehen:
+  //
+  //   Marke  = die Gruppe ist dieser Kampagne zugeordnet und hat ihren Code.
+  //   Vorschlag = die Auswahlregel der Kampagne erfasst sie, ein Code steht
+  //               aber noch aus.
+  //
+  // Die zweite beantwortet "wohin gehoert diese Gruppe?", die erste nur "wo
+  // steht sie schon?". Ohne die Unterscheidung muesste man die Regel jeder
+  // Kampagne im Kopf nachrechnen.
   const marken = (z.beitraege || []).map((b) =>
-    `<span class="k-marke" title="${{esc(b.code)}}">${{esc(b.kampagne_name)}}</span>`
+    `<span class="k-marke" title="Zugeordnet - Code ${{esc(b.code)}}">`
+    + `${{esc(b.kampagne_name)}}</span>`
   ).join("");
 
-  if (NUR_LESEN) return marken || '<span class="zart">–</span>';
+  const passend = z.passt_zu || [];
+  if (NUR_LESEN) {{
+    // Im Lesezugang wird nichts vergeben, also kein Knopf - der Hinweis, dass
+    // etwas aussteht, bleibt aber sichtbar.
+    const offen = passend.map((k) =>
+      `<span class="k-offen" title="Passt zur Regel, noch nicht zugeordnet">`
+      + `${{esc(k.name)}}</span>`).join("");
+    return marken + offen || '<span class="zart">–</span>';
+  }}
 
-  // Nur Kampagnen, in denen die Gruppe noch nicht steht. Eine Auswahl, die
-  // eine bestehende Zuordnung anbietet, verspricht etwas, das nicht geschieht.
+  // Vorschlaege zuerst: Sie sind das, wonach man sucht. Ein Klick ordnet zu.
+  const vorschlaege = passend.map((k) =>
+    `<button type="button" class="k-vorschlag" data-gruppe="${{esc(z.id)}}"`
+    + ` data-kampagne="${{esc(k.id)}}" data-name="${{esc(k.name)}}"`
+    + ` title="Passt zur Auswahlregel - klicken vergibt den Tracking-Code">`
+    + `+ ${{esc(k.name)}}</button>`).join("");
+
+  // Und die uebrigen Kampagnen, deren Regel nicht passt - der Einzelfall,
+  // fuer den es diese Spalte ueberhaupt gibt.
   const drin = new Set((z.beitraege || []).map((b) => b.kampagne));
-  const offen = (DATEN.kampagnen || []).filter((k) => !drin.has(k.id));
-  if (!offen.length) return marken || '<span class="zart">–</span>';
+  const vorgeschlagen = new Set(passend.map((k) => k.id));
+  const rest = (DATEN.kampagnen || []).filter(
+    (k) => !drin.has(k.id) && !vorgeschlagen.has(k.id));
 
-  return marken + '<select class="k-zuordnen" data-gruppe="' + esc(z.id) + '">'
-    + '<option value="">+ zuordnen …</option>'
-    + offen.map((k) => `<option value="${{esc(k.id)}}">${{esc(k.name)}}</option>`).join("")
-    + '</select>';
+  const auswahl = rest.length
+    ? '<select class="k-zuordnen" data-gruppe="' + esc(z.id) + '">'
+      + '<option value="">andere …</option>'
+      + rest.map((k) => `<option value="${{esc(k.id)}}">${{esc(k.name)}}</option>`).join("")
+      + '</select>'
+    : "";
+
+  return (marken + vorschlaege + auswahl) || '<span class="zart">–</span>';
 }}
 
 function punkteText(z) {{
@@ -1644,14 +1712,23 @@ document.addEventListener("click", async (ereignis) => {{
   }}
 }});
 
+document.addEventListener("click", async (ereignis) => {{
+  const knopf = ereignis.target;
+  if (!knopf.classList.contains("k-vorschlag")) return;
+  await zuordnen(knopf.dataset.gruppe, knopf.dataset.kampagne, knopf.dataset.name, knopf);
+}});
+
 document.addEventListener("change", async (ereignis) => {{
   const feld = ereignis.target;
   if (!feld.classList.contains("k-zuordnen")) return;
   const kampagne = feld.value;
   if (!kampagne) return;
-  const gruppe = feld.dataset.gruppe;
   const name = feld.options[feld.selectedIndex].textContent;
   feld.value = "";
+  await zuordnen(feld.dataset.gruppe, kampagne, name, feld);
+}});
+
+async function zuordnen(gruppe, kampagne, name, element) {{
 
   // Ein Tracking-Code wird nie zurueckgenommen - er steht spaeter in
   // veroeffentlichten Beitraegen. Deshalb wird gefragt, obwohl es nur eine
@@ -1661,7 +1738,7 @@ document.addEventListener("change", async (ereignis) => {{
       + "Sie bekommt dabei einen eigenen Tracking-Code. Ein vergebener Code "
       + "wird nie zurueckgenommen.")) return;
 
-  feld.disabled = true;
+  element.disabled = true;
   try {{
     const antwort = await fetch(
       "/gruppen/" + encodeURIComponent(gruppe) + "/kampagne", {{
@@ -1678,9 +1755,9 @@ document.addEventListener("change", async (ereignis) => {{
   }} catch (fehler) {{
     alert("Zuordnen fehlgeschlagen: " + fehler.message);
   }} finally {{
-    feld.disabled = false;
+    element.disabled = false;
   }}
-}});
+}}
 
 function sammelLeiste() {{
   const leiste = document.getElementById("sammel");
