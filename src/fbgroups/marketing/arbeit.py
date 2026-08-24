@@ -108,12 +108,20 @@ def hole_auftrag(
 ) -> Auftrag | Sperre:
     """Der naechste Beitrag - oder der Grund, warum gerade keiner drankommt.
 
-    Die Reihenfolge der Pruefungen ist nicht beliebig: Zustand vor Tageslimit
-    vor Wartezeit. Wer pausiert hat, will nicht lesen, dass die Wartezeit noch
-    laeuft - er will lesen, dass er pausiert hat.
+    Die Reihenfolge der Pruefungen ist nicht beliebig: Zustand, Tageslimit,
+    angefangener Auftrag, **leere Warteschlange**, dann erst Wartezeit. Wer
+    pausiert hat, will nicht lesen, dass die Wartezeit laeuft - er will lesen,
+    dass er pausiert hat. Und wer nichts mehr in der Schlange hat, soll das
+    sofort erfahren und nicht erst nach sieben Minuten Zaehlen.
+
+    ``wuerfel`` ist eine Ausnahme fuer Tests. Ohne ihn wird der Zufall der
+    Wartezeit **aus dem Zeitpunkt des letzten Versuchs gezogen** statt frisch:
+    Sonst wuerfelte jeder Seitenaufruf eine neue Zahl, der Zaehler spraenge hin
+    und her, und wer oft genug neu laedt, erwischte irgendwann eine kurze. So
+    steht die Zahl zwischen zwei Beitraegen fest und ist ueber mehrere Beitraege
+    hinweg trotzdem verschieden.
     """
     jetzt = jetzt or datetime.now(UTC)
-    wuerfel = wuerfel or random.Random()
 
     zustand = store.queue_zustand(campaign.campaign_id)
     if zustand is QueueZustand.PAUSIERT:
@@ -140,12 +148,22 @@ def hole_auftrag(
             versuch_id = _beginne(store, campaign, link, ausgeloest_von, sitzung, jetzt)
         return _auftrag(store, campaign, gruppen, link, versuch_id, heute_schon, grenzen)
 
+    # **Vor** der Wartezeit nachsehen, ob ueberhaupt etwas ansteht. Eine
+    # Wartezeit vor einer leeren Warteschlange verspricht einen naechsten
+    # Beitrag, den es nicht gibt: Der Zaehler liefe ab, die Seite laedt neu -
+    # und dann stuende doch "Warteschlange leer" da. Bei einer Kampagne mit
+    # genau einer Gruppe ist das der Normalfall und nicht der Sonderfall.
+    # ``naechster_job`` liest nur, es veraendert nichts.
+    naechster = store.naechster_job(campaign.campaign_id)
+    if naechster is None:
+        return Sperre(Grund.FERTIG, heute_schon=heute_schon, tageslimit=grenzen.tageslimit)
+
     # Die Wartezeit gilt erst ab dem zweiten Beitrag - und nur, wenn wirklich
     # ein neuer angefangen wird. Ein zurueckgegebener Auftrag ist keiner.
     letzte = store.letzter_versuch()
     if letzte is not None:
         vergangen = (jetzt - letzte).total_seconds()
-        noetig = grenzen.pause(wuerfel)
+        noetig = grenzen.pause(wuerfel or random.Random(int(letzte.timestamp())))
         if vergangen < noetig:
             return Sperre(
                 Grund.WARTEZEIT,
@@ -153,10 +171,6 @@ def hole_auftrag(
                 heute_schon=heute_schon,
                 tageslimit=grenzen.tageslimit,
             )
-
-    naechster = store.naechster_job(campaign.campaign_id)
-    if naechster is None:
-        return Sperre(Grund.FERTIG, heute_schon=heute_schon, tageslimit=grenzen.tageslimit)
 
     store.set_job_status(campaign.campaign_id, naechster.group_id, JobStatus.PROCESSING)
     versuch_id = _beginne(store, campaign, naechster, ausgeloest_von, sitzung, jetzt)

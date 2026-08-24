@@ -8,7 +8,6 @@ hinausgegangen sind.
 
 from __future__ import annotations
 
-import random
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -104,7 +103,6 @@ def gruppen(bestand: Path) -> dict[str, Group]:
 
 def hole(store, campaign, gruppen, grenzen=OHNE_PAUSE, **kwargs):
     kwargs.setdefault("ausgeloest_von", "test")
-    kwargs.setdefault("wuerfel", random.Random(1))
     return hole_auftrag(store, campaign, gruppen, grenzen, **kwargs)
 
 
@@ -614,3 +612,55 @@ def test_die_vorlage_wird_je_gruppe_zur_eigenen_kopie(store, campaign) -> None:
     assert a is not None and b is not None
     assert a.post_text == "Anders! {link}"
     assert b.post_text == campaign.message_template
+
+
+# --- Die beiden Fehler aus dem ersten Livelauf ---------------------------
+
+def test_leere_warteschlange_schlaegt_die_wartezeit(store, campaign, gruppen) -> None:
+    """Der Fehler, der beim ersten Test auffiel.
+
+    Bei einer Kampagne mit genau einer Gruppe war nach dem einzigen Beitrag
+    die Schlange leer - angezeigt wurde aber "Wartezeit laeuft noch". Der
+    Zaehler lief ab, die Seite lud neu, und dann stand doch "leer" da. Eine
+    Wartezeit verspricht einen naechsten Beitrag; ohne einen ist sie eine
+    falsche Auskunft.
+    """
+    grenzen = Grenzen(tageslimit=20, max_pro_lauf=99, pause_min=180.0, pause_max=180.0)
+    # Die Zeit ruecken lassen, sonst haengt der Test in der eigenen Wartezeit.
+    for nummer in range(len(GRUPPEN)):
+        spaeter = datetime.now(UTC) + timedelta(seconds=600 * nummer)
+        auftrag = hole(store, campaign, gruppen, grenzen, jetzt=spaeter)
+        assert isinstance(auftrag, Auftrag)
+        melde_ergebnis(
+            store, KAMPAGNE, auftrag.link.group_id, auftrag.versuch_id, Ergebnis(erfolg=True)
+        )
+
+    # Unmittelbar nach dem letzten Beitrag - die Wartezeit laeuft also noch,
+    # aber es steht nichts mehr an. Genau der Fall aus dem Livelauf.
+    sperre = hole(store, campaign, gruppen, grenzen)
+
+    assert isinstance(sperre, Sperre)
+    assert sperre.grund == Grund.FERTIG          # nicht WARTEZEIT
+
+
+def test_die_wartezeit_springt_beim_neuladen_nicht(store, campaign, gruppen) -> None:
+    """Sonst waere sie durch haeufiges Neuladen zu unterlaufen.
+
+    Der Zufall kommt aus dem Zeitpunkt des letzten Versuchs, nicht aus einem
+    frischen Wurf je Seitenaufruf: Wer oft genug F5 druecke, erwischte sonst
+    irgendwann die kurze Zahl - und der Takt waere eine Empfehlung statt einer
+    Grenze.
+    """
+    grenzen = Grenzen(tageslimit=20, max_pro_lauf=99, pause_min=180.0, pause_max=420.0)
+    erster = hole(store, campaign, gruppen, grenzen, wuerfel=None)
+    melde_ergebnis(
+        store, KAMPAGNE, erster.link.group_id, erster.versuch_id, Ergebnis(erfolg=True)
+    )
+
+    fest = datetime.now(UTC)
+    gesehen = {
+        hole(store, campaign, gruppen, grenzen, wuerfel=None, jetzt=fest).wartet_noch
+        for _ in range(8)
+    }
+
+    assert len(gesehen) == 1                     # bei gleichem Zeitpunkt immer dieselbe Zahl
