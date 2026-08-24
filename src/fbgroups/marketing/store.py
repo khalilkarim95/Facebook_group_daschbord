@@ -322,6 +322,23 @@ def _iso(wert: datetime | date | None) -> str | None:
     return wert.isoformat() if wert is not None else None
 
 
+def _parse_dt(wert: str | None) -> datetime | None:
+    """ISO-Zeitstempel aus der Datenbank zurueck in ein ``datetime``.
+
+    Sonst uebernimmt das Pydantic beim Bauen eines Modells; hier wird ein
+    einzelner Wert gebraucht, ohne dass ein Modell entsteht. Ein Wert ohne
+    Zeitzone gilt als UTC - so wurde er geschrieben, und ein naiver Wert
+    liesse sich sonst nicht mit ``datetime.now(UTC)`` vergleichen.
+    """
+    if not wert:
+        return None
+    try:
+        gelesen = datetime.fromisoformat(wert)
+    except ValueError:
+        return None
+    return gelesen if gelesen.tzinfo else gelesen.replace(tzinfo=UTC)
+
+
 def _schema_version() -> int:
     """Aktuelle Schema-Version. Import in der Funktion - sonst Ringschluss."""
     from fbgroups.storage.sqlite_store import SCHEMA_VERSION
@@ -1205,6 +1222,30 @@ class MarketingStore:
                 (campaign_id, seit),
             ).fetchone()
         return int(row["anzahl"] or 0)
+
+    def letzter_versuch(self, *, campaign_id: str | None = None) -> datetime | None:
+        """Wann zuletzt ein Beitrag begonnen wurde - oder ``None``.
+
+        Grundlage der Wartezeit zwischen zwei Beitraegen, wenn der Ablauf
+        **nicht** in einer Schleife laeuft: Bei der Arbeit ueber die Uebersicht
+        steht zwischen zwei Beitraegen keine Schleife, die schlafen koennte,
+        sondern ein Mensch, der eine Seite neu laedt. Die Pause muss deshalb
+        aus dem Bestand kommen und nicht aus dem Ablauf - sonst umginge man sie
+        durch Neuladen.
+
+        Wie beim Tageslimit ueber **alle** Kampagnen: Der Takt gilt fuer das
+        Konto, nicht fuer eine einzelne Kampagne.
+        """
+        if campaign_id is None:
+            row = self.conn.execute(
+                "SELECT MAX(begonnen_am) AS letzte FROM post_versuche"
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT MAX(begonnen_am) AS letzte FROM post_versuche WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()
+        return _parse_dt(row["letzte"]) if row and row["letzte"] else None
 
     def versuche_for(self, campaign_id: str, group_id: str) -> list[PostVersuch]:
         rows = self.conn.execute(

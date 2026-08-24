@@ -575,7 +575,15 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
         f"<td class='zahl'>{c['abschluesse']}</td>"
         f"<td class='zahl'>{quote(c['quote'])}</td>"
         f"<td class='knopfzelle'>"
-        f"<button class='k-regel' data-id=\"{html.escape(c['id'])}\">Regel</button>"
+        # Der Weg zur Arbeitsseite. Er schreibt (beginnt einen Versuch) und
+        # erscheint deshalb nur im bedienbaren Zugang - von aussen fuehrte er
+        # ins Leere, und ein Knopf, der 404 antwortet, sieht aus wie ein Fehler.
+        + (
+            ""
+            if nur_lesen
+            else f"<a class='k-arbeit' href='/arbeit/{html.escape(c['id'])}'>Arbeiten</a>"
+        )
+        + f"<button class='k-regel' data-id=\"{html.escape(c['id'])}\">Regel</button>"
         f"<button class='k-sync' data-id=\"{html.escape(c['id'])}\">Zuordnen</button>"
         f"</td>"
         f"</tr>"
@@ -772,6 +780,12 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   }}
   .knopfzelle {{ display: flex; gap: 6px; }}
   .k-regel {{ cursor: pointer; padding: 6px 12px; border-radius: 6px; }}
+  /* Der Weg zur Arbeitsseite - hervorgehoben, weil er der Einstieg in die
+     eigentliche Arbeit ist und nicht eine Einstellung daneben. */
+  .k-arbeit {{ padding: 6px 12px; border-radius: 6px; text-decoration: none;
+               background: #1d4ed8; color: #fff; font-weight: 600;
+               white-space: nowrap; }}
+  .k-arbeit:hover {{ background: #2563eb; }}
   /* Beitragsspalte */
   .beitrag {{ display: flex; flex-direction: column; gap: 4px; min-width: 210px; }}
   .b-zeile {{ display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }}

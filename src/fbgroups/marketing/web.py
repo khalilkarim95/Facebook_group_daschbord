@@ -30,11 +30,13 @@ import secrets
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from pydantic import BaseModel, Field
 
 from fbgroups.config import AppConfig, load_config
+from fbgroups.marketing.arbeit import Sperre, hole_auftrag, melde_ergebnis
+from fbgroups.marketing.arbeitsseite import render_auftrag, render_sperre
 from fbgroups.marketing.dashboard import (
     _beitrag_gesamtstand,
     regel_kurzfassung,
@@ -59,6 +61,8 @@ from fbgroups.marketing.rewards import bewerte_benutzer, load_reward_rules
 from fbgroups.marketing.selection import auswahl_der_kampagne, baue_plan, synchronisiere
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.marketing.tracking import slug
+from fbgroups.marketing.veroeffentlicher import Ergebnis
+from fbgroups.marketing.worker import lade_grenzen
 from fbgroups.models import RecordStatus
 from fbgroups.storage import SqliteStore
 
@@ -459,6 +463,90 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         """
         nur_lesen = _pruefe_uebersicht(request)
         return HTMLResponse(render(sammle_daten(cfg, pfad), nur_lesen=nur_lesen))
+
+    @app.get("/arbeit/{campaign_id}", response_class=HTMLResponse)
+    def arbeit(campaign_id: str, request: Request):  # noqa: ANN202
+        """Ein Beitrag, ein Bildschirm - die Arbeitsliste auf dem Server.
+
+        Der Bestand lebt hier, aber ``campaign worker`` braucht Zwischenablage
+        und Browser, die es auf einem Server nicht gibt. Beides auf den
+        Arbeitsrechner zu holen hiesse, in eine zweite Datenbank zu schreiben.
+        Also kommt die Arbeit dorthin, wo der Bestand steht: Der Server bereitet
+        vor und zaehlt, der Browser des Menschen kopiert und oeffnet.
+
+        ``_nur_lokal`` wie jeder schreibende Weg - der Aufruf **beginnt** einen
+        Versuch (``processing`` plus Protokollzeile) und ist damit kein Lesen.
+        """
+        _nur_lokal(request)
+        with SqliteStore(pfad) as gruppen_store:
+            gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
+        with _store() as store:
+            campaign = store.load_campaign(campaign_id)
+            if campaign is None:
+                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
+            ergebnis = hole_auftrag(
+                store,
+                campaign,
+                gruppen,
+                lade_grenzen(cfg),
+                ausgeloest_von="uebersicht",
+                sitzung="browser",
+            )
+        if isinstance(ergebnis, Sperre):
+            return HTMLResponse(render_sperre(ergebnis, campaign_id))
+        return HTMLResponse(render_auftrag(ergebnis, campaign_id))
+
+    @app.post("/arbeit/{campaign_id}/ergebnis")
+    async def arbeit_ergebnis(campaign_id: str, request: Request):  # noqa: ANN202
+        """Traegt den Ausgang ein und schickt weiter zur naechsten Gruppe.
+
+        Ein Formular statt JSON: Wer hier arbeitet, hat gerade in einem anderen
+        Reiter einen Beitrag abgesetzt und kommt mit einem Klick zurueck. Die
+        Weiterleitung nach dem POST ist Absicht (303) - ein Neuladen soll den
+        Ausgang nicht ein zweites Mal melden.
+
+        Der Text kommt **nicht** aus dem Formular zurueck. Was zurueckkommt,
+        ist der Ausgang und die ``versuch_id``; der Beitrag selbst hat den
+        Server nur in eine Richtung verlassen.
+        """
+        _nur_lokal(request)
+        # ``request.form()`` verlangt ``python-multipart``. Das Formular hier
+        # traegt vier kurze Textfelder und keine Datei - dafuer genuegt
+        # ``parse_qsl`` aus der Standardbibliothek. Ein Paket mehr waere fuer
+        # vier Felder zu viel, und ``[web]`` soll klein bleiben.
+        rumpf = (await request.body()).decode("utf-8", errors="replace")
+        formular = dict(parse_qsl(rumpf, keep_blank_values=True))
+        ausgang = formular.get("ausgang", "")
+        group_id = formular.get("group_id", "")
+        fehler = formular.get("fehler", "").strip()
+        try:
+            versuch_id = int(formular.get("versuch_id", "0"))
+        except ValueError:
+            versuch_id = 0
+
+        if not group_id or not versuch_id:
+            raise HTTPException(status_code=400, detail="Unvollstaendige Meldung")
+
+        ergebnis = {
+            "veroeffentlicht": Ergebnis(erfolg=True),
+            "fehlgeschlagen": Ergebnis(erfolg=False, fehler=fehler or "ohne Angabe"),
+            "uebersprungen": Ergebnis(erfolg=False, uebersprungen=True),
+            "schluss": Ergebnis(erfolg=False, abbrechen=True),
+        }.get(ausgang)
+        if ergebnis is None:
+            raise HTTPException(status_code=400, detail=f"Unbekannter Ausgang: {ausgang}")
+
+        with _store() as store:
+            if store.load_campaign(campaign_id) is None:
+                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
+            melde_ergebnis(store, campaign_id, group_id, versuch_id, ergebnis)
+            store.audit("beitrag_" + ausgang, f"{campaign_id}/{group_id}", fehler)
+
+        # Nach "Schluss" zurueck zur Uebersicht: Der naechste Auftrag laege
+        # sonst sofort wieder auf dem Bildschirm, und "Schluss" haette nichts
+        # bewirkt.
+        ziel = "/" if ausgang == "schluss" else f"/arbeit/{campaign_id}"
+        return RedirectResponse(ziel, status_code=303)
 
     @app.post("/stand")
     def stand_setzen(meldung: StandMeldung, request: Request):  # noqa: ANN202

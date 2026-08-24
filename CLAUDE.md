@@ -622,6 +622,56 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
   wie viele Jobs ein `gestoppt` zurückgestellt hat — „gestoppt" allein ließe
   offen, ob das 3 oder 300 Beiträge waren.
 
+### Arbeiten auf dem Server (`arbeit.py`, `arbeitsseite.py`)
+
+```
+https://go.b-tarikak.de → Übersicht → Kampagne → [Arbeiten]
+   → /arbeit/{kampagne}   ein Beitrag, ein Bildschirm, drei Knöpfe
+```
+
+- **Der Bestand lebt auf dem Server, `campaign worker` braucht einen
+  Arbeitsplatz.** Zwischenablage und Browser gibt es auf einem Debian-Server
+  nicht; den Worker auf den Arbeitsrechner zu holen hieße, in eine **zweite**
+  Datenbank zu schreiben — genau davor warnt `docs/plan-go-subdomain.md`.
+  Aufgelöst wird das, indem die *Arbeit* dorthin kommt, wo der Bestand steht:
+  Der Server bereitet vor und zählt, der Browser des Menschen kopiert und
+  öffnet. Der Server braucht keine Zwischenablage — der Browser hat eine.
+- **`arbeit.py` hält den Schritt, den beide Wege teilen.** Die Schleife des
+  Arbeiters ist nur *eine* Art, `hole_auftrag`/`melde_ergebnis` aufzurufen; die
+  Weboberfläche ist die andere. Eine zweite Fassung der Regeln für das Web wäre
+  ein zweites Tageslimit, das vom ersten abweicht — und niemand bemerkte es,
+  bis vierzig Beiträge an einem Tag hinausgegangen wären.
+- **Die Wartezeit kommt aus dem Bestand, nicht aus dem Ablauf.** Zwischen zwei
+  Beiträgen steht im Web keine Schleife, die schlafen könnte, sondern ein
+  Mensch, der eine Seite neu lädt — ein `sleep` wäre mit F5 umgangen.
+  `store.letzter_versuch` lässt sich nicht neu laden. Wie das Tageslimit gilt
+  sie über **alle** Kampagnen: Der Takt gehört zum Konto.
+- **Der Auftrag ist begonnen, wenn er herausgeht.** `hole_auftrag` setzt
+  `processing` und schreibt die Protokollzeile, *bevor* jemand den Text sieht.
+  Wer den Reiter schließt, bekommt beim nächsten Aufruf **denselben** Auftrag
+  zurück, statt dass ein zweiter angefangen wird — ohne das blutete die
+  Warteschlange bei jedem geschlossenen Fenster einen Beitrag aus. Ein
+  zurückgegebener Auftrag löst deshalb auch keine Wartezeit aus: Er ist kein
+  neuer Beitrag.
+- **Eine Sperre fasst nichts an.** Pausiert, Tageslimit, Wartezeit, leer — in
+  keinem dieser Fälle entsteht ein Versuch. Sonst zählte Nachsehen als Arbeit.
+  Die Reihenfolge der Prüfungen ist dabei nicht beliebig: Wer pausiert hat,
+  will lesen, dass er pausiert hat, und nicht, dass die Wartezeit noch läuft.
+- **Der Text geht nur hinaus, nie zurück.** Das Formular meldet den Ausgang und
+  die `versuch_id`; der Beitragstext ist kein Feld darin. Ein manipuliertes
+  Formular kann damit keinen anderen Text in einen Beitrag bringen als den, den
+  der Server vorbereitet hat. Die Antwort ist **303** — ein Neuladen soll den
+  Ausgang nicht ein zweites Mal melden.
+- **Kein `python-multipart`.** Das Formular trägt vier kurze Textfelder und
+  keine Datei; `parse_qsl` aus der Standardbibliothek genügt. `request.form()`
+  verlangte ein Paket mehr, und das `[web]`-Extra soll klein bleiben — dieselbe
+  Überlegung wie bei `webbrowser` und der Zwischenablage in `beitrag.py`.
+- **`/arbeit/…` steht hinter `_nur_lokal`** wie jeder schreibende Weg, und der
+  Knopf „Arbeiten" erscheint nur im bedienbaren Zugang. Anders als die übrigen
+  Knöpfe wird er **entfernt** statt per CSS versteckt: Er ist ein einfacher
+  Link, den das Skript nicht sucht — die Begründung fürs Verstecken
+  (mehrere Knöpfe werden beim Start gesucht) trifft auf ihn nicht zu.
+
 ### Der Trichter und seine Zuordnung
 
 - **Die Stufen sind unabhängig, die Zuordnung ist die einzige Klammer.**
