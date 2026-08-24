@@ -385,3 +385,46 @@ def test_ohne_eigenen_text_gilt_weiter_die_vorlage() -> None:
     )
 
     assert beitragstext(campaign, link).startswith("Alte Vorlage ")
+
+
+# --- Neu erzeugen, wo schon ein Text steht -------------------------------
+
+def test_ein_neuer_text_macht_die_freigabe_ungueltig(tmp_path) -> None:
+    """Sonst ginge ein ungepruefter Text in eine Gruppe hinaus.
+
+    Ein Mensch hat einen *anderen* Text freigegeben. Bliebe der Stand auf
+    ``approved``, waere der neue Text freigegeben, ohne dass ihn je jemand
+    gesehen haette - und zurueckholen laesst er sich nach dem Absetzen nicht.
+    """
+    from fbgroups.marketing.models import (
+        Campaign,
+        CampaignGroup,
+        JobStatus,
+        TextQuelle,
+    )
+    from fbgroups.marketing.store import MarketingStore
+    from fbgroups.models import Group
+    from fbgroups.storage import SqliteStore
+
+    pfad = tmp_path / "groups.sqlite"
+    with SqliteStore(pfad) as gruppen_store:
+        gruppen_store.upsert_groups(
+            [Group(group_id="1", url_canonical="https://www.facebook.com/groups/1")]
+        )
+    with MarketingStore(pfad) as store:
+        store.save_campaign(Campaign(campaign_id="k", name="K", message_template="A {link}"))
+        store.add_link(CampaignGroup(campaign_id="k", group_id="1", tracking_code="C-1"))
+        store.set_post_text("k", "1", "Alter Text {link}", TextQuelle.VORLAGE)
+        store.set_job_status("k", "1", JobStatus.PENDING_REVIEW)
+        store.set_job_status("k", "1", JobStatus.APPROVED, akteur="karim")
+
+        # Was ``campaign draft --neu`` tut, wenn ein Entwurf entstanden ist.
+        store.set_post_text("k", "1", "Neuer Text {link}", TextQuelle.KI)
+        store.set_job_status("k", "1", JobStatus.DRAFT, erzwingen=True)
+        store.set_job_status("k", "1", JobStatus.AI_GENERATED)
+
+        link = store.link_for("k", "1")
+        assert link is not None
+        assert link.job_status is JobStatus.AI_GENERATED     # nicht mehr approved
+        assert link.freigegeben_am is None                   # Freigabe ist weg
+        assert link.post_text == "Neuer Text {link}"

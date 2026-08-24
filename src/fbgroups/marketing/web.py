@@ -23,6 +23,7 @@ meldet dann, was fehlt.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import os
@@ -132,6 +133,20 @@ class KampagneNeu(BaseModel):
 
 class KampagneStatusMeldung(BaseModel):
     status: CampaignStatus
+
+
+class VorbereitenMeldung(BaseModel):
+    """Welcher Vorbereitungsschritt ausgefuehrt werden soll.
+
+    Ein Weg mit einem Feld statt fuenf Wegen: Die Schritte gehoeren zu einer
+    Kette (Text -> Freigabe -> Warteschlange), sie werden nacheinander vom
+    selben Knopf-Streifen ausgeloest, und jeder einzelne waere sonst ein
+    weiterer Weg, der ``_nur_lokal`` und die Kampagnenpruefung wiederholt.
+    """
+
+    schritt: str = Field(pattern="^(text|draft|approve|enqueue|reset)$")
+    #: Nur bei ``reset``: auch die gemessene Resonanz loeschen.
+    auch_ereignisse: bool = False
 
 
 class QueueMeldung(BaseModel):
@@ -336,6 +351,163 @@ def _ziel_url(store: MarketingStore, tracking_code: str, config: AppConfig) -> s
         if campaign and campaign.landing_page:
             return campaign.landing_page
     return str(config.get("marketing", "fallback_url", default="")) or "/"
+
+
+def _vorbereiten(
+    store: MarketingStore,
+    campaign: Campaign,
+    gruppen: dict[str, Any],
+    schritt: str,
+    auch_ereignisse: bool,
+    config: AppConfig,
+) -> tuple[int, str]:
+    """Fuehrt einen Vorbereitungsschritt aus. Returns: (betroffen, Hinweis).
+
+    Ausserhalb von ``create_app``, damit die Kette ohne laufenden Dienst
+    pruefbar ist - dieselbe Ueberlegung wie bei ``arbeit.py``.
+
+    Jeder Schritt geht durch **dieselben** Wege wie die Kommandozeile
+    (``set_post_text``, ``set_job_status``, ``setze_kampagne_zurueck``). Eine
+    zweite Fassung der Regeln fuer die Oberflaeche waere eine zweite Wahrheit
+    ueber denselben Ablauf.
+    """
+    from fbgroups.marketing.models import TextQuelle
+    from fbgroups.marketing.queue import UngueltigerUebergang
+
+    campaign_id = campaign.campaign_id
+    links = store.links_for_campaign(campaign_id)
+
+    if schritt == "reset":
+        zahlen = store.setze_kampagne_zurueck(campaign_id, auch_ereignisse=auch_ereignisse)
+        hinweis = f"{zahlen['versuche']} Versuche geloescht"
+        if auch_ereignisse:
+            hinweis += f", {zahlen['ereignisse']} Ereignisse geloescht"
+        return zahlen["zuordnungen"], hinweis
+
+    if schritt == "text":
+        if not campaign.message_template.strip():
+            return 0, "Diese Kampagne hat keine Textvorlage."
+        if "{link}" not in campaign.message_template:
+            return 0, "Die Vorlage enthaelt kein {link} - der Beitrag haette keinen Link."
+        betroffen = [
+            link
+            for link in links
+            if not link.post_text.strip()
+            and link.job_status not in (JobStatus.PUBLISHED, JobStatus.PROCESSING)
+        ]
+        for link in betroffen:
+            store.set_post_text(
+                campaign_id, link.group_id, campaign.message_template, TextQuelle.VORLAGE
+            )
+        return len(betroffen), "Vorlage eingetragen, wo noch kein Text stand."
+
+    if schritt == "draft":
+        # Die KI ist ein Aufsatz: Laeuft sie nicht, ist das eine Auskunft und
+        # kein Fehler des Dienstes. Deshalb eine Meldung statt einer Ausnahme -
+        # der Rest der Kette (Vorlage, Freigabe, Warteschlange) bleibt gangbar.
+        from fbgroups.marketing.ki import KINichtVerfuegbar, baue_modell
+        from fbgroups.marketing.ki.basis import (
+            UngueltigerVorschlag,
+            auftrag_aus_gruppe,
+            erzeuge_entwuerfe,
+        )
+
+        ohne_text = [
+            link
+            for link in links
+            if not link.post_text.strip()
+            and link.job_status not in (JobStatus.PUBLISHED, JobStatus.PROCESSING)
+        ]
+        if not ohne_text:
+            return 0, "Alle haben schon einen Text."
+        try:
+            modell = baue_modell(config)
+        except KINichtVerfuegbar as exc:
+            return 0, str(exc)
+
+        varianten = int(config.get("marketing", "posting", "ki", "varianten", default=3))
+        fertig = 0
+        for link in ohne_text:
+            group = gruppen.get(link.group_id)
+            if group is None:
+                continue
+            auftrag = auftrag_aus_gruppe(group, campaign, config, varianten=varianten)
+            auftrag.bisherige_texte = [
+                e.text for e in store.entwuerfe_for(campaign_id, link.group_id)
+            ]
+            try:
+                entwuerfe, _ = erzeuge_entwuerfe(
+                    modell, auftrag, campaign_id=campaign_id, group_id=link.group_id
+                )
+            except (UngueltigerVorschlag, KINichtVerfuegbar):
+                continue
+            if not entwuerfe:
+                continue
+            for entwurf in entwuerfe:
+                store.add_entwurf(entwurf)
+            store.set_post_text(
+                campaign_id, link.group_id, entwuerfe[0].text, TextQuelle.KI
+            )
+            # Der Stand darf hier scheitern, ohne den Lauf zu beenden: Der Text
+            # steht schon, und eine Gruppe mehr in der Freigabe kostet einen
+            # Blick - eine abgebrochene Erzeugung kostet alle uebrigen Gruppen.
+            with contextlib.suppress(UngueltigerUebergang):
+                store.set_job_status(campaign_id, link.group_id, JobStatus.AI_GENERATED)
+            fertig += 1
+        return fertig, "Fassungen erzeugt - ansehen mit: campaign entwuerfe"
+
+    if schritt == "approve":
+        # Ohne Text weist ``pruefe_uebergang`` ohnehin ab - solche Zuordnungen
+        # hier zu uebergehen spart eine Fehlermeldung je Gruppe.
+        betroffen = [
+            link
+            for link in links
+            if link.post_text.strip()
+            and link.job_status in (JobStatus.DRAFT, JobStatus.AI_GENERATED,
+                                    JobStatus.PENDING_REVIEW)
+        ]
+        fertig = 0
+        for link in betroffen:
+            try:
+                if link.job_status is not JobStatus.PENDING_REVIEW:
+                    store.set_job_status(campaign_id, link.group_id, JobStatus.PENDING_REVIEW)
+                store.set_job_status(
+                    campaign_id, link.group_id, JobStatus.APPROVED, akteur="uebersicht"
+                )
+                fertig += 1
+            except UngueltigerUebergang:
+                continue
+        ohne_text = sum(
+            1
+            for link in links
+            if not link.post_text.strip()
+            and link.job_status not in (JobStatus.PUBLISHED, JobStatus.PROCESSING)
+        )
+        hinweis = "Freigegeben."
+        if ohne_text:
+            hinweis = f"{ohne_text} ohne Text uebersprungen - erst Text erzeugen."
+        return fertig, hinweis
+
+    if schritt == "enqueue":
+        from fbgroups.marketing.selection import nach_prioritaet
+
+        freigegeben = [link for link in links if link.job_status is JobStatus.APPROVED]
+        geordnet = nach_prioritaet(
+            [gruppen[link.group_id] for link in freigegeben if link.group_id in gruppen],
+            config,
+        )
+        reihenfolge = {g.group_id: i for i, g in enumerate(geordnet)}
+        freigegeben.sort(key=lambda link: reihenfolge.get(link.group_id, len(reihenfolge)))
+        fertig = 0
+        for link in freigegeben:
+            try:
+                store.set_job_status(campaign_id, link.group_id, JobStatus.QUEUED)
+                fertig += 1
+            except UngueltigerUebergang:
+                continue
+        return fertig, "Nach Score eingereiht - die besten zuerst."
+
+    return 0, f"Unbekannter Schritt: {schritt}"
 
 
 def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> Any:
@@ -704,6 +876,50 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             store.save_campaign(campaign)
             store.audit("kampagne_status", campaign_id, meldung.status.value)
         return JSONResponse({"campaign_id": campaign_id, "status": meldung.status.value})
+
+    @app.post("/kampagnen/{campaign_id}/vorbereiten")
+    def kampagne_vorbereiten(  # noqa: ANN202
+        campaign_id: str, meldung: VorbereitenMeldung, request: Request
+    ):
+        """Die Vorbereitungskette aus der Uebersicht statt aus dem Terminal.
+
+        Dieselben Schritte wie auf der Kommandozeile und **dieselben Regeln**:
+        ``text`` schreibt die Vorlage nur dort, wo keine steht; ``draft`` laesst
+        das Modell nur fuer textlose Zuordnungen schreiben; ``approve`` uebergeht
+        Zuordnungen ohne Text, weil ``pruefe_uebergang`` sie ohnehin abwiese;
+        ``enqueue`` reiht nach Score ein. Wer hier klickt, bekommt nichts
+        anderes als wer dort tippt - es gibt nur einen Weg durch die
+        Zustandsmaschine.
+
+        ``reset`` loescht bewusst **nicht** die Ereignisse, solange nicht
+        ``auch_ereignisse`` gesetzt ist: Gemessene Resonanz ist das Einzige,
+        was sich nicht wiederherstellen laesst.
+        """
+        _nur_lokal(request)
+        with SqliteStore(pfad) as gruppen_store:
+            gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
+
+        with _store() as store:
+            campaign = store.load_campaign(campaign_id)
+            if campaign is None:
+                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
+
+            getan, hinweis = _vorbereiten(
+                store, campaign, gruppen, meldung.schritt, meldung.auch_ereignisse, cfg
+            )
+            store.audit("vorbereiten_" + meldung.schritt, campaign_id, str(getan))
+            zaehler = store.job_counts(campaign_id)
+
+        return JSONResponse(
+            {
+                "campaign_id": campaign_id,
+                "schritt": meldung.schritt,
+                "betroffen": getan,
+                "hinweis": hinweis,
+                "eingereiht": zaehler.get(JobStatus.QUEUED.value, 0),
+                "freigegeben": zaehler.get(JobStatus.APPROVED.value, 0),
+            }
+        )
 
     @app.post("/kampagnen/{campaign_id}/queue")
     def kampagne_queue(  # noqa: ANN202

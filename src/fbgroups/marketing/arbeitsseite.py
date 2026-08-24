@@ -77,6 +77,11 @@ input[type=text] { width:100%; padding:.55rem .7rem; border-radius:7px;
                    border:1px solid #2a2f38; background:#0f1114; color:#e6e8eb;
                    font:inherit; font-size:.92rem; }
 .versteckt { display:none; }
+.ueberschrift { font-weight:600; margin-bottom:.75rem; }
+.schritt { font-size:.88rem; }
+.meldung { margin-top:1rem; font-size:.9rem; min-height:1.4em; }
+.gut-text { color:#4ade80; }
+.schlecht-text { color:#f87171; }
 """
 
 
@@ -136,12 +141,85 @@ def render_sperre(sperre: Sperre, campaign_id: str) -> str:
     if dazu:
         inhalt += f"<div class='dazu'>{escape(dazu)}</div>"
 
+    # Bei leerer Warteschlange gehoert die Vorbereitung hierher: Das ist die
+    # Stelle, an der jemand feststellt, dass nichts ansteht - und der Weg
+    # weiter fuehrt sonst nur ueber das Terminal.
+    werkbank = _werkbank(campaign_id) if sperre.grund == Grund.FERTIG else ""
+
     return (
         _kopf(f"Arbeit - {campaign_id}")
         + f"<h1>{escape(campaign_id)}</h1>"
         + "<div class='leiste'><a class='knopf' href='/'>&larr; Uebersicht</a></div>"
         + f"<div class='karte sperre'>{inhalt}</div>"
+        + werkbank
         + _FUSS
+    )
+
+
+# Die Vorbereitungskette als Knopfreihe. Reihenfolge wie im Ablauf: erst ein
+# Text, dann die Freigabe, dann die Warteschlange. Jeder Knopf nennt, was er
+# tut - "Schritt 2" allein sagt niemandem etwas.
+_SCHRITTE: tuple[tuple[str, str, str], ...] = (
+    ("text", "1 · Text aus Vorlage", "Traegt die Vorlage der Kampagne ein, wo kein Text steht."),
+    ("draft", "1 · Text von der KI", "Laesst das Modell Fassungen schreiben (braucht Ollama)."),
+    ("approve", "2 · Freigeben", "Gibt alles frei, was einen Text hat."),
+    ("enqueue", "3 · Einreihen", "Stellt die freigegebenen nach Score in die Warteschlange."),
+)
+
+
+def _werkbank(campaign_id: str) -> str:
+    """Die Vorbereitungsschritte als Knoepfe statt als Befehle."""
+    knoepfe = "".join(
+        f"<button type='button' class='schritt' data-schritt='{schluessel}' "
+        f"title='{escape(erklaerung)}'>{escape(beschriftung)}</button>"
+        for schluessel, beschriftung, erklaerung in _SCHRITTE
+    )
+    return (
+        "<div class='karte'>"
+        "<div class='ueberschrift'>Warteschlange fuellen</div>"
+        f"<div class='knoepfe'>{knoepfe}</div>"
+        "<div class='meldung' id='meldung'></div>"
+        "<div class='hinweis'>Dieselben Schritte wie auf der Kommandozeile - "
+        "und dieselben Regeln. Nichts davon veroeffentlicht etwas.</div>"
+        "</div>"
+        "<script>"
+        f"const KAMPAGNE = {campaign_id!r};".replace("'", '"')
+        + """
+document.querySelectorAll('.schritt').forEach((knopf) => {
+  knopf.addEventListener('click', async () => {
+    const meldung = document.getElementById('meldung');
+    const vorher = knopf.textContent;
+    knopf.disabled = true;
+    knopf.textContent = 'laeuft ...';
+    meldung.textContent = '';
+    try {
+      const antwort = await fetch('/kampagnen/' + KAMPAGNE + '/vorbereiten', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({schritt: knopf.dataset.schritt}),
+      });
+      const daten = await antwort.json();
+      if (!antwort.ok) {
+        meldung.textContent = daten.detail || ('Fehler ' + antwort.status);
+        meldung.className = 'meldung schlecht-text';
+      } else {
+        meldung.textContent = daten.betroffen + ' betroffen. ' + (daten.hinweis || '')
+          + '  (' + daten.freigegeben + ' freigegeben, ' + daten.eingereiht + ' eingereiht)';
+        meldung.className = 'meldung gut-text';
+        // Sobald etwas eingereiht ist, gibt es Arbeit - dann gehoert der
+        // Beitrag auf den Bildschirm und nicht diese Knopfreihe.
+        if (daten.eingereiht > 0) { setTimeout(() => location.reload(), 900); }
+      }
+    } catch (fehler) {
+      meldung.textContent = String(fehler);
+      meldung.className = 'meldung schlecht-text';
+    } finally {
+      knopf.disabled = false;
+      knopf.textContent = vorher;
+    }
+  });
+});
+</script>"""
     )
 
 

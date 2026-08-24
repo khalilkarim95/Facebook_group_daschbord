@@ -302,6 +302,13 @@ CREATE INDEX IF NOT EXISTS idx_identities ON user_identities(identity);
 # ein Mensch ein Ergebnis ein, und ein Ergebnis hat immer genau einen
 # passenden Vorbereitungsstand. ``offen`` heisst "wieder aufgenommen" - der
 # Beitrag geht in die Warteschlange zurueck, wo ``campaign retry`` ihn findet.
+# Staende, in denen ein Beitrag noch **nicht** freigegeben ist. Wer hierhin
+# zurueckgeht, verliert seine Freigabe - sie gehoert zu einem Text, und der
+# ist dann entweder weg oder ersetzt.
+_VOR_DER_FREIGABE: frozenset[JobStatus] = frozenset(
+    {JobStatus.DRAFT, JobStatus.AI_GENERATED, JobStatus.PENDING_REVIEW}
+)
+
 _JOB_ZU_POST_STATUS: dict[PostStatus, JobStatus] = {
     PostStatus.OFFEN: JobStatus.QUEUED,
     PostStatus.VEROEFFENTLICHT: JobStatus.PUBLISHED,
@@ -1011,10 +1018,16 @@ class MarketingStore:
         if neu is JobStatus.APPROVED:
             felder["freigegeben_am"] = _iso(jetzt)
             felder["freigegeben_von"] = akteur
-        if neu is JobStatus.PENDING_REVIEW and link.job_status is JobStatus.APPROVED:
+        if neu in _VOR_DER_FREIGABE:
             # Eine zurueckgenommene Freigabe ist keine Freigabe mehr. Bliebe der
             # Zeitpunkt stehen, sagte die Zeile "freigegeben am ...", waehrend
             # sie auf Pruefung wartet.
+            #
+            # Die Regel gilt fuer **jeden** Weg zurueck, nicht nur fuer
+            # ``approved -> pending_review``: ``campaign draft --neu`` schickt
+            # einen freigegebenen Job ueber ``draft`` zurueck, weil sein Text
+            # ersetzt wurde. Blieb der Zeitpunkt dabei stehen, trug ein Entwurf
+            # die Freigabe eines Textes, den es nicht mehr gibt.
             felder["freigegeben_am"] = None
             felder["freigegeben_von"] = ""
         if neu is JobStatus.PUBLISHED and link.posted_at is None:

@@ -664,3 +664,85 @@ def test_die_wartezeit_springt_beim_neuladen_nicht(store, campaign, gruppen) -> 
     }
 
     assert len(gesehen) == 1                     # bei gleichem Zeitpunkt immer dieselbe Zahl
+
+
+# --- Die Vorbereitungsknoepfe --------------------------------------------
+
+def _client(bestand, config):
+    pytest.importorskip("fastapi", reason="nur mit dem optionalen web-Zusatz")
+    from fastapi.testclient import TestClient
+
+    from fbgroups.marketing.web import create_app
+
+    return TestClient(create_app(config=config, db_path=bestand))
+
+
+def test_die_werkbank_erscheint_nur_bei_leerer_warteschlange(store, campaign, gruppen) -> None:
+    """Sonst laege sie unter einem Beitrag, der gerade geschrieben werden soll."""
+    from fbgroups.marketing.arbeitsseite import render_sperre
+
+    leer = render_sperre(Sperre(Grund.FERTIG), KAMPAGNE)
+    wartend = render_sperre(Sperre(Grund.WARTEZEIT, wartet_noch=30), KAMPAGNE)
+
+    assert "Warteschlange fuellen" in leer
+    assert "Warteschlange fuellen" not in wartend
+
+
+def test_text_und_freigabe_und_einreihen_ueber_den_dienst(bestand: Path, config) -> None:
+    """Die ganze Kette per Knopf - ohne ein einziges Terminal."""
+    with MarketingStore(bestand) as store:
+        store.setze_kampagne_zurueck(KAMPAGNE)
+        for gid in GRUPPEN:                       # Text entfernen, wie nach einem Reset
+            store.set_post_text(KAMPAGNE, gid, "", TextQuelle.VORLAGE)
+            store.set_job_status(KAMPAGNE, gid, JobStatus.DRAFT, erzwingen=True)
+
+    client = _client(bestand, config)
+
+    text = client.post(f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "text"})
+    assert text.status_code == 200
+    assert text.json()["betroffen"] == len(GRUPPEN)
+
+    frei = client.post(f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "approve"})
+    assert frei.json()["betroffen"] == len(GRUPPEN)
+
+    reihe = client.post(f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "enqueue"})
+    assert reihe.json()["eingereiht"] == len(GRUPPEN)
+
+
+def test_freigeben_ohne_text_meldet_den_grund(bestand: Path, config) -> None:
+    """"0 betroffen" allein liesse offen, woran es lag."""
+    with MarketingStore(bestand) as store:
+        for gid in GRUPPEN:
+            store.set_post_text(KAMPAGNE, gid, "", TextQuelle.VORLAGE)
+            store.set_job_status(KAMPAGNE, gid, JobStatus.DRAFT, erzwingen=True)
+
+    antwort = _client(bestand, config).post(
+        f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "approve"}
+    )
+
+    assert antwort.json()["betroffen"] == 0
+    assert "ohne Text" in antwort.json()["hinweis"]
+
+
+def test_die_werkbank_ist_von_aussen_nicht_bedienbar(bestand: Path, config) -> None:
+    """Sie schreibt - wie jeder andere schreibende Weg hinter ``_nur_lokal``."""
+    pytest.importorskip("fastapi", reason="nur mit dem optionalen web-Zusatz")
+    from fastapi.testclient import TestClient
+
+    from fbgroups.marketing.web import create_app
+
+    fremd = TestClient(
+        create_app(config=config, db_path=bestand), client=("203.0.113.7", 44321)
+    )
+
+    assert fremd.post(
+        f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "enqueue"}
+    ).status_code == 404
+
+
+def test_ein_unbekannter_schritt_wird_abgewiesen(bestand: Path, config) -> None:
+    antwort = _client(bestand, config).post(
+        f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "veroeffentlichen"}
+    )
+
+    assert antwort.status_code == 422

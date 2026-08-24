@@ -1017,6 +1017,7 @@ def _wechsle(
     *,
     akteur: str = "",
     fehler: str | None = None,
+    erzwingen: bool = False,
 ) -> CampaignGroup | None:
     """Setzt den Stand und meldet einen unerlaubten Schritt lesbar.
 
@@ -1025,7 +1026,7 @@ def _wechsle(
     """
     try:
         return store.set_job_status(
-            campaign_id, group_id, ziel, akteur=akteur, fehler=fehler
+            campaign_id, group_id, ziel, akteur=akteur, fehler=fehler, erzwingen=erzwingen
         )
     except UngueltigerUebergang as exc:
         console.print(f"[red]{group_id}:[/red] {exc}")
@@ -1038,6 +1039,11 @@ def campaign_draft(
     gruppe: str = typer.Option("", "--gruppe", help="Nur diese eine Gruppe."),
     top: int = typer.Option(0, "--top", help="Die besten N ohne Text (0 = alle)."),
     varianten: int = typer.Option(0, "--varianten", help="Fassungen je Gruppe."),
+    neu: bool = typer.Option(
+        False,
+        "--neu",
+        help="Auch dort erzeugen, wo schon ein Text steht - die Freigabe faellt dabei weg.",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Nur zeigen, was erzeugt wuerde - kein Aufruf, keine Kosten."
     ),
@@ -1076,13 +1082,25 @@ def campaign_draft(
                 console.print(f"[red]{gruppe}[/red] gehoert nicht zu {campaign_id}.")
                 raise typer.Exit(code=1)
         else:
-            # Nur die ohne Text: Ein zweiter Lauf soll nicht 310 Aufrufe
-            # wiederholen, fuer die es laengst Entwuerfe gibt.
-            offen = [
-                link
-                for link in links
-                if not link.post_text and link.job_status is JobStatus.DRAFT
-            ]
+            if neu:
+                # Auch die mit Text - aber nie ein veroeffentlichter Beitrag
+                # und nie einer, der gerade in Arbeit ist. Der erste steht in
+                # einer Gruppe und laesst sich nicht mehr zurueckholen; beim
+                # zweiten haette jemand den Text vor sich, waehrend er sich
+                # unter der Hand aendert.
+                offen = [
+                    link
+                    for link in links
+                    if link.job_status not in (JobStatus.PUBLISHED, JobStatus.PROCESSING)
+                ]
+            else:
+                # Nur die ohne Text: Ein zweiter Lauf soll nicht 310 Aufrufe
+                # wiederholen, fuer die es laengst Entwuerfe gibt.
+                offen = [
+                    link
+                    for link in links
+                    if not link.post_text and link.job_status is JobStatus.DRAFT
+                ]
             geordnet = nach_prioritaet(
                 [gruppen[link.group_id] for link in offen if link.group_id in gruppen], config
             )
@@ -1092,7 +1110,11 @@ def campaign_draft(
                 offen = offen[:top]
 
         if not offen:
-            console.print("[green]Nichts zu erzeugen[/green] - alle haben schon einen Text.")
+            console.print(
+                "[green]Nichts zu erzeugen[/green] - alle haben schon einen Text.\n"
+                f"[dim]Trotzdem neu schreiben lassen:  "
+                f"fbgroups campaign draft {campaign_id} --neu[/dim]"
+            )
             return
 
         if dry_run:
@@ -1160,6 +1182,16 @@ def campaign_draft(
                 store.set_post_text(
                     campaign_id, link.group_id, entwuerfe[0].text, TextQuelle.KI
                 )
+                # Ein neuer Text macht jede bestehende Freigabe ungueltig: Ein
+                # Mensch hat einen *anderen* Text freigegeben. Waere der Stand
+                # geblieben, ginge ein ungeprueter Text in eine Gruppe hinaus -
+                # und niemand haette ihn je gesehen. Der Weg zurueck fuehrt
+                # ueber ``draft``, weil ``approved -> ai_generated`` in der
+                # Uebergangstabelle zu Recht fehlt.
+                if link.job_status not in _VOR_DER_PRUEFUNG:
+                    _wechsle(
+                        store, campaign_id, link.group_id, JobStatus.DRAFT, erzwingen=True
+                    )
                 _wechsle(store, campaign_id, link.group_id, JobStatus.AI_GENERATED)
                 console.print(
                     f"[green]OK[/green] {group.name or link.group_id}: "
