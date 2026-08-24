@@ -31,7 +31,7 @@ import secrets
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, quote, urlparse
 
 from pydantic import BaseModel, Field
 
@@ -343,14 +343,67 @@ def _ist_linkvorschau(user_agent: str) -> bool:
     return any(muster in ua for muster in _VORSCHAU_USER_AGENTS)
 
 
-def _ziel_url(store: MarketingStore, tracking_code: str, config: AppConfig) -> str:
-    """Wohin ein Klick fuehrt: Landingpage der Kampagne, sonst Ausweichziel."""
+def play_store_url(tracking_code: str, config: AppConfig) -> str:
+    """Die Play-Store-Adresse dieser App - mit dem Code im ``referrer``.
+
+    ``referrer`` ist das einzige Feld, das eine Installation ueberlebt: Google
+    reicht es nach dem Einrichten an die App weiter (Play Install Referrer),
+    und die App liest es beim ersten Start. Ohne dieses Feld endet die
+    Zuordnung am Store - die Landingpage-Adresse mit ``?ref=`` sieht ein
+    Play-Store-Install nie.
+
+    Der Code wird **prozentkodiert**. Er enthaelt heute nur Buchstaben, Ziffern
+    und Bindestriche, aber die Kuerzel kommen aus der Konfiguration und koennen
+    sich aendern; ein ungeschuetztes ``&`` darin zerlegte die Adresse.
+    """
+    paket = str(config.get("marketing", "store", "android_package", default="")).strip()
+    vorlage = str(
+        config.get("marketing", "store", "play_url", default="")
+    ).strip() or "https://play.google.com/store/apps/details?id={package}&referrer={referrer}"
+    if not paket:
+        return ""
+    return vorlage.replace("{package}", quote(paket, safe="")).replace(
+        "{referrer}", quote(tracking_code, safe="")
+    )
+
+
+def _ziel_gewaehlt(campaign: Campaign | None, config: AppConfig) -> str:
+    """"store" oder "landing" - die Kampagne entscheidet, sonst die Vorgabe.
+
+    Leer an der Kampagne heisst ausdruecklich "die Vorgabe", nicht "landing":
+    Sonst waere eine geaenderte Vorgabe fuer den Bestand wirkungslos, und das
+    faellt erst auf, wenn keine Installation mehr zugeordnet wird.
+    """
+    if campaign is not None and campaign.ziel.strip():
+        return campaign.ziel.strip().lower()
+    return str(config.get("marketing", "ziel", default="landing")).strip().lower()
+
+
+def _ziel_url(
+    store: MarketingStore, tracking_code: str, config: AppConfig
+) -> tuple[str, bool]:
+    """Wohin ein Klick fuehrt. Returns: (Adresse, ist_store).
+
+    ``ist_store`` gehoert dazu, weil der Aufrufer daran entscheidet, ob ein
+    ``store_visit`` mitgeschrieben wird - und weil es nicht aus der Adresse
+    zurueckzulesen ist, ohne sie zu zerlegen.
+
+    Faellt der Store aus (keine Package-ID eingetragen), wird auf die
+    Landingpage ausgewichen **und das nicht als Store-Besuch gezaehlt**. Eine
+    fehlende Kennung ist ein Einrichtungsfehler; ihn als Store-Besuch zu
+    zaehlen machte ihn unsichtbar.
+    """
     link = store.resolve_code(tracking_code)
-    if link is not None:
-        campaign = store.load_campaign(link.campaign_id)
-        if campaign and campaign.landing_page:
-            return campaign.landing_page
-    return str(config.get("marketing", "fallback_url", default="")) or "/"
+    campaign = store.load_campaign(link.campaign_id) if link is not None else None
+
+    if _ziel_gewaehlt(campaign, config) == "store":
+        adresse = play_store_url(tracking_code, config)
+        if adresse:
+            return adresse, True
+
+    if campaign is not None and campaign.landing_page:
+        return campaign.landing_page, False
+    return (str(config.get("marketing", "fallback_url", default="")) or "/"), False
 
 
 def _vorbereiten(
@@ -1181,10 +1234,36 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                             source="redirect",
                         )
                     )
-            ziel = _ziel_url(store, tracking_code, cfg)
+            ziel, ist_store = _ziel_url(store, tracking_code, cfg)
+
+            if ist_store and not _ist_linkvorschau(user_agent):
+                # Eine eigene Stufe, und sie heisst mit Bedacht nicht
+                # "Installation": Gemessen ist, dass wir diesen Menschen zum
+                # Play Store geschickt haben. Ob er dort installiert, meldet
+                # uns niemand - der Beweis kommt erst als ``activation`` aus
+                # der App selbst.
+                store.record_event(
+                    TrackingEvent(
+                        tracking_code=tracking_code,
+                        campaign_id=link.campaign_id,
+                        group_id=link.group_id,
+                        event_type=EventType.STORE_VISIT,
+                        visitor_hash=_visitor_hash(
+                            store,
+                            request.client.host if request.client else "",
+                            user_agent,
+                        ),
+                        source="redirect",
+                    )
+                )
 
         # 302, nicht 301: Ein dauerhaft gemerkter Umzug wuerde spaetere Klicks
         # am Zaehler vorbeifuehren.
+        if ist_store:
+            # Die Play-Adresse traegt den Code bereits im ``referrer`` - das
+            # ist das Feld, das die Installation ueberlebt. Ein zweites ``ref``
+            # daneben brauchte niemand und Google reichte es nicht weiter.
+            return RedirectResponse(url=ziel, status_code=302)
         trenner = "&" if "?" in ziel else "?"
         return RedirectResponse(url=f"{ziel}{trenner}ref={tracking_code}", status_code=302)
 

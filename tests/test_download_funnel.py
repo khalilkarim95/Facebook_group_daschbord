@@ -62,6 +62,11 @@ def bestand(tmp_path: Path) -> Path:
                 campaign_id="batreeq",
                 name="Batreeq Syrian Germany",
                 landing_page="https://b-tarikak.de/",
+                # Ausdruecklich der Landingpage-Weg: Diese Tests pruefen ihn,
+                # und sie sollen das sagen statt von der Projektvorgabe
+                # (marketing.ziel) abzuhaengen. Dieselbe Ueberlegung wie bei
+                # ``ohne_ollama``: Was der Test braucht, gehoert in den Test.
+                ziel="landing",
             )
         )
         store.add_link(

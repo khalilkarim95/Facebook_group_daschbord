@@ -341,6 +341,11 @@ def campaign_set(
     template_file: Path = typer.Option(None, "--vorlage-datei", help="Vorlage aus einer Datei."),
     starts_on: str = typer.Option(None, "--start", help="JJJJ-MM-TT"),
     ends_on: str = typer.Option(None, "--ende", help="JJJJ-MM-TT"),
+    ziel: str = typer.Option(
+        None,
+        "--ziel",
+        help="store | landing | vorgabe - wohin ein Klick fuehrt.",
+    ),
 ) -> None:
     """Aendert eine bestehende Kampagne. Nicht genannte Felder bleiben.
 
@@ -358,6 +363,14 @@ def campaign_set(
         # utf-8-sig: Vorlagen entstehen oft in Notepad, das ein BOM schreibt.
         template = template_file.read_text(encoding="utf-8-sig")
 
+    if ziel is not None and ziel not in ("store", "landing", "vorgabe"):
+        console.print(
+            f"[red]Unbekanntes Ziel: {ziel}[/red]\n"
+            "Moeglich: store (Play Store), landing (eigene Seite), "
+            "vorgabe (Wert aus config/settings.yaml)"
+        )
+        raise typer.Exit(code=2)
+
     with MarketingStore(config.path("sqlite_path")) as store:
         campaign = _kampagne_oder_ende(store, campaign_id)
 
@@ -370,6 +383,11 @@ def campaign_set(
             ("message_template", template),
             ("starts_on", _datum(starts_on) if starts_on else None),
             ("ends_on", _datum(ends_on) if ends_on else None),
+            # "vorgabe" schreibt den leeren Wert - das ist der Weg zurueck zur
+            # Konfigurationsvorgabe. Ohne so ein Wort gaebe es ihn nicht: Ein
+            # leerer Wert auf der Kommandozeile ist von "nicht angegeben" nicht
+            # zu unterscheiden. Dieselbe Vereinbarung wie "alle" bei --stadt.
+            ("ziel", "" if ziel == "vorgabe" else ziel),
         ):
             if wert is not None:
                 setattr(campaign, feld, wert)

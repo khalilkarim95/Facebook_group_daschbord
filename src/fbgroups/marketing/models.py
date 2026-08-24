@@ -171,6 +171,12 @@ class Campaign(BaseModel):
     language: str = ""
     message_template: str = ""             # Vorlage zum Selberposten, kein Automat
     landing_page: str = ""
+    # Wohin ein Klick fuehrt: "store" (Play Store, Code ueberlebt ueber den
+    # Install Referrer) oder "landing" (die eigene Seite, Code in der Adresse).
+    # **Leer heisst: die Vorgabe aus der Konfiguration.** Nicht "landing" -
+    # sonst muesste jede bestehende Kampagne einzeln umgestellt werden, und
+    # eine neue Vorgabe waere wirkungslos.
+    ziel: str = ""
     status: CampaignStatus = CampaignStatus.DRAFT
     starts_on: date | None = None
     ends_on: date | None = None
@@ -213,10 +219,24 @@ class EventType(StrEnum):
     so spaet wie moeglich setzen (siehe ``docs/events-api.html``). Der Beweis,
     dass die App wirklich auf einem Geraet liegt, ist ``ACTIVATION`` - nur die
     App selbst kann ihn erbringen.
+
+    **``STORE_VISIT`` ist keine Installation.** Es heisst genau: Wir haben
+    diesen Menschen zum Play Store geschickt. Ob er dort auf "Installieren"
+    drueckt, ob die Installation gelingt, ob er die App je oeffnet - davon
+    weiss dieser Dienst nichts, denn der Play Store meldet uns nichts. Die
+    Stufe waere als "Installation" bezeichnet eine Behauptung ueber etwas,
+    das auf einem fremden Geraet geschieht.
+
+    Damit gibt es drei verschiedene Dinge und drei verschiedene Namen:
+    ``STORE_VISIT`` (wir haben weitergeleitet, gemessen von uns),
+    ``DOWNLOAD`` (der Bezug wurde ausgeloest, gemessen von der ausliefernden
+    Stelle) und ``ACTIVATION`` (die App lief wirklich, gemessen von der App).
+    Nur die letzte beweist, dass die App angekommen ist.
     """
 
     CLICK = "click"
     LANDING_VISIT = "landing_visit"
+    STORE_VISIT = "store_visit"
     REGISTRATION = "registration"
     DOWNLOAD = "download"
     ACTIVATION = "activation"
@@ -234,6 +254,7 @@ class EventType(StrEnum):
 FUNNEL_ORDER: tuple[EventType, ...] = (
     EventType.CLICK,
     EventType.LANDING_VISIT,
+    EventType.STORE_VISIT,
     EventType.REGISTRATION,
     EventType.DOWNLOAD,
     EventType.ACTIVATION,

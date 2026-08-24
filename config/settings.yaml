@@ -23,6 +23,37 @@ marketing:
     path: r           # ergibt {APP_BASE_URL}/r/{code}
     number_width: 3   # 001, 002, ...
 
+  # --- Wohin ein Klick fuehrt ------------------------------------------
+  #
+  # Zwei Ziele stehen zur Wahl, und der Unterschied ist keine Kleinigkeit:
+  #
+  #   landing  ->  b-tarikak.de/?ref=CODE
+  #                Der Code steht in der Adresse, die Web-App liest ihn und
+  #                traegt ihn durch die Registrierung. Ein Play-Store-Install
+  #                sieht diese Adresse aber nie - wer die App dort holt, ist
+  #                fuer die Zuordnung verloren.
+  #
+  #   store    ->  play.google.com/...&referrer=CODE
+  #                Google reicht `referrer` nach der Installation an die App
+  #                weiter (Play Install Referrer). Die App liest ihn beim
+  #                ersten Start und meldet `activation` mit dem Code. Damit
+  #                ueberlebt die Zuordnung den Weg ueber den Store.
+  #
+  # Je Kampagne einstellbar (`campaign set --ziel store`); hier steht die
+  # Vorgabe fuer Kampagnen, die nichts sagen.
+  ziel: store
+
+  store:
+    # Die echte Package-ID der App (b-tarikak-frontend/android/app/build.gradle.kts).
+    # Keine Beispielkennung: Eine falsche fuehrte auf eine fremde oder gar
+    # keine Store-Seite, und der Fehler faellt erst auf, wenn niemand die App
+    # findet.
+    android_package: de.btarikak.app
+    # {package} und {referrer} werden ersetzt. `referrer` ist das Feld, das
+    # Google nach der Installation an die App zurueckgibt - dort steht der
+    # Tracking-Code und sonst nichts.
+    play_url: "https://play.google.com/store/apps/details?id={package}&referrer={referrer}"
+
   # --- Beitrags-Warteschlange -----------------------------------------
   # Alle Stellschrauben des Postens stehen hier und nirgends sonst. Verteilt
   # auf mehrere Dateien waere die Frage "wie lange wartet das System

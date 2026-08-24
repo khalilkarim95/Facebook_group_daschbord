@@ -64,6 +64,11 @@ def bestand(tmp_path: Path) -> Path:
                 campaign_id="batreeq",
                 name="Batreeq Syrian Germany",
                 landing_page="https://batreeq.example/start",
+                # Ausdruecklich der Landingpage-Weg: Diese Tests pruefen ihn,
+                # und sie sollen das sagen statt von der Projektvorgabe
+                # (marketing.ziel) abzuhaengen. Dieselbe Ueberlegung wie bei
+                # ``ohne_ollama``: Was der Test braucht, gehoert in den Test.
+                ziel="landing",
             )
         )
         store.add_link(
@@ -228,6 +233,11 @@ def test_ganze_kette_vom_klick_bis_zur_conversion(client: TestClient, bestand: P
     assert stufen == {
         "click": 1,
         "landing_visit": 1,
+        # Diese Kampagne fuehrt auf die Landingpage (``ziel="landing"``), also
+        # wurde niemand zum Play Store geschickt. Die Stufe steht trotzdem im
+        # Trichter: Eine fehlende Zeile liesse offen, ob sie null ist oder gar
+        # nicht erhoben wird.
+        "store_visit": 0,
         "registration": 1,
         "download": 1,
         "activation": 1,

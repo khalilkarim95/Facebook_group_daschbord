@@ -20,7 +20,7 @@ from fbgroups.marketing.store import SCHEMA_POSTING as MARKETING_POSTING_SCHEMA
 from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEMA
 from fbgroups.models import Group, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Schritte, die eine aeltere Datei nachholt, ohne dass der Bestand neu
 # aufgebaut werden muss. Handgepflegte Notizen bleiben so erhalten.
@@ -137,6 +137,16 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE INDEX IF NOT EXISTS idx_campaign_groups_job "
         "ON campaign_groups(campaign_id, job_status)",
     ),
+    # Wohin ein Klick fuehrt: die eigene Seite oder der Play Store.
+    #
+    # Die Spalte startet **leer** und nicht auf 'landing'. Leer heisst "die
+    # Vorgabe aus der Konfiguration": Eine bestehende Kampagne folgt damit dem
+    # neuen Standard, ohne dass jemand 400 Zeilen von Hand umstellt - und wer
+    # eine Kampagne ausdruecklich auf der Landingpage halten will, traegt das
+    # ein. Andersherum waere die Konfigurationsvorgabe fuer den ganzen Bestand
+    # wirkungslos, und das faellt erst auf, wenn keine Installation mehr
+    # zugeordnet wird.
+    11: ("ALTER TABLE campaigns ADD COLUMN ziel TEXT NOT NULL DEFAULT ''",),
 }
 
 SCHEMA = """

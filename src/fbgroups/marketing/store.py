@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS campaigns (
     language         TEXT NOT NULL DEFAULT '',
     message_template TEXT NOT NULL DEFAULT '',
     landing_page     TEXT NOT NULL DEFAULT '',
+    -- Wohin ein Klick fuehrt: 'store' | 'landing' | '' (Vorgabe aus der
+    -- Konfiguration). Leer ist die Vorgabe und nicht 'landing': Sonst
+    -- muesste jede bestehende Kampagne einzeln umgestellt werden.
+    ziel             TEXT NOT NULL DEFAULT '',
     status           TEXT NOT NULL DEFAULT 'draft',
     starts_on        TEXT,
     ends_on          TEXT,
@@ -423,11 +427,11 @@ class MarketingStore:
             """
             INSERT INTO campaigns (
                 campaign_id, name, description, audiences, cities, language,
-                message_template, landing_page, status, starts_on, ends_on,
+                message_template, landing_page, ziel, status, starts_on, ends_on,
                 target_audiences, target_cities, target_categories,
                 target_statuses, target_min_score, target_include_unscored,
                 auto_assign, created_at, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(campaign_id) DO UPDATE SET
                 name             = excluded.name,
                 description      = excluded.description,
@@ -436,6 +440,7 @@ class MarketingStore:
                 language         = excluded.language,
                 message_template = excluded.message_template,
                 landing_page     = excluded.landing_page,
+                ziel             = excluded.ziel,
                 status           = excluded.status,
                 starts_on        = excluded.starts_on,
                 ends_on          = excluded.ends_on,
@@ -457,6 +462,7 @@ class MarketingStore:
                 campaign.language,
                 campaign.message_template,
                 campaign.landing_page,
+                campaign.ziel,
                 campaign.status.value,
                 _iso(campaign.starts_on),
                 _iso(campaign.ends_on),
@@ -1815,6 +1821,7 @@ class MarketingStore:
             language=row["language"],
             message_template=row["message_template"],
             landing_page=row["landing_page"],
+            ziel=row["ziel"],
             status=row["status"],
             starts_on=row["starts_on"],
             ends_on=row["ends_on"],
