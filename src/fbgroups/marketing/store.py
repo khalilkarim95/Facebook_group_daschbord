@@ -820,6 +820,97 @@ class MarketingStore:
         ).fetchall()
         return [self._row_to_link(row) for row in rows]
 
+    def zaehle_zuruecksetzbar(self, campaign_id: str) -> dict[str, int]:
+        """Was ein ``reset`` dieser Kampagne loeschen bzw. zuruecksetzen wuerde.
+
+        Getrennt vom Loeschen, damit ``--dry-run`` und Ernstfall dieselbe Zahl
+        nennen - dieselbe Ueberlegung wie bei ``search.build_plan``. Eine
+        zweite Zaehlung koennte abweichen, und der Mensch bestaetigte dann eine
+        Zahl und bekaeme eine andere.
+        """
+        def eins(sql: str, *werte: object) -> int:
+            row = self.conn.execute(sql, werte).fetchone()
+            return int(row[0] or 0)
+
+        return {
+            "zuordnungen": eins(
+                "SELECT COUNT(*) FROM campaign_groups WHERE campaign_id = ?", campaign_id
+            ),
+            "veroeffentlicht": eins(
+                "SELECT COUNT(*) FROM campaign_groups WHERE campaign_id = ? "
+                "AND posted_at IS NOT NULL",
+                campaign_id,
+            ),
+            "versuche": eins(
+                "SELECT COUNT(*) FROM post_versuche WHERE campaign_id = ?", campaign_id
+            ),
+            "ereignisse": eins(
+                "SELECT COUNT(*) FROM tracking_events WHERE campaign_id = ?", campaign_id
+            ),
+            "entwuerfe": eins(
+                "SELECT COUNT(*) FROM post_entwuerfe WHERE campaign_id = ?", campaign_id
+            ),
+        }
+
+    def setze_kampagne_zurueck(
+        self, campaign_id: str, *, auch_ereignisse: bool = False
+    ) -> dict[str, int]:
+        """Setzt den Beitragsstand einer Kampagne auf Anfang. Fuer Testlaeufe.
+
+        **Tracking-Code und Tracking-URL bleiben unangetastet.** Das ist die
+        wichtigste Zusage dieser Methode: Ein vergebener Code steht
+        moeglicherweise in einem veroeffentlichten Beitrag, und ein Klick
+        darauf muss weiterhin ankommen. Zurueckgesetzt wird der *Stand*, nie
+        die Zuordnung.
+
+        Ebenso unberuehrt bleiben ``groups`` und ``group_marketing``: Die
+        Gruppen und der Kooperationsstand ("wir sind dort Mitglied") sind
+        Handarbeit und haben mit einem Testlauf nichts zu tun.
+
+        ``auch_ereignisse`` loescht zusaetzlich die gemessene Resonanz dieser
+        Kampagne - Klicks, Registrierungen, Downloads. Das ist die einzige
+        Angabe, die sich **nicht** wiederherstellen laesst: Sie ist von aussen
+        entstanden und kommt nicht noch einmal. Deshalb ein eigener Schalter
+        und nicht Teil des Normalfalls.
+        """
+        zahlen = self.zaehle_zuruecksetzbar(campaign_id)
+
+        # Der Stand geht auf ``approved``, wenn ein freigegebener Text da ist -
+        # sonst auf ``draft``. Dieselbe Regel wie in
+        # ``fehlgeschlagene_zuruecksetzen``: Wer keinen Text hat, koennte in
+        # der Warteschlange nirgends wieder aufgegriffen werden.
+        self.conn.execute(
+            """
+            UPDATE campaign_groups
+               SET job_status      = CASE WHEN TRIM(post_text) <> ''
+                                          THEN 'approved' ELSE 'draft' END,
+                   post_status     = 'offen',
+                   posted_at       = NULL,
+                   last_attempt_at = NULL,
+                   post_attempts   = 0,
+                   post_error      = ''
+             WHERE campaign_id = ?
+            """,
+            (campaign_id,),
+        )
+        self.conn.execute("DELETE FROM post_versuche WHERE campaign_id = ?", (campaign_id,))
+        self.set_queue_zustand(campaign_id, QueueZustand.LAUFEND)
+
+        if auch_ereignisse:
+            self.conn.execute(
+                "DELETE FROM tracking_events WHERE campaign_id = ?", (campaign_id,)
+            )
+        else:
+            zahlen["ereignisse"] = 0
+
+        self.audit(
+            "kampagne_zurueckgesetzt",
+            campaign_id,
+            f"ereignisse={'ja' if auch_ereignisse else 'nein'}",
+        )
+        self.conn.commit()
+        return zahlen
+
     def remove_link(self, campaign_id: str, group_id: str) -> int:
         cursor = self.conn.execute(
             "DELETE FROM campaign_groups WHERE campaign_id = ? AND group_id = ?",

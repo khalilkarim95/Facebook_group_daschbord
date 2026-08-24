@@ -466,3 +466,115 @@ def test_der_arbeiten_knopf_fehlt_im_nur_lesen_zugang(bestand: Path, config) -> 
     # beiden Faellen stehen, entfernt wird nur der Weg dorthin.
     assert "href='/arbeit/" in render(daten, nur_lesen=False)
     assert "href='/arbeit/" not in render(daten, nur_lesen=True)
+
+
+# --- Zuruecksetzen fuer Testlaeufe ---------------------------------------
+
+def test_reset_laesst_den_tracking_code_unberuehrt(store, campaign, gruppen) -> None:
+    """Die wichtigste Zusage: Ein Code steht moeglicherweise in einem Beitrag.
+
+    Ein Klick darauf muss weiterhin ankommen. Zurueckgesetzt wird der Stand,
+    nie die Zuordnung.
+    """
+    vorher = {
+        link.group_id: (link.tracking_code, link.tracking_url)
+        for link in store.links_for_campaign(KAMPAGNE)
+    }
+    auftrag = hole(store, campaign, gruppen)
+    melde_ergebnis(
+        store, KAMPAGNE, auftrag.link.group_id, auftrag.versuch_id, Ergebnis(erfolg=True)
+    )
+
+    store.setze_kampagne_zurueck(KAMPAGNE)
+
+    nachher = {
+        link.group_id: (link.tracking_code, link.tracking_url)
+        for link in store.links_for_campaign(KAMPAGNE)
+    }
+    assert nachher == vorher
+
+
+def test_reset_stellt_den_beitragsstand_auf_anfang(store, campaign, gruppen) -> None:
+    auftrag = hole(store, campaign, gruppen)
+    melde_ergebnis(
+        store, KAMPAGNE, auftrag.link.group_id, auftrag.versuch_id, Ergebnis(erfolg=True)
+    )
+
+    store.setze_kampagne_zurueck(KAMPAGNE)
+
+    link = store.link_for(KAMPAGNE, auftrag.link.group_id)
+    assert link is not None
+    assert link.job_status is JobStatus.APPROVED      # Text ist da
+    assert link.posted_at is None
+    assert link.post_attempts == 0
+    assert link.post_error == ""
+    assert store.versuche_heute() == 0                # Protokoll geleert
+
+
+def test_reset_laesst_die_ereignisse_stehen(store, campaign, gruppen) -> None:
+    """Gemessene Resonanz ist das Einzige, was nicht wiederkommt.
+
+    Sie ist von aussen entstanden; deshalb braucht ihr Loeschen einen eigenen
+    Schalter und geschieht nicht nebenbei.
+    """
+    from fbgroups.marketing.models import EventType, TrackingEvent
+
+    store.record_event(
+        TrackingEvent(
+            tracking_code=GRUPPEN["482910573829104"][1],
+            campaign_id=KAMPAGNE,
+            group_id="482910573829104",
+            event_type=EventType.CLICK,
+        )
+    )
+
+    store.setze_kampagne_zurueck(KAMPAGNE)
+
+    assert store.event_counts().get(EventType.CLICK.value, 0) == 1
+
+
+def test_mit_schalter_verschwinden_auch_die_ereignisse(store, campaign, gruppen) -> None:
+    from fbgroups.marketing.models import EventType, TrackingEvent
+
+    store.record_event(
+        TrackingEvent(
+            tracking_code=GRUPPEN["482910573829104"][1],
+            campaign_id=KAMPAGNE,
+            group_id="482910573829104",
+            event_type=EventType.CLICK,
+        )
+    )
+
+    zahlen = store.setze_kampagne_zurueck(KAMPAGNE, auch_ereignisse=True)
+
+    assert zahlen["ereignisse"] == 1
+    assert store.event_counts().get(EventType.CLICK.value, 0) == 0
+
+
+def test_reset_faengt_die_warteschlange_wieder_an(store, campaign, gruppen) -> None:
+    """Eine gestoppte Warteschlange bliebe sonst nach dem Reset gestoppt."""
+    store.set_queue_zustand(KAMPAGNE, QueueZustand.GESTOPPT)
+
+    store.setze_kampagne_zurueck(KAMPAGNE)
+
+    assert store.queue_zustand(KAMPAGNE) is QueueZustand.LAUFEND
+
+
+def test_die_vorschau_nennt_dieselben_zahlen(store, campaign, gruppen) -> None:
+    """``--dry-run`` und Ernstfall lesen dieselbe Zaehlung.
+
+    Dieselbe Ueberlegung wie bei ``search.build_plan``: Eine zweite Zaehlung
+    koennte abweichen, und der Mensch bestaetigte eine Zahl und bekaeme eine
+    andere.
+    """
+    auftrag = hole(store, campaign, gruppen)
+    melde_ergebnis(
+        store, KAMPAGNE, auftrag.link.group_id, auftrag.versuch_id, Ergebnis(erfolg=True)
+    )
+
+    vorschau = store.zaehle_zuruecksetzbar(KAMPAGNE)
+    getan = store.setze_kampagne_zurueck(KAMPAGNE, auch_ereignisse=True)
+
+    assert getan["zuordnungen"] == vorschau["zuordnungen"] == 2
+    assert getan["versuche"] == vorschau["versuche"] == 1
+    assert getan["veroeffentlicht"] == vorschau["veroeffentlicht"] == 1

@@ -1866,6 +1866,75 @@ def campaign_tageslauf(
     console.print(f"[dim]Ende: {bericht.grund}[/dim]")
 
 
+@campaign_app.command("reset")
+def campaign_reset(
+    campaign_id: str = typer.Argument(...),
+    auch_ereignisse: bool = typer.Option(
+        False,
+        "--auch-ereignisse",
+        help="Zusaetzlich Klicks, Registrierungen und Downloads dieser Kampagne loeschen.",
+    ),
+    ja: bool = typer.Option(False, "--ja", help="Wirklich ausfuehren (sonst nur zeigen)."),
+) -> None:
+    """Setzt den Beitragsstand einer Kampagne auf Anfang - fuer Testlaeufe.
+
+    **Tracking-Codes bleiben unangetastet.** Ein vergebener Code steht
+    moeglicherweise in einem veroeffentlichten Beitrag; ein Klick darauf muss
+    weiterhin ankommen und gezaehlt werden. Zurueckgesetzt wird der *Stand*,
+    nie die Zuordnung - und ebenso wenig die Gruppen oder der Kooperationsstand.
+
+    Ohne ``--ja`` wird nur gezeigt, was geschaehe. Das ist kein Zierrat:
+    ``--auch-ereignisse`` loescht gemessene Resonanz, und die ist das einzige
+    in dieser Datenbank, was sich nicht wiederherstellen laesst. Sie ist von
+    aussen entstanden und kommt nicht noch einmal.
+    """
+    config = _config()
+    with MarketingStore(config.path("sqlite_path")) as store:
+        _kampagne_oder_ende(store, campaign_id)
+        zahlen = store.zaehle_zuruecksetzbar(campaign_id)
+
+        tabelle = Table(box=None, show_header=False)
+        tabelle.add_column(style="dim")
+        tabelle.add_column(justify="right")
+        tabelle.add_row("Zuordnungen zurueckgesetzt", str(zahlen["zuordnungen"]))
+        tabelle.add_row("davon veroeffentlicht", str(zahlen["veroeffentlicht"]))
+        tabelle.add_row("Versuchsprotokoll geloescht", str(zahlen["versuche"]))
+        tabelle.add_row(
+            "Ereignisse geloescht",
+            str(zahlen["ereignisse"]) if auch_ereignisse else "0 (bleiben erhalten)",
+        )
+        console.print(tabelle)
+        console.print()
+        console.print(
+            "[dim]Unangetastet: Tracking-Codes und -URLs, die Gruppen selbst, "
+            "der Kooperationsstand (Mitglied/kontaktiert) und die Entwuerfe.[/dim]"
+        )
+
+        if not ja:
+            console.print(
+                f"\n[yellow]Nichts geaendert.[/yellow] Wirklich ausfuehren:  "
+                f"fbgroups campaign reset {campaign_id}"
+                f"{' --auch-ereignisse' if auch_ereignisse else ''} --ja"
+            )
+            return
+
+        if auch_ereignisse and zahlen["ereignisse"]:
+            console.print(
+                f"\n[red]{zahlen['ereignisse']} gemessene Ereignisse werden geloescht.[/red] "
+                "Sie sind von aussen entstanden und kommen nicht wieder."
+            )
+
+        getan = store.setze_kampagne_zurueck(campaign_id, auch_ereignisse=auch_ereignisse)
+
+    console.print(
+        f"\n[green]Zurueckgesetzt.[/green] {getan['zuordnungen']} Zuordnungen stehen wieder "
+        "am Anfang, die Warteschlange laeuft."
+    )
+    console.print(
+        f"[dim]Weiter mit:  fbgroups campaign enqueue {campaign_id}[/dim]"
+    )
+
+
 @campaign_app.command("zeitplan")
 def campaign_zeitplan(
     campaign_id: str = typer.Argument(...),
