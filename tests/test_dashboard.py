@@ -667,11 +667,18 @@ def test_seite_hat_ausgeglichene_abschnitte(bestand: Path, config) -> None:
     """
     seite = render(sammle_daten(config, bestand))
 
-    assert seite.count("<section>") == seite.count("</section>")
+    # ``<section`` ohne schliessende Klammer: Der Kampagnenabschnitt traegt
+    # eine Klasse, ``<section>`` allein zaehlte ihn nicht mit.
+    assert seite.count("<section") == seite.count("</section>")
     assert seite.count("<details") == seite.count("</details>")
 
+    # Die Kampagnen stehen seit dem Aufraeumen fuer sich und in voller Breite:
+    # In der halben lief die Tabelle bei mehreren Kampagnen ueber, und
+    # ausgerechnet die Knopfspalte verschwand im waagerechten Bildlauf.
+    assert seite.index("kampagnen-block") < seite.index('class="spalten"')
+
     spalten = seite[seite.index('class="spalten"'):]
-    assert spalten.count("<section>") == 2  # Kampagnen und Trichter, sonst nichts
+    assert spalten.count("<section") == 1  # nur noch der Trichter
 
 
 # --- Auswahlregel je Kampagne ------------------------------------------

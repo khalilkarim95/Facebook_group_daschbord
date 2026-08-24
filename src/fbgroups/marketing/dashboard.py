@@ -191,6 +191,12 @@ def _gruppe_als_zeile(
         # koennten abweichen, und der Unterschied fiele erst auf, wenn ein
         # Beitrag mit dem falschen Code in einer Gruppe steht.
         "beitraege": beitraege or [],
+        # Die Kampagnennamen als eine Zeichenkette - allein zum Sortieren und
+        # Suchen. Die Zellen selbst zeichnen aus ``beitraege``; ein zweites
+        # Feld mit denselben Angaben koennte davon abweichen.
+        "kampagnen_text": ", ".join(
+            sorted({b["kampagne_name"] for b in (beitraege or [])})
+        ),
         # Der schlechteste Stand aller Zuordnungen - danach wird gefiltert.
         # "Diese Gruppe ist erledigt" darf erst gelten, wenn kein Beitrag mehr
         # aussteht; sonst verschwindet eine offene Aufgabe aus dem Filter.
@@ -562,8 +568,8 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
         f"trifft {c['regel']['passend']} von {c['regel']['bestand']}"
         f" · {html.escape(c['regel']['kurz'])}"
         f"{' · nimmt neue Funde automatisch auf' if c['regel']['auto_assign'] else ''}"
-        f"</span></td>"
-        f"<td><code>{html.escape(c['id'])}</code></td>"
+        f"</span>"
+        f"<span class='k-kennung'><code>{html.escape(c['id'])}</code></span></td>"
         f"<td><select class='k-status' data-id=\"{html.escape(c['id'])}\" "
         f"data-vorher=\"{html.escape(c['status'])}\">"
         f"{status_auswahl(c['status'])}"
@@ -723,6 +729,35 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   h2 {{ font-size: 15px; margin: 28px 0 10px; }}
   footer {{ color: var(--leise); font-size: 12px; margin-top: 28px; }}
   .tabelle-rahmen {{ overflow-x: auto; }}
+  /* Die Kampagnen stehen fuer sich und nicht neben dem Trichter: Bei zehn
+     Kampagnen lief die Tabelle in der halben Breite ueber, und ausgerechnet
+     die Knopfspalte verschwand im waagerechten Bildlauf - man sah die
+     Kampagne, konnte sie aber nicht bedienen. */
+  .kampagnen-block {{ margin-top: 8px; }}
+  .kampagnen-block table {{ width: 100%; }}
+  /* Und selbst wenn sie doch einmal ueberlaeuft, bleiben die Knoepfe stehen. */
+  .kampagnen-block td.knopfzelle,
+  .kampagnen-block th.aktionen-kopf {{
+    position: sticky; right: 0; background: var(--karte);
+    box-shadow: -8px 0 8px -8px rgba(0, 0, 0, .6);
+  }}
+  /* Die Kennung steht jetzt unter dem Namen statt in einer eigenen Spalte:
+     Man braucht sie fuer Befehle auf der Kommandozeile, aber nicht als
+     Sortierkriterium - und eine Spalte weniger ist eine Spalte, die nicht
+     ueberlaeuft. */
+  .k-kennung {{ display: block; margin-top: 3px; }}
+  .kampagnen-zelle {{ min-width: 150px; }}
+  .k-marke {{
+    display: inline-block; background: var(--bg); border: 1px solid var(--rand);
+    border-radius: 5px; padding: 1px 6px; margin: 0 3px 3px 0; font-size: 11px;
+  }}
+  .k-zuordnen {{
+    display: block; font-size: 11px; padding: 2px 4px; margin-top: 2px;
+    background: transparent; color: var(--leise);
+    border: 1px dashed var(--rand); border-radius: 5px;
+  }}
+  .k-zuordnen:hover {{ color: var(--text); border-style: solid; }}
+  .k-kennung code {{ font-size: 11px; }}
   .balkenzelle {{ width: 40%; min-width: 120px; }}
   .balken {{
     display: block; height: 10px; border-radius: 5px;
@@ -878,6 +913,10 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
     <th data-sort="stadt">Stadt</th>
     <th data-sort="zielgruppen">Zielgruppe</th>
     <th data-sort="kategorie">Kategorie</th>
+    <th data-sort="kampagnen_text"
+        title="Zu welchen Kampagnen diese Gruppe gehoert. Zuordnen vergibt einen
+Tracking-Code - der wird nie zurueckgenommen, er steht spaeter in
+veroeffentlichten Beitraegen.">Kampagne</th>
     <th data-sort="marketing_label">Stand</th>
     <th data-sort="beitrag_status"
         title="Der Beitrag dieser Kampagne in dieser Gruppe. Der Text trägt den
@@ -909,16 +948,16 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
 </table>
 </div>
 
-<div class="spalten">
-<section>
+<section class="kampagnen-block">
 <h2>Kampagnen</h2>
 <div class="tabelle-rahmen">
 <table>
   <thead><tr>
-    <th>Name</th><th>Kennung</th><th>Status</th>
+    <th>Name</th><th>Status</th>
     <th class="zahl">Gruppen</th><th class="zahl">Klicks</th>
     <th class="zahl">Registr.</th><th class="zahl">qualif.</th>
-    <th class="zahl">Absch.</th><th class="zahl">Quote</th><th></th>
+    <th class="zahl">Absch.</th><th class="zahl">Quote</th>
+    <th class="aktionen-kopf">Aktionen</th>
   </tr></thead>
   <tbody>{kampagnen_zeilen}</tbody>
 </table>
@@ -1005,6 +1044,7 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
 
 </section>
 
+<div class="spalten">
 <section>
 <h2>Trichter</h2>
 <div class="tabelle-rahmen">
@@ -1125,6 +1165,7 @@ function zeichne() {{
           <td>${{esc(z.stadt) || "–"}}</td>
           <td>${{esc(z.zielgruppen.join(", ")) || "–"}}</td>
           <td>${{esc(z.kategorie) || "–"}}</td>
+          <td class="kampagnen-zelle">${{kampagnenZelle(z)}}</td>
           <td>${{NUR_LESEN
             ? esc(z.marketing_label)
             : `<select class="stand" data-id="${{esc(z.id)}}">`
@@ -1184,6 +1225,28 @@ function resonanzZelle(z) {{
     <div class="res-leise">${{r.beitraege}} Beitr. ·
       ${{regung ? "letzte Regung " + regung : "keine Regung"}}</div>
   </div>`;
+}}
+
+function kampagnenZelle(z) {{
+  // Welche Kampagnen diese Gruppe erfasst haben - und ein Weg, sie einer
+  // weiteren zuzuordnen. Der Griff fuer den Einzelfall; fuer den Bestand
+  // bleibt die Auswahlregel der Kampagne zustaendig.
+  const marken = (z.beitraege || []).map((b) =>
+    `<span class="k-marke" title="${{esc(b.code)}}">${{esc(b.kampagne_name)}}</span>`
+  ).join("");
+
+  if (NUR_LESEN) return marken || '<span class="zart">–</span>';
+
+  // Nur Kampagnen, in denen die Gruppe noch nicht steht. Eine Auswahl, die
+  // eine bestehende Zuordnung anbietet, verspricht etwas, das nicht geschieht.
+  const drin = new Set((z.beitraege || []).map((b) => b.kampagne));
+  const offen = (DATEN.kampagnen || []).filter((k) => !drin.has(k.id));
+  if (!offen.length) return marken || '<span class="zart">–</span>';
+
+  return marken + '<select class="k-zuordnen" data-gruppe="' + esc(z.id) + '">'
+    + '<option value="">+ zuordnen …</option>'
+    + offen.map((k) => `<option value="${{esc(k.id)}}">${{esc(k.name)}}</option>`).join("")
+    + '</select>';
 }}
 
 function punkteText(z) {{
@@ -1578,6 +1641,44 @@ document.addEventListener("click", async (ereignis) => {{
     alert("Loeschen fehlgeschlagen: " + fehler.message);
   }} finally {{
     knopf.disabled = false;
+  }}
+}});
+
+document.addEventListener("change", async (ereignis) => {{
+  const feld = ereignis.target;
+  if (!feld.classList.contains("k-zuordnen")) return;
+  const kampagne = feld.value;
+  if (!kampagne) return;
+  const gruppe = feld.dataset.gruppe;
+  const name = feld.options[feld.selectedIndex].textContent;
+  feld.value = "";
+
+  // Ein Tracking-Code wird nie zurueckgenommen - er steht spaeter in
+  // veroeffentlichten Beitraegen. Deshalb wird gefragt, obwohl es nur eine
+  // Gruppe ist: Der Unterschied zwischen "eine" und "vierhundert" ist die
+  // Menge, nicht die Endgueltigkeit.
+  if (!confirm('Gruppe der Kampagne "' + name + '" zuordnen?\\n\\n'
+      + "Sie bekommt dabei einen eigenen Tracking-Code. Ein vergebener Code "
+      + "wird nie zurueckgenommen.")) return;
+
+  feld.disabled = true;
+  try {{
+    const antwort = await fetch(
+      "/gruppen/" + encodeURIComponent(gruppe) + "/kampagne", {{
+        method: "POST",
+        headers: {{"Content-Type": "application/json"}},
+        body: JSON.stringify({{campaign_id: kampagne}}),
+      }});
+    const daten = await antwort.json();
+    if (!antwort.ok) {{
+      alert(daten.detail || ("Fehler " + antwort.status));
+      return;
+    }}
+    location.reload();
+  }} catch (fehler) {{
+    alert("Zuordnen fehlgeschlagen: " + fehler.message);
+  }} finally {{
+    feld.disabled = false;
   }}
 }});
 

@@ -48,6 +48,7 @@ from fbgroups.marketing.dashboard import (
 from fbgroups.marketing.models import (
     EINMAL_JE_MENSCH,
     Campaign,
+    CampaignGroup,
     CampaignStatus,
     EventType,
     JobStatus,
@@ -81,6 +82,15 @@ except ImportError:  # pragma: no cover - haengt von der Installation ab
     FASTAPI_VERFUEGBAR = False
 
 SALT_SCHLUESSEL = "visitor_salt"
+
+# Wie viele Gruppen ein Klick auf "Text von der KI" hoechstens bearbeitet.
+#
+# Klein, weil ein lokales Modell je Fassung bis zu einer Minute braucht: Drei
+# Fassungen mal drei Gruppen sind schon neun Minuten, und laenger haelt kaum
+# eine Kette aus Browser, Reverse Proxy und Modell durch. Fuer den ganzen
+# Bestand gibt es ``fbgroups campaign draft`` - dort darf ein Lauf Stunden
+# dauern, und man sieht ihm dabei zu.
+JE_KLICK = 3
 
 # Absenderadressen, die als "derselbe Rechner" gelten. Der Dienst steht
 # oeffentlich - die Tracking-Links zeigen auf ihn -, die Arbeitsliste darf aber
@@ -160,6 +170,19 @@ class LoeschMeldung(BaseModel):
     """
 
     bestaetigt: bool = False
+
+
+class ZuordnenMeldung(BaseModel):
+    """Eine Gruppe einer Kampagne zuordnen - oder die Zuordnung entfernen.
+
+    ``entfernen`` gibt es, weil eine Zuordnung aus Versehen entstehen kann und
+    ein Tracking-Code, der **nie** in einem Beitrag stand, nichts bindet.
+    Sobald einer veroeffentlicht wurde, weist der Weg das Entfernen ab: Der
+    Link im Beitrag muss weiter ankommen.
+    """
+
+    campaign_id: str = Field(min_length=1, max_length=64)
+    entfernen: bool = False
 
 
 class QueueMeldung(BaseModel):
@@ -491,23 +514,41 @@ def _vorbereiten(
         except KINichtVerfuegbar as exc:
             return 0, str(exc)
 
+        # Nur ein Haeppchen je Klick. Siehe oben: Ein lokales Modell braucht je
+        # Fassung bis zu einer Minute, und eine HTTP-Anfrage ueber den ganzen
+        # Bestand liefe in jede Zeitgrenze zwischen Browser und Modell.
+        offen_gesamt = len(ohne_text)
+        ohne_text = ohne_text[:JE_KLICK]
+
         varianten = int(config.get("marketing", "posting", "ki", "varianten", default=3))
         fertig = 0
+        # Die Gruende werden gesammelt, nicht verschluckt. Ein Knopf, der "0
+        # betroffen" meldet und den Grund fuer sich behaelt, laesst den
+        # Benutzer raten - und die haeufigsten Gruende (Modell haelt den
+        # Platzhalter nicht ein, Ollama antwortet nicht) sind behebbar, sobald
+        # man sie kennt.
+        gruende: list[str] = []
         for link in ohne_text:
             group = gruppen.get(link.group_id)
             if group is None:
+                gruende.append(f"{link.group_id}: nicht im Bestand")
                 continue
             auftrag = auftrag_aus_gruppe(group, campaign, config, varianten=varianten)
             auftrag.bisherige_texte = [
                 e.text for e in store.entwuerfe_for(campaign_id, link.group_id)
             ]
             try:
-                entwuerfe, _ = erzeuge_entwuerfe(
+                entwuerfe, verworfen = erzeuge_entwuerfe(
                     modell, auftrag, campaign_id=campaign_id, group_id=link.group_id
                 )
-            except (UngueltigerVorschlag, KINichtVerfuegbar):
+            except (UngueltigerVorschlag, KINichtVerfuegbar) as exc:
+                gruende.append(f"{group.name or link.group_id}: {exc}")
                 continue
             if not entwuerfe:
+                gruende.append(
+                    f"{group.name or link.group_id}: keine brauchbare Fassung"
+                    + (f" ({verworfen[0]})" if verworfen else "")
+                )
                 continue
             for entwurf in entwuerfe:
                 store.add_entwurf(entwurf)
@@ -520,7 +561,17 @@ def _vorbereiten(
             with contextlib.suppress(UngueltigerUebergang):
                 store.set_job_status(campaign_id, link.group_id, JobStatus.AI_GENERATED)
             fertig += 1
-        return fertig, "Fassungen erzeugt - ansehen mit: campaign entwuerfe"
+
+        if fertig:
+            rest = offen_gesamt - fertig
+            hinweis = "Fassungen erzeugt."
+            if rest > 0:
+                hinweis += f" Noch {rest} ohne Text - nochmal klicken."
+            if gruende:
+                hinweis += f" {len(gruende)} ohne Ergebnis: {gruende[0]}"
+            return fertig, hinweis
+        # Nichts entstanden - dann ist der Grund die ganze Auskunft.
+        return 0, gruende[0] if gruende else "Kein Vorschlag entstanden."
 
     if schritt == "approve":
         # Ohne Text weist ``pruefe_uebergang`` ohnehin ab - solche Zuordnungen
@@ -985,6 +1036,83 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 "eingereiht": zaehler.get(JobStatus.QUEUED.value, 0),
                 "freigegeben": zaehler.get(JobStatus.APPROVED.value, 0),
             }
+        )
+
+    @app.post("/gruppen/{group_id}/kampagne")
+    def gruppe_zuordnen(  # noqa: ANN202
+        group_id: str, meldung: ZuordnenMeldung, request: Request
+    ):
+        """Ordnet **eine** Gruppe einer Kampagne zu - oder loest die Zuordnung.
+
+        Die Regel einer Kampagne (``campaign sync``) bleibt der Weg fuer den
+        Bestand; dies ist der Griff fuer den Einzelfall, der sonst nur ueber
+        eine Regelaenderung ginge. Der Code entsteht ueber denselben
+        ``CodeAllocator`` wie dort - eine zweite Vergabestelle koennte eine
+        Nummer ein zweites Mal ausgeben.
+
+        Eine bestehende Zuordnung wird **nicht** angetastet: Ihr Code steht
+        moeglicherweise schon in einem Beitrag. Entfernen geht nur, solange
+        nichts veroeffentlicht wurde.
+        """
+        _nur_lokal(request)
+        from fbgroups.marketing.tracking import CodeAllocator, tracking_url
+
+        with SqliteStore(pfad) as gruppen_store:
+            gruppe = next(
+                (g for g in gruppen_store.load_groups() if g.group_id == group_id), None
+            )
+        if gruppe is None:
+            raise HTTPException(status_code=404, detail="Unbekannte Gruppe")
+
+        with _store() as store:
+            campaign = store.load_campaign(meldung.campaign_id)
+            if campaign is None:
+                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
+
+            vorhanden = store.link_for(meldung.campaign_id, group_id)
+
+            if meldung.entfernen:
+                if vorhanden is None:
+                    return JSONResponse({"group_id": group_id, "zugeordnet": False})
+                if vorhanden.posted_at is not None:
+                    # Der Code steht in einem veroeffentlichten Beitrag. Ein
+                    # Klick darauf muss ankommen und gezaehlt werden - auch
+                    # dann, wenn die Gruppe nicht mehr bearbeitet wird. Dafuer
+                    # gibt es "Ausschliessen", das den Code gueltig laesst.
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Zu dieser Zuordnung wurde bereits veroeffentlicht. "
+                        "Der Tracking-Code bleibt gueltig - stattdessen ausschliessen.",
+                    )
+                store.remove_link(meldung.campaign_id, group_id)
+                store.audit("zuordnung_entfernt", f"{meldung.campaign_id}/{group_id}")
+                return JSONResponse({"group_id": group_id, "zugeordnet": False})
+
+            if vorhanden is not None:
+                return JSONResponse(
+                    {
+                        "group_id": group_id,
+                        "zugeordnet": True,
+                        "code": vorhanden.tracking_code,
+                        "hinweis": "War bereits zugeordnet.",
+                    }
+                )
+
+            allocator = CodeAllocator(cfg, store.assigned_codes())
+            code = allocator.next_for(gruppe)
+            store.add_link(
+                CampaignGroup(
+                    campaign_id=meldung.campaign_id,
+                    group_id=group_id,
+                    tracking_code=code,
+                    tracking_url=tracking_url(code, cfg),
+                )
+            )
+            store.audit("zuordnung_einzeln", f"{meldung.campaign_id}/{group_id}", code)
+
+        return JSONResponse(
+            {"group_id": group_id, "zugeordnet": True, "code": code,
+             "kampagne": meldung.campaign_id}
         )
 
     @app.post("/kampagnen/{campaign_id}/loeschen")
