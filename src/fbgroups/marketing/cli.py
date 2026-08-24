@@ -36,6 +36,7 @@ from fbgroups.marketing.analytics import (
 from fbgroups.marketing.beitrag import beitragstext, in_zwischenablage, oeffne_im_browser
 from fbgroups.marketing.ki import (
     ANBIETER,
+    PLATZHALTER,
     KINichtVerfuegbar,
     UngueltigerVorschlag,
     auftrag_aus_gruppe,
@@ -1176,6 +1177,100 @@ def campaign_draft(
         + (f", [yellow]{verworfen_gesamt}[/yellow] verworfen." if verworfen_gesamt else ".")
     )
     console.print(f"[dim]Ansehen:  fbgroups campaign entwuerfe {campaign_id} <gruppe>[/dim]")
+
+
+@campaign_app.command("text")
+def campaign_text(
+    campaign_id: str = typer.Argument(...),
+    aus_vorlage: bool = typer.Option(
+        False, "--aus-vorlage", help="Die Vorlage der Kampagne in jede Zuordnung schreiben."
+    ),
+    ueberschreiben: bool = typer.Option(
+        False, "--ueberschreiben", help="Auch dort, wo schon ein Text steht."
+    ),
+    ja: bool = typer.Option(False, "--ja", help="Wirklich schreiben (sonst nur zeigen)."),
+) -> None:
+    """Traegt die Textvorlage der Kampagne als Beitragstext ein - ohne KI.
+
+    Der Weg fuer alle, die keine Textvorschlaege erzeugen wollen oder koennen:
+    Ohne ``post_text`` kommt eine Zuordnung nicht durch die Freigabe
+    (``pruefe_uebergang`` verlangt einen Text) und damit nie in die
+    Warteschlange. ``campaign draft`` fuellt das Feld mit einem Modell, dieser
+    Befehl mit der Vorlage.
+
+    Die Vorlage bleibt dabei **je Gruppe** eine eigene Kopie. Das ist kein
+    Umweg: ``{link}`` wird erst beim Absetzen durch den Code *dieser* Gruppe
+    ersetzt, und wer einen einzelnen Text nachtraeglich anpasst, soll damit
+    nicht alle anderen aendern.
+
+    Vorhandene Texte bleiben stehen, sofern nicht ``--ueberschreiben``. Ein von
+    Hand ueberarbeiteter oder freigegebener Text ist Arbeit eines Menschen; ein
+    Sammelbefehl macht sie nicht beilaeufig zunichte.
+    """
+    if not aus_vorlage:
+        console.print(
+            "Nichts zu tun. Der Text kommt entweder aus der Vorlage "
+            f"([bold]--aus-vorlage[/bold]) oder aus einem Modell "
+            f"([bold]fbgroups campaign draft {campaign_id}[/bold])."
+        )
+        raise typer.Exit(code=2)
+
+    config = _config()
+    with MarketingStore(config.path("sqlite_path")) as store:
+        campaign = _kampagne_oder_ende(store, campaign_id)
+
+        if not campaign.message_template.strip():
+            console.print(
+                "[red]Diese Kampagne hat keine Textvorlage.[/red]\n"
+                f"Setzen mit:  fbgroups campaign set {campaign_id} --vorlage \"...\""
+            )
+            raise typer.Exit(code=2)
+
+        if PLATZHALTER not in campaign.message_template:
+            console.print(
+                f"[yellow]Die Vorlage enthaelt kein {PLATZHALTER}.[/yellow] "
+                "Der Beitrag ginge dann ohne Tracking-Link hinaus, und keine "
+                "Gruppe bekaeme je einen Klick gutgeschrieben."
+            )
+            raise typer.Exit(code=2)
+
+        links = store.links_for_campaign(campaign_id)
+        betroffen = [
+            link
+            for link in links
+            if ueberschreiben or not link.post_text.strip()
+            if link.job_status not in (JobStatus.PUBLISHED, JobStatus.PROCESSING)
+        ]
+
+        console.print(Panel(campaign.message_template, title="Vorlage"))
+        console.print(
+            f"{len(betroffen)} von {len(links)} Zuordnungen bekaemen diesen Text."
+        )
+        uebersprungen = len(links) - len(betroffen)
+        if uebersprungen:
+            console.print(
+                f"[dim]{uebersprungen} uebersprungen "
+                "(schon ein Text vorhanden, veroeffentlicht oder gerade in Arbeit).[/dim]"
+            )
+
+        if not ja:
+            console.print(
+                f"\n[yellow]Nichts geaendert.[/yellow] Wirklich schreiben:  "
+                f"fbgroups campaign text {campaign_id} --aus-vorlage"
+                f"{' --ueberschreiben' if ueberschreiben else ''} --ja"
+            )
+            return
+
+        for link in betroffen:
+            store.set_post_text(
+                campaign_id, link.group_id, campaign.message_template, TextQuelle.VORLAGE
+            )
+
+    console.print(f"\n[green]{len(betroffen)}[/green] Texte eingetragen.")
+    console.print(
+        f"[dim]Weiter:  fbgroups campaign approve {campaign_id} alle"
+        f"  →  fbgroups campaign enqueue {campaign_id}[/dim]"
+    )
 
 
 @campaign_app.command("entwuerfe")

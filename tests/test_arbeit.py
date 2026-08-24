@@ -578,3 +578,39 @@ def test_die_vorschau_nennt_dieselben_zahlen(store, campaign, gruppen) -> None:
     assert getan["zuordnungen"] == vorschau["zuordnungen"] == 2
     assert getan["versuche"] == vorschau["versuche"] == 1
     assert getan["veroeffentlicht"] == vorschau["veroeffentlicht"] == 1
+
+
+# --- Text aus der Vorlage (ohne KI) --------------------------------------
+
+def test_ohne_text_kommt_nichts_in_die_warteschlange(store) -> None:
+    """Der Grund, warum es ``campaign text`` gibt.
+
+    ``pruefe_uebergang`` verlangt einen Text; ohne ihn ist die Freigabe
+    versperrt und die Warteschlange bleibt fuer immer leer. Wer keine KI
+    benutzt, haette sonst keinen Weg dorthin.
+    """
+    from fbgroups.marketing.queue import UngueltigerUebergang
+
+    store.set_post_text(KAMPAGNE, "482910573829104", "", TextQuelle.VORLAGE)
+    store.set_job_status(KAMPAGNE, "482910573829104", JobStatus.DRAFT, erzwingen=True)
+
+    with pytest.raises(UngueltigerUebergang):
+        store.set_job_status(KAMPAGNE, "482910573829104", JobStatus.PENDING_REVIEW)
+
+
+def test_die_vorlage_wird_je_gruppe_zur_eigenen_kopie(store, campaign) -> None:
+    """Kein Umweg: ``{link}`` wird spaeter durch den Code *dieser* Gruppe ersetzt.
+
+    Wer einen einzelnen Text nachtraeglich anpasst, soll damit nicht alle
+    anderen aendern.
+    """
+    for gid in GRUPPEN:
+        store.set_post_text(KAMPAGNE, gid, campaign.message_template, TextQuelle.VORLAGE)
+
+    store.set_post_text(KAMPAGNE, "482910573829104", "Anders! {link}", TextQuelle.HAND)
+
+    a = store.link_for(KAMPAGNE, "482910573829104")
+    b = store.link_for(KAMPAGNE, "739201847362915")
+    assert a is not None and b is not None
+    assert a.post_text == "Anders! {link}"
+    assert b.post_text == campaign.message_template
