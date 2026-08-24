@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from fbgroups.marketing.models import Campaign, CampaignGroup, CampaignStatus
+from fbgroups.marketing.models import Campaign, CampaignGroup, CampaignStatus, PostStatus
 from fbgroups.marketing.selection import (
     auswahl_der_kampagne,
     baue_plan,
@@ -720,3 +720,108 @@ def test_migration_schliesst_gruppen_ohne_daten_aus(tmp_path: Path) -> None:
     assert mit.bearbeiten is True          # bewertbare Gruppe bleibt in der Liste
     assert haende.bearbeiten is True       # Menschenurteil wird nicht ueberschrieben
     assert haende.ausschlussgrund == "von Hand geprueft"
+
+
+@pytest.fixture()
+def mit_zuordnungen(bestand: Path, config) -> Path:
+    """Bestand plus eine Kampagne, der alle Gruppen zugeordnet sind."""
+    with SqliteStore(bestand) as gruppen_store:
+        gruppen = gruppen_store.load_groups()
+    with MarketingStore(bestand) as store:
+        synchronisiere(store, gruppen, _kampagne(store), config)
+    return bestand
+
+
+# --- Kampagne loeschen ----------------------------------------------------
+
+def test_die_vorschau_aendert_nichts(mit_zuordnungen: Path, config) -> None:
+    """Ohne Bestaetigung wird nur gezeigt, was verlorenginge.
+
+    Ein Loeschen nimmt die Tracking-Codes mit, und die stehen moeglicherweise
+    in veroeffentlichten Beitraegen. Dieselbe Vorsicht wie bei ``sync``:
+    zeigen, dann handeln.
+    """
+    pytest.importorskip("fastapi", reason="nur mit dem optionalen web-Zusatz")
+    from fastapi.testclient import TestClient
+
+    from fbgroups.marketing.web import create_app
+
+    client = TestClient(create_app(config=config, db_path=mit_zuordnungen))
+
+    antwort = client.post("/kampagnen/batreeq-syrian-germany/loeschen", json={"bestaetigt": False})
+
+    assert antwort.status_code == 200
+    assert antwort.json()["geloescht"] is False
+    with MarketingStore(mit_zuordnungen) as store:
+        assert store.load_campaign("batreeq-syrian-germany") is not None
+
+
+def test_die_vorschau_nennt_die_veroeffentlichten_codes(mit_zuordnungen: Path) -> None:
+    """Die einzige Zahl, die sich nicht wiederherstellen laesst."""
+    with MarketingStore(mit_zuordnungen) as store:
+        links = store.links_for_campaign("batreeq-syrian-germany")
+        assert links
+        store.set_post_status(
+            "batreeq-syrian-germany", links[0].group_id, PostStatus.VEROEFFENTLICHT
+        )
+
+        verlust = store.was_geht_verloren("batreeq-syrian-germany")
+
+    assert verlust["veroeffentlichte_codes"] == 1
+    assert verlust["zuordnungen"] == len(links)
+
+
+def test_loeschen_nimmt_die_zuordnungen_mit(mit_zuordnungen: Path) -> None:
+    """``ON DELETE CASCADE`` - und das PRAGMA, ohne das es wirkungslos waere.
+
+    Ohne eingeschaltete Fremdschluessel bliebe ``campaign_groups`` stehen: Die
+    Codes waeren nicht mehr aufloesbar, aber weiterhin vergeben - der naechste
+    Lauf koennte dieselbe Nummer ein zweites Mal ausgeben.
+    """
+    with MarketingStore(mit_zuordnungen) as store:
+        assert store.links_for_campaign("batreeq-syrian-germany")
+
+        store.delete_campaign("batreeq-syrian-germany")
+
+        assert store.load_campaign("batreeq-syrian-germany") is None
+        assert store.links_for_campaign("batreeq-syrian-germany") == []
+
+
+def test_die_ereignisse_ueberleben_das_loeschen(mit_zuordnungen: Path) -> None:
+    """Eine Auswertung von gestern behaelt ihre Zahlen.
+
+    Sie haengen an keinem Fremdschluessel. Was danach fehlt, ist allein der Weg
+    vom Code zurueck zur Gruppe.
+    """
+    from fbgroups.marketing.models import EventType, TrackingEvent
+
+    with MarketingStore(mit_zuordnungen) as store:
+        links = store.links_for_campaign("batreeq-syrian-germany")
+        store.record_event(
+            TrackingEvent(
+                tracking_code=links[0].tracking_code,
+                campaign_id="batreeq-syrian-germany",
+                group_id=links[0].group_id,
+                event_type=EventType.CLICK,
+            )
+        )
+
+        store.delete_campaign("batreeq-syrian-germany")
+
+        assert store.event_counts().get(EventType.CLICK.value) == 1
+        assert store.resolve_code(links[0].tracking_code) is None
+
+
+def test_loeschen_ist_von_aussen_nicht_moeglich(mit_zuordnungen: Path, config) -> None:
+    pytest.importorskip("fastapi", reason="nur mit dem optionalen web-Zusatz")
+    from fastapi.testclient import TestClient
+
+    from fbgroups.marketing.web import create_app
+
+    fremd = TestClient(
+        create_app(config=config, db_path=mit_zuordnungen), client=("203.0.113.7", 44321)
+    )
+
+    assert fremd.post(
+        "/kampagnen/batreeq-syrian-germany/loeschen", json={"bestaetigt": True}
+    ).status_code == 404

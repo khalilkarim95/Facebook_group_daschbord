@@ -585,6 +585,8 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
         )
         + f"<button class='k-regel' data-id=\"{html.escape(c['id'])}\">Regel</button>"
         f"<button class='k-sync' data-id=\"{html.escape(c['id'])}\">Zuordnen</button>"
+        f"<button class='k-weg' data-id=\"{html.escape(c['id'])}\" "
+        f"data-name=\"{html.escape(c['name'])}\" title='Kampagne loeschen'>&times;</button>"
         f"</td>"
         f"</tr>"
         for c in daten["kampagnen"]
@@ -786,6 +788,14 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
                background: #1d4ed8; color: #fff; font-weight: 600;
                white-space: nowrap; }}
   .k-arbeit:hover {{ background: #2563eb; }}
+  /* Zurueckhaltend, obwohl es der folgenreichste Knopf der Seite ist: Er
+     loescht Tracking-Codes, die in veroeffentlichten Beitraegen stehen.
+     Auffaellig gestaltet lockte er zum Ausprobieren - die Warnung steht
+     stattdessen im Dialog, wo sie gelesen wird. */
+  .k-weg {{ cursor: pointer; padding: 6px 10px; border-radius: 6px;
+            background: transparent; color: var(--leise); border: 1px solid transparent;
+            font-size: 16px; line-height: 1; }}
+  .k-weg:hover {{ background: #7a2e2e; color: #fff; border-color: #993a3a; }}
   /* Beitragsspalte */
   .beitrag {{ display: flex; flex-direction: column; gap: 4px; min-width: 210px; }}
   .b-zeile {{ display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }}
@@ -1105,13 +1115,12 @@ function zeichne() {{
                    ${{gewaehlt.has(z.id) ? "checked" : ""}}>
           </td>
           <td class="zahl">
-            <span class="punkte ${{klasse}}">${{zahl(z.score)}}</span>
-            ${{punkteListe(z)}}
+            <span class="punkte ${{klasse}}" title="${{esc(punkteText(z))}}"
+                  >${{zahl(z.score)}}</span>
           </td>
           <td class="name" dir="auto">
             <a href="${{esc(z.url)}}" target="_blank"
-               rel="noopener noreferrer">${{esc(z.name)}}</a>${{codes}}
-            <span class="grund">${{esc(z.grund)}}</span>${{ausGrund}}
+               rel="noopener noreferrer">${{esc(z.name)}}</a>${{codes}}${{ausGrund}}
           </td>
           <td>${{esc(z.stadt) || "–"}}</td>
           <td>${{esc(z.zielgruppen.join(", ")) || "–"}}</td>
@@ -1177,15 +1186,22 @@ function resonanzZelle(z) {{
   </div>`;
 }}
 
-function punkteListe(z) {{
+function punkteText(z) {{
+  // Die Aufschluesselung als Tooltip statt als Liste in der Zeile.
+  //
+  // Sie beantwortet eine Frage, die man einmal je Gruppe stellt ("warum 92?"),
+  // stand aber dauerhaft in jeder der 300 Zeilen und machte die Tabelle
+  // dreimal so hoch. Beim Zeigen ist sie da, beim Ueberfliegen im Weg -
+  // deshalb wird sie versteckt und nicht entfernt.
+  //
   // Nur die Bestandteile, die tatsaechlich Punkte gebracht haben. Ein
   // abgeschalteter oder unbekannter Bestandteil steht nicht mit "0" da - das
-  // laese sich als "geprueft und wertlos" missverstehen.
+  // liesse sich als "geprueft und wertlos" missverstehen.
   const teile = Object.entries(z.punkte || {{}}).filter(([, wert]) => wert > 0);
-  if (!teile.length) return "";
-  return '<ul class="punkte-liste">' + teile.map(([name, wert]) =>
-    `<li><span>${{PUNKT_LABEL[name] || name}}</span>` +
-    `<span class="wert">${{zahl(wert)}}</span></li>`).join("") + '</ul>';
+  const zeilen = teile.map(([name, wert]) =>
+    `${{PUNKT_LABEL[name] || name}}: ${{zahl(wert)}}`);
+  if (z.grund) zeilen.push(z.grund);
+  return zeilen.join("\\n");
 }}
 
 // --- Beitrag je Gruppe -------------------------------------------------
@@ -1516,6 +1532,50 @@ document.addEventListener("click", async (ereignis) => {{
     location.reload();
   }} catch (fehler) {{
     alert("Zuordnen fehlgeschlagen: " + fehler.message);
+  }} finally {{
+    knopf.disabled = false;
+  }}
+}});
+
+document.addEventListener("click", async (ereignis) => {{
+  const knopf = ereignis.target;
+  if (!knopf.classList.contains("k-weg")) return;
+  const id = knopf.dataset.id;
+  knopf.disabled = true;
+  try {{
+    // Erst fragen, was verlorenginge - ohne etwas zu aendern. Derselbe Weg
+    // beantwortet beides; eine zweite Zaehlung koennte abweichen, und der
+    // Mensch bestaetigte dann eine Zahl und bekaeme eine andere.
+    const vorschau = await (await fetch(
+      "/kampagnen/" + encodeURIComponent(id) + "/loeschen", {{
+        method: "POST",
+        headers: {{"Content-Type": "application/json"}},
+        body: JSON.stringify({{bestaetigt: false}}),
+      }})).json();
+
+    let frage = 'Kampagne "' + (knopf.dataset.name || id) + '" loeschen?\\n\\n'
+      + vorschau.zuordnungen + " Zuordnungen samt Tracking-Codes\\n"
+      + vorschau.entwuerfe + " Entwuerfe, " + vorschau.versuche + " Versuche\\n"
+      + vorschau.ereignisse_bleiben + " Ereignisse bleiben erhalten\\n";
+    if (vorschau.veroeffentlichte_codes) {{
+      // Der einzige Teil, der sich nicht wiederherstellen laesst: Diese Codes
+      // stehen in Beitraegen, die wirklich abgesetzt wurden.
+      frage += "\\nACHTUNG: " + vorschau.veroeffentlichte_codes
+        + " dieser Codes stehen in veroeffentlichten Facebook-Beitraegen.\\n"
+        + "Ein Klick darauf fuehrt danach ins Leere (404), und den Beitrag\\n"
+        + "kann niemand mehr zurueckholen.\\n";
+    }}
+    frage += "\\nDas laesst sich nicht rueckgaengig machen. Wirklich loeschen?";
+    if (!confirm(frage)) return;
+
+    await fetch("/kampagnen/" + encodeURIComponent(id) + "/loeschen", {{
+      method: "POST",
+      headers: {{"Content-Type": "application/json"}},
+      body: JSON.stringify({{bestaetigt: true}}),
+    }});
+    location.reload();
+  }} catch (fehler) {{
+    alert("Loeschen fehlgeschlagen: " + fehler.message);
   }} finally {{
     knopf.disabled = false;
   }}

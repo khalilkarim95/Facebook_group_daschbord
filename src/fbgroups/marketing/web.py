@@ -149,6 +149,19 @@ class VorbereitenMeldung(BaseModel):
     auch_ereignisse: bool = False
 
 
+class LoeschMeldung(BaseModel):
+    """Bestaetigung fuer das Loeschen einer Kampagne.
+
+    ``bestaetigt`` ist Vorgabe **false**: Der erste Aufruf zeigt nur, was
+    verlorenginge. Ein Loeschen nimmt ueber ``ON DELETE CASCADE`` jeden
+    Tracking-Code dieser Kampagne mit - steht einer in einem veroeffentlichten
+    Beitrag, fuehrt der Link dort danach ins Leere. Dieselbe Vorsicht wie bei
+    ``SyncMeldung.dry_run``.
+    """
+
+    bestaetigt: bool = False
+
+
 class QueueMeldung(BaseModel):
     """Welcher Zustand der Warteschlange gesetzt werden soll.
 
@@ -972,6 +985,43 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 "eingereiht": zaehler.get(JobStatus.QUEUED.value, 0),
                 "freigegeben": zaehler.get(JobStatus.APPROVED.value, 0),
             }
+        )
+
+    @app.post("/kampagnen/{campaign_id}/loeschen")
+    def kampagne_loeschen(  # noqa: ANN202
+        campaign_id: str, meldung: LoeschMeldung, request: Request
+    ):
+        """Loescht eine Kampagne - erst nach ausdruecklicher Bestaetigung.
+
+        Ohne ``bestaetigt`` antwortet der Weg mit dem, was verlorenginge, und
+        aendert nichts. Der Grund steht in ``store.delete_campaign``: Die
+        Tracking-Codes gehen mit, und ein Code in einem veroeffentlichten
+        Beitrag laesst sich nicht zurueckholen.
+
+        Die Ereignisse bleiben - eine Auswertung von gestern behaelt ihre
+        Zahlen. Was fehlt, ist danach der Weg vom Code zurueck zur Gruppe.
+        """
+        _nur_lokal(request)
+        with _store() as store:
+            campaign = store.load_campaign(campaign_id)
+            if campaign is None:
+                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
+
+            verlust = store.was_geht_verloren(campaign_id)
+            if not meldung.bestaetigt:
+                return JSONResponse(
+                    {
+                        "campaign_id": campaign_id,
+                        "name": campaign.name,
+                        "geloescht": False,
+                        **verlust,
+                    }
+                )
+
+            store.delete_campaign(campaign_id)
+
+        return JSONResponse(
+            {"campaign_id": campaign_id, "name": campaign.name, "geloescht": True, **verlust}
         )
 
     @app.post("/kampagnen/{campaign_id}/queue")

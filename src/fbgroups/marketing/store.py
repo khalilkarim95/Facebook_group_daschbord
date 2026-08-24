@@ -495,8 +495,62 @@ class MarketingStore:
             ).fetchall()
         return [self._row_to_campaign(row) for row in rows]
 
+    def was_geht_verloren(self, campaign_id: str) -> dict[str, int]:
+        """Was ein Loeschen dieser Kampagne mitnimmt.
+
+        Getrennt vom Loeschen, damit Vorschau und Ernstfall dieselbe Zahl
+        nennen - dieselbe Ueberlegung wie bei ``zaehle_zuruecksetzbar``.
+
+        Der wichtigste Wert ist ``veroeffentlichte_codes``: So viele
+        Tracking-Codes stehen in Beitraegen, die jemand wirklich abgesetzt hat.
+        Nach dem Loeschen antwortet ``/r/{code}`` fuer sie mit 404 - der Link
+        im Facebook-Beitrag fuehrt ins Leere, und zurueckholen laesst sich der
+        Beitrag nicht.
+        """
+
+        def eins(sql: str) -> int:
+            row = self.conn.execute(sql, (campaign_id,)).fetchone()
+            return int(row[0] or 0)
+
+        return {
+            "zuordnungen": eins(
+                "SELECT COUNT(*) FROM campaign_groups WHERE campaign_id = ?"
+            ),
+            "veroeffentlichte_codes": eins(
+                "SELECT COUNT(*) FROM campaign_groups "
+                "WHERE campaign_id = ? AND posted_at IS NOT NULL"
+            ),
+            "entwuerfe": eins("SELECT COUNT(*) FROM post_entwuerfe WHERE campaign_id = ?"),
+            "versuche": eins("SELECT COUNT(*) FROM post_versuche WHERE campaign_id = ?"),
+            # Bleiben stehen - sie haengen an keinem Fremdschluessel. Die Zahlen
+            # einer Auswertung von gestern aendern sich durch das Loeschen also
+            # nicht; nur der Weg vom Code zurueck zur Gruppe ist danach weg.
+            "ereignisse_bleiben": eins(
+                "SELECT COUNT(*) FROM tracking_events WHERE campaign_id = ?"
+            ),
+        }
+
     def delete_campaign(self, campaign_id: str) -> int:
+        """Loescht eine Kampagne - **samt ihrer Zuordnungen und Codes**.
+
+        ``ON DELETE CASCADE`` an ``campaign_groups`` nimmt jeden Tracking-Code
+        dieser Kampagne mit. Steht einer davon in einem veroeffentlichten
+        Beitrag, fuehrt der Link dort danach ins Leere (404). Der Aufrufer soll
+        deshalb vorher ``was_geht_verloren`` zeigen; die Zahl der
+        veroeffentlichten Codes ist die einzige, die sich nicht
+        wiederherstellen laesst.
+
+        Die Ereignisse bleiben: Sie haengen an keinem Fremdschluessel. Eine
+        Auswertung von gestern behaelt damit ihre Zahlen - was fehlt, ist der
+        Weg vom Code zurueck zur Gruppe.
+        """
+        # SQLite prueft Fremdschluessel nur mit eingeschaltetem PRAGMA. Ohne
+        # das bliebe campaign_groups stehen, und die Codes waeren Waisen: nicht
+        # aufloesbar, aber weiterhin vergeben - der naechste Lauf koennte
+        # dieselbe Nummer ein zweites Mal ausgeben.
+        self.conn.execute("PRAGMA foreign_keys = ON")
         cursor = self.conn.execute("DELETE FROM campaigns WHERE campaign_id = ?", (campaign_id,))
+        self.audit("kampagne_geloescht", campaign_id)
         self.conn.commit()
         return cursor.rowcount
 

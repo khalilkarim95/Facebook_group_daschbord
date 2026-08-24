@@ -406,5 +406,7 @@ def test_die_seite_traegt_die_resonanzspalte(bestand: Path, config) -> None:
     seite = render(sammle_daten(config, bestand))
 
     assert "resonanzZelle" in seite
-    assert "punkteListe" in seite
+    # Die Aufschluesselung steht seit dem Aufraeumen im Tooltip statt als
+    # Liste in jeder Zeile - vorhanden ist sie weiterhin.
+    assert "punkteText" in seite
     assert "noch nicht gemessen" in seite
