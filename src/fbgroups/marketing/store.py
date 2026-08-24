@@ -24,18 +24,25 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from fbgroups.marketing.models import (
+    POST_STATUS_ZU_JOB,
     Campaign,
     CampaignGroup,
     CampaignStatus,
     EventType,
     GroupMarketing,
+    JobStatus,
+    PostEntwurf,
     PostStatus,
+    PostVersuch,
+    QueueZustand,
     Referral,
     ReferralStatus,
     Reward,
     RewardStatus,
+    TextQuelle,
     TrackingEvent,
 )
+from fbgroups.marketing.queue import darf_arbeiten, pruefe_uebergang, zustand_schluessel
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -80,6 +87,24 @@ CREATE TABLE IF NOT EXISTS campaign_groups (
     last_attempt_at TEXT,
     post_attempts   INTEGER NOT NULL DEFAULT 0,
     post_error      TEXT NOT NULL DEFAULT '',
+    -- Der Beitrag selbst und sein Stand in der Vorbereitung. Frueher entstand
+    -- der Text bei jedem Aufruf neu aus der Vorlage der Kampagne; sobald ein
+    -- Mensch ihn ueberarbeitet oder Claude ihn je Gruppe verschieden
+    -- schreibt, ist das nicht mehr haltbar: Freigegeben wird ein bestimmter
+    -- Text, und veroeffentlicht muss genau dieser werden.
+    --
+    -- Diese Spalten stehen hier UND als Migrationsschritt 10. Beides ist
+    -- noetig: Eine frische Datei entsteht aus diesem Schema, eine
+    -- vorhandene aus dem Schritt. Fehlten sie hier, bekaeme eine frisch
+    -- angelegte Datei die aktuelle Versionsnummer ohne die zugehoerigen
+    -- Spalten - und der Migrationsschritt holte sie nie nach, weil die
+    -- Nummer ja schon stimmt.
+    job_status      TEXT NOT NULL DEFAULT 'draft',
+    post_text       TEXT NOT NULL DEFAULT '',
+    text_quelle     TEXT NOT NULL DEFAULT 'vorlage',
+    generiert_am    TEXT,
+    freigegeben_am  TEXT,
+    freigegeben_von TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (campaign_id, group_id),
     FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
     FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
@@ -190,6 +215,59 @@ CREATE TABLE IF NOT EXISTS marketing_meta (
 );
 """
 
+# Vierter Teil: die Beitrags-Warteschlange. Kommt spaeter dazu als die
+# Zuordnung und steht deshalb als eigener Migrationsschritt in
+# storage/sqlite_store.py.
+#
+# Die Job-Felder selbst liegen NICHT hier, sondern als Spalten an
+# ``campaign_groups``: Ein Beitrag gehoert zum Paar aus Kampagne und Gruppe,
+# und genau dieses Paar ist diese Tabelle. Eine zweite Tabelle daneben haette
+# dieselbe Schluesselkombination und dieselbe Lebensdauer - sie waere eine
+# Kopie mit dem Risiko, auseinanderzulaufen.
+SCHEMA_POSTING = """
+CREATE TABLE IF NOT EXISTS post_entwuerfe (
+    entwurf_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id TEXT NOT NULL,
+    group_id    TEXT NOT NULL,
+    -- Laufende Nummer je Paar. Mehrere Fassungen zur Auswahl: Wer nur den
+    -- ersten Vorschlag bekommt, nimmt ihn - und alle 310 Beitraege klingen
+    -- gleich, was genau das ist, was Facebook als Spam erkennt.
+    variante    INTEGER NOT NULL DEFAULT 1,
+    text        TEXT NOT NULL DEFAULT '',
+    quelle      TEXT NOT NULL DEFAULT 'ki',
+    modell      TEXT NOT NULL DEFAULT '',
+    erzeugt_am  TEXT NOT NULL,
+    gewaehlt    INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (campaign_id, group_id, variante)
+);
+
+CREATE INDEX IF NOT EXISTS idx_entwuerfe_paar
+    ON post_entwuerfe(campaign_id, group_id);
+
+CREATE TABLE IF NOT EXISTS post_versuche (
+    versuch_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id    TEXT NOT NULL,
+    group_id       TEXT NOT NULL,
+    -- Mitgeschrieben statt nachgeschlagen: Der Code kann Jahre spaeter noch
+    -- gebraucht werden, um einen veroeffentlichten Beitrag zuzuordnen, und
+    -- die Zuordnung koennte bis dahin entfernt worden sein.
+    tracking_code  TEXT NOT NULL DEFAULT '',
+    job_status     TEXT NOT NULL DEFAULT 'processing',
+    erfolg         INTEGER NOT NULL DEFAULT 0,
+    post_url       TEXT NOT NULL DEFAULT '',
+    fehler         TEXT NOT NULL DEFAULT '',
+    -- Nur ein Name wie 'standard'. Nie ein Passwort, nie ein Cookie, nie ein
+    -- Token - dieses Modell hat dafuer kein Feld.
+    browser_session TEXT NOT NULL DEFAULT '',
+    ausgeloest_von TEXT NOT NULL DEFAULT '',
+    begonnen_am    TEXT NOT NULL,
+    beendet_am     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_versuche_paar ON post_versuche(campaign_id, group_id);
+CREATE INDEX IF NOT EXISTS idx_versuche_zeit ON post_versuche(begonnen_am);
+"""
+
 # Dritter Teil: der Uebergang vom anonymen Besucher zum angemeldeten Benutzer.
 #
 # Ein Mensch traegt auf dem Weg durch den Trichter nacheinander verschiedene
@@ -215,6 +293,21 @@ CREATE TABLE IF NOT EXISTS user_identities (
 
 CREATE INDEX IF NOT EXISTS idx_identities ON user_identities(identity);
 """
+
+
+# Welcher Vorbereitungsstand zu einem eingetragenen Ergebnis gehoert.
+#
+# Die Gegenrichtung zu POST_STATUS_ZU_JOB, und sie ist nur deshalb eindeutig,
+# weil sie ausschliesslich fuer den aelteren Weg gebraucht wird: Dort traegt
+# ein Mensch ein Ergebnis ein, und ein Ergebnis hat immer genau einen
+# passenden Vorbereitungsstand. ``offen`` heisst "wieder aufgenommen" - der
+# Beitrag geht in die Warteschlange zurueck, wo ``campaign retry`` ihn findet.
+_JOB_ZU_POST_STATUS: dict[PostStatus, JobStatus] = {
+    PostStatus.OFFEN: JobStatus.QUEUED,
+    PostStatus.VEROEFFENTLICHT: JobStatus.PUBLISHED,
+    PostStatus.FEHLGESCHLAGEN: JobStatus.FAILED,
+    PostStatus.UEBERSPRUNGEN: JobStatus.CANCELLED,
+}
 
 
 class UnknownGroupError(KeyError):
@@ -255,6 +348,7 @@ class MarketingStore:
         self.conn.executescript(SCHEMA)
         self.conn.executescript(SCHEMA_TRACKING)
         self.conn.executescript(SCHEMA_IDENTITAETEN)
+        self.conn.executescript(SCHEMA_POSTING)
         if not vorhanden:
             # Eine hier neu entstandene Datei traegt das aktuelle Schema und
             # muss das auch sagen. Ohne die Versionsnummer hielte der naechste
@@ -569,12 +663,24 @@ class MarketingStore:
         Der Fehlertext wird beim Erfolg geleert. Bliebe er stehen, zeigte die
         Uebersicht neben einem veroeffentlichten Beitrag den Grund, aus dem er
         beim vorletzten Mal nicht ging.
+
+        **Der Vorbereitungsstand wird mitgezogen.** Dieser Weg ist der
+        aeltere - ``campaign posted`` und der Knopf in der Uebersicht rufen
+        ihn - und er traegt ein Ergebnis ein, ohne die Warteschlange zu
+        kennen. Schriebe er nur ``post_status``, stuende danach
+        "fehlgeschlagen" neben einem ``job_status`` von "draft", und
+        ``campaign retry`` faende den Beitrag nicht mehr: Fuer die eine Liste
+        waere er gescheitert, fuer die andere nie begonnen. ``set_job_status``
+        macht dasselbe in der Gegenrichtung; zusammen halten die beiden
+        Methoden die zwei Achsen deckungsgleich.
         """
         jetzt = datetime.now(UTC)
+        job_status = _JOB_ZU_POST_STATUS[status]
         cursor = self.conn.execute(
             """
             UPDATE campaign_groups
                SET post_status     = ?,
+                   job_status      = ?,
                    post_error      = ?,
                    last_attempt_at = ?,
                    post_attempts   = post_attempts + 1,
@@ -586,6 +692,7 @@ class MarketingStore:
             """,
             (
                 status.value,
+                job_status.value,
                 "" if status is PostStatus.VEROEFFENTLICHT else fehler,
                 _iso(jetzt),
                 status.value,
@@ -634,7 +741,9 @@ class MarketingStore:
             zaehler[row["post_status"]] = row["n"]
         return zaehler
 
-    def fehlgeschlagene_zuruecksetzen(self, campaign_id: str) -> int:
+    def fehlgeschlagene_zuruecksetzen(
+        self, campaign_id: str, *, max_versuche: int = 0
+    ) -> int:
         """Stellt die fehlgeschlagenen Beitraege wieder in die Arbeitsliste.
 
         Nur ``fehlgeschlagen``. ``uebersprungen`` bleibt stehen: Dort hat ein
@@ -642,14 +751,57 @@ class MarketingStore:
         macht diese Entscheidung nicht rueckgaengig. ``post_attempts`` und der
         Fehlertext bleiben erhalten; sie sind das Gedaechtnis darueber, was
         beim letzten Mal schiefging.
+
+        ``max_versuche`` (aus ``marketing.posting.max_versuche``) laesst Jobs
+        stehen, die es schon so oft versucht haben. Ohne diese Grenze holte
+        jeder Aufruf dieselbe Gruppe zurueck, die aus einem *dauerhaften* Grund
+        scheitert - "erlaubt keine Links" wird beim vierten Mal nicht anders
+        ausgehen als beim ersten, aber es kostet jedes Mal einen Platz im
+        Tageslimit, den eine erreichbare Gruppe gebraucht haette. ``0`` schaltet
+        die Grenze ab; die Zahl steht in der Konfiguration und nicht hier.
+
+        **Beide Achsen werden gesetzt.** Ein Job mit ``post_status: offen``
+        neben ``job_status: failed`` waere fuer die eine Liste erledigt und
+        fuer die andere gescheitert. Wohin er zurueckgeht, haengt am Text:
+        Wer einen freigegebenen Text hat, geht in die Warteschlange
+        (``queued``); wer keinen hat, faengt beim Entwurf an - er koennte
+        sonst nirgends wieder aufgegriffen werden.
         """
+        bedingung = "campaign_id = ? AND job_status = 'failed'"
+        werte: list[object] = [campaign_id]
+        if max_versuche > 0:
+            bedingung += " AND post_attempts < ?"
+            werte.append(max_versuche)
+
         cursor = self.conn.execute(
-            "UPDATE campaign_groups SET post_status = 'offen' "
-            "WHERE campaign_id = ? AND post_status = 'fehlgeschlagen'",
-            (campaign_id,),
+            f"""
+            UPDATE campaign_groups
+               SET job_status  = CASE WHEN TRIM(post_text) <> '' THEN 'queued' ELSE 'draft' END,
+                   post_status = 'offen'
+             WHERE {bedingung}
+            """,  # noqa: S608 - die Bedingung ist hier gebaut, die Werte sind gebunden
+            werte,
         )
         self.conn.commit()
         return cursor.rowcount
+
+    def aufgegeben(self, campaign_id: str, max_versuche: int) -> list[CampaignGroup]:
+        """Fehlgeschlagene Jobs, die ihre Versuche aufgebraucht haben.
+
+        Sie verschwinden nicht - sie warten auf einen Menschen. Ein Job, der
+        dreimal an "erlaubt keine Links" gescheitert ist, braucht eine
+        Entscheidung (anderer Text, Gruppe ausschliessen), keinen vierten
+        gleichen Versuch. Ohne diese Liste faenden sie sich nie wieder:
+        ``retry`` uebergeht sie, und in der Warteschlange stehen sie nicht.
+        """
+        if max_versuche <= 0:
+            return []
+        rows = self.conn.execute(
+            "SELECT * FROM campaign_groups WHERE campaign_id = ? AND job_status = 'failed' "
+            "AND post_attempts >= ? ORDER BY post_attempts DESC, group_id",
+            (campaign_id, max_versuche),
+        ).fetchall()
+        return [self._row_to_link(row) for row in rows]
 
     def remove_link(self, campaign_id: str, group_id: str) -> int:
         cursor = self.conn.execute(
@@ -710,6 +862,367 @@ class MarketingStore:
         return {row["group_id"]: self._row_to_marketing(row) for row in rows}
 
     # -- Ereignisse -----------------------------------------------------
+    # -- Beitrags-Warteschlange ------------------------------------------
+    def set_job_status(
+        self,
+        campaign_id: str,
+        group_id: str,
+        neu: JobStatus,
+        *,
+        akteur: str = "",
+        fehler: str | None = None,
+        erzwingen: bool = False,
+    ) -> CampaignGroup:
+        """Setzt den Vorbereitungsstand - und nur ueber die erlaubten Wege.
+
+        Die Pruefung liegt hier und nicht beim Aufrufer: Kommandozeile,
+        Uebersicht und Arbeiter setzen denselben Stand, und eine Regel, die an
+        drei Stellen gepflegt wird, gilt bald an zweien. ``erzwingen`` ist fuer
+        den einen Fall gedacht, in dem ein Mensch einen verwaisten
+        ``processing`` aufloest.
+
+        ``post_status`` wird hier mitgeschrieben, aus ``POST_STATUS_ZU_JOB``.
+        Das ist der ganze Grund, warum es diese eine Methode gibt: Solange
+        beide Felder nur hier gesetzt werden, koennen sie nicht auseinander-
+        laufen, und jeder aeltere Leser (``campaign queue``, ``retry``,
+        ``post_counts``, die Uebersicht) sieht weiter, was er immer sah.
+        """
+        link = self.link_for(campaign_id, group_id)
+        if link is None:
+            raise UnknownGroupError(f"{campaign_id}/{group_id}")
+
+        if not erzwingen:
+            pruefe_uebergang(link.job_status, neu, hat_text=bool(link.post_text.strip()))
+
+        jetzt = datetime.now(UTC)
+        felder: dict[str, object] = {
+            "job_status": neu.value,
+            "post_status": POST_STATUS_ZU_JOB[neu].value,
+        }
+
+        if neu is JobStatus.APPROVED:
+            felder["freigegeben_am"] = _iso(jetzt)
+            felder["freigegeben_von"] = akteur
+        if neu is JobStatus.PENDING_REVIEW and link.job_status is JobStatus.APPROVED:
+            # Eine zurueckgenommene Freigabe ist keine Freigabe mehr. Bliebe der
+            # Zeitpunkt stehen, sagte die Zeile "freigegeben am ...", waehrend
+            # sie auf Pruefung wartet.
+            felder["freigegeben_am"] = None
+            felder["freigegeben_von"] = ""
+        if neu is JobStatus.PUBLISHED and link.posted_at is None:
+            # Nur beim ersten Erfolg - die Klicks gehen auf den Beitrag zurueck,
+            # der zuerst stand.
+            felder["posted_at"] = _iso(jetzt)
+        if neu in (JobStatus.PUBLISHED, JobStatus.FAILED):
+            felder["last_attempt_at"] = _iso(jetzt)
+            felder["post_attempts"] = link.post_attempts + 1
+        if fehler is not None:
+            felder["post_error"] = fehler
+        elif neu is JobStatus.PUBLISHED:
+            # Ein Erfolg loescht den Grund, aus dem es beim letzten Mal nicht
+            # ging - sonst stuende er neben einem veroeffentlichten Beitrag.
+            felder["post_error"] = ""
+
+        zuweisung = ", ".join(f"{name} = ?" for name in felder)
+        self.conn.execute(
+            f"UPDATE campaign_groups SET {zuweisung} "  # noqa: S608
+            "WHERE campaign_id = ? AND group_id = ?",
+            (*felder.values(), campaign_id, group_id),
+        )
+        self.conn.commit()
+        neuer_stand = self.link_for(campaign_id, group_id)
+        if neuer_stand is None:
+            raise UnknownGroupError(f"{campaign_id}/{group_id}")
+        return neuer_stand
+
+    def set_post_text(
+        self,
+        campaign_id: str,
+        group_id: str,
+        text: str,
+        quelle: TextQuelle,
+        *,
+        neuer_status: JobStatus | None = None,
+    ) -> CampaignGroup:
+        """Legt den Beitragstext ab - den, der spaeter wirklich gepostet wird.
+
+        Bewusst ohne Statuswechsel als Vorgabe: Text schreiben und Text
+        freigeben sind zwei Handlungen, und die zweite gehoert einem Menschen.
+        """
+        self.conn.execute(
+            "UPDATE campaign_groups SET post_text = ?, text_quelle = ?, generiert_am = ? "
+            "WHERE campaign_id = ? AND group_id = ?",
+            (text, quelle.value, _iso(datetime.now(UTC)), campaign_id, group_id),
+        )
+        self.conn.commit()
+        if neuer_status is not None:
+            return self.set_job_status(campaign_id, group_id, neuer_status)
+        link = self.link_for(campaign_id, group_id)
+        if link is None:
+            raise UnknownGroupError(f"{campaign_id}/{group_id}")
+        return link
+
+    def jobs_mit_status(
+        self, campaign_id: str, status: JobStatus | None = None
+    ) -> list[CampaignGroup]:
+        """Alle Jobs einer Kampagne, wahlweise nur die in einem Stand."""
+        if status is None:
+            rows = self.conn.execute(
+                "SELECT * FROM campaign_groups WHERE campaign_id = ? ORDER BY added_at",
+                (campaign_id,),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM campaign_groups WHERE campaign_id = ? AND job_status = ? "
+                "ORDER BY added_at",
+                (campaign_id, status.value),
+            ).fetchall()
+        return [self._row_to_link(row) for row in rows]
+
+    def job_counts(self, campaign_id: str) -> dict[str, int]:
+        """Zaehler je Vorbereitungsstand - die Kacheln der Uebersicht.
+
+        Auch die leeren Staende erscheinen mit 0: "keine Entwuerfe" ist eine
+        Aussage, eine fehlende Kachel ist ein Raetsel.
+        """
+        rows = self.conn.execute(
+            "SELECT job_status, COUNT(*) AS anzahl FROM campaign_groups "
+            "WHERE campaign_id = ? GROUP BY job_status",
+            (campaign_id,),
+        ).fetchall()
+        zaehler = {stand.value: 0 for stand in JobStatus}
+        for row in rows:
+            zaehler[str(row["job_status"])] = int(row["anzahl"])
+        return zaehler
+
+    def queue_zustand(self, campaign_id: str) -> QueueZustand:
+        """Laeuft die Warteschlange dieser Kampagne gerade?
+
+        Vorgabe ``laufend``: Eine Kampagne, die noch nie angehalten wurde, ist
+        nicht angehalten. Ein unbekannter gespeicherter Wert gilt dagegen als
+        ``gestoppt`` - im Zweifel wird nicht gepostet.
+        """
+        wert = self.meta(zustand_schluessel(campaign_id), QueueZustand.LAUFEND.value)
+        try:
+            return QueueZustand(wert)
+        except ValueError:
+            return QueueZustand.GESTOPPT
+
+    def set_queue_zustand(self, campaign_id: str, zustand: QueueZustand) -> int:
+        """Haelt die Warteschlange an oder laesst sie weiterlaufen.
+
+        Bei ``gestoppt`` gehen alle eingereihten Jobs auf ``approved`` zurueck.
+        Returns: wie viele das waren. ``processing`` wird **nicht** angefasst -
+        dort ist moeglicherweise gerade ein Beitrag unterwegs, und ihn aus der
+        Buchfuehrung zu nehmen, waehrend er in der Gruppe landet, waere
+        schlimmer als ein Job zu viel in der Liste.
+        """
+        self.set_meta(zustand_schluessel(campaign_id), zustand.value)
+        if zustand is not QueueZustand.GESTOPPT:
+            return 0
+
+        cursor = self.conn.execute(
+            "UPDATE campaign_groups SET job_status = ?, post_status = ? "
+            "WHERE campaign_id = ? AND job_status = ?",
+            (
+                JobStatus.APPROVED.value,
+                POST_STATUS_ZU_JOB[JobStatus.APPROVED].value,
+                campaign_id,
+                JobStatus.QUEUED.value,
+            ),
+        )
+        self.conn.commit()
+        return int(cursor.rowcount or 0)
+
+    def naechster_job(self, campaign_id: str) -> CampaignGroup | None:
+        """Der naechste Job aus der Warteschlange - oder nichts.
+
+        Liefert nur bei ``laufend`` etwas. Die Reihenfolge kommt aus
+        ``added_at``; die fachliche Rangfolge nach Score setzt der Aufrufer
+        beim **Einreihen**, nicht hier - sonst entschiede eine Neubewertung
+        mitten im Lauf, welcher Beitrag als naechstes hinausgeht.
+        """
+        if not darf_arbeiten(self.queue_zustand(campaign_id)):
+            return None
+        row = self.conn.execute(
+            "SELECT * FROM campaign_groups WHERE campaign_id = ? AND job_status = ? "
+            "ORDER BY added_at, group_id LIMIT 1",
+            (campaign_id, JobStatus.QUEUED.value),
+        ).fetchone()
+        return self._row_to_link(row) if row else None
+
+    # -- Entwuerfe --------------------------------------------------------
+    def add_entwurf(self, entwurf: PostEntwurf) -> int:
+        """Legt eine Textfassung ab. Die Variantennummer zaehlt je Paar hoch."""
+        if entwurf.variante <= 0:
+            row = self.conn.execute(
+                "SELECT COALESCE(MAX(variante), 0) AS hoechste FROM post_entwuerfe "
+                "WHERE campaign_id = ? AND group_id = ?",
+                (entwurf.campaign_id, entwurf.group_id),
+            ).fetchone()
+            entwurf.variante = int(row["hoechste"]) + 1
+
+        cursor = self.conn.execute(
+            """
+            INSERT INTO post_entwuerfe
+                (campaign_id, group_id, variante, text, quelle, modell, erzeugt_am, gewaehlt)
+            VALUES (?,?,?,?,?,?,?,?)
+            """,
+            (
+                entwurf.campaign_id,
+                entwurf.group_id,
+                entwurf.variante,
+                entwurf.text,
+                entwurf.quelle.value,
+                entwurf.modell,
+                _iso(entwurf.erzeugt_am),
+                int(entwurf.gewaehlt),
+            ),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid or 0)
+
+    def entwuerfe_for(self, campaign_id: str, group_id: str) -> list[PostEntwurf]:
+        rows = self.conn.execute(
+            "SELECT * FROM post_entwuerfe WHERE campaign_id = ? AND group_id = ? "
+            "ORDER BY variante",
+            (campaign_id, group_id),
+        ).fetchall()
+        return [self._row_to_entwurf(row) for row in rows]
+
+    def waehle_entwurf(self, entwurf_id: int) -> PostEntwurf | None:
+        """Macht eine Fassung zur gewaehlten und uebernimmt ihren Text.
+
+        Die verworfenen Fassungen bleiben stehen. Sie kosten nichts und
+        beantworten spaeter die Frage, wogegen entschieden wurde.
+        """
+        row = self.conn.execute(
+            "SELECT * FROM post_entwuerfe WHERE entwurf_id = ?", (entwurf_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        entwurf = self._row_to_entwurf(row)
+
+        self.conn.execute(
+            "UPDATE post_entwuerfe SET gewaehlt = 0 WHERE campaign_id = ? AND group_id = ?",
+            (entwurf.campaign_id, entwurf.group_id),
+        )
+        self.conn.execute(
+            "UPDATE post_entwuerfe SET gewaehlt = 1 WHERE entwurf_id = ?", (entwurf_id,)
+        )
+        self.conn.commit()
+        self.set_post_text(entwurf.campaign_id, entwurf.group_id, entwurf.text, entwurf.quelle)
+        return entwurf
+
+    # -- Versuchsprotokoll ------------------------------------------------
+    def beginne_versuch(self, versuch: PostVersuch) -> int:
+        """Traegt einen begonnenen Versuch ein. Returns: seine Kennung.
+
+        Geschrieben wird **vor** dem Versuch, nicht danach: Ein Arbeiter, der
+        mitten im Absetzen abstuerzt, hinterliesse sonst keine Spur - und
+        niemand wuesste, ob in der Gruppe nun ein Beitrag steht oder nicht.
+        """
+        cursor = self.conn.execute(
+            """
+            INSERT INTO post_versuche
+                (campaign_id, group_id, tracking_code, job_status, erfolg,
+                 post_url, fehler, browser_session, ausgeloest_von, begonnen_am)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                versuch.campaign_id,
+                versuch.group_id,
+                versuch.tracking_code,
+                versuch.job_status.value,
+                int(versuch.erfolg),
+                versuch.post_url,
+                versuch.fehler,
+                versuch.browser_session,
+                versuch.ausgeloest_von,
+                _iso(versuch.begonnen_am),
+            ),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid or 0)
+
+    def beende_versuch(
+        self, versuch_id: int, *, erfolg: bool, fehler: str = "", post_url: str = ""
+    ) -> None:
+        """Schliesst den Versuch ab - Ausgang, Grund, gegebenenfalls die URL."""
+        self.conn.execute(
+            "UPDATE post_versuche SET erfolg = ?, fehler = ?, post_url = ?, "
+            "job_status = ?, beendet_am = ? WHERE versuch_id = ?",
+            (
+                int(erfolg),
+                fehler,
+                post_url,
+                (JobStatus.PUBLISHED if erfolg else JobStatus.FAILED).value,
+                _iso(datetime.now(UTC)),
+                versuch_id,
+            ),
+        )
+        self.conn.commit()
+
+    def versuche_heute(
+        self, campaign_id: str | None = None, *, jetzt: datetime | None = None
+    ) -> int:
+        """Wie viele Versuche heute schon unternommen wurden.
+
+        Grundlage des Tageslimits, und sie steht mit Absicht in der Datenbank
+        statt in einem Zaehler im Arbeiter: Wer um 08:00 zwanzig Beitraege
+        setzt, abstuerzt und um 14:00 neu startet, saehe sonst einen leeren
+        Zaehler und setzte zwanzig weitere.
+
+        **Ohne ``campaign_id`` ueber alle Kampagnen** - und so ruft der Arbeiter
+        es auch. Die knappe Ressource ist das Facebook-Konto, nicht die
+        Kampagne: Zwei Kampagnen mit je zwanzig Beitraegen sind vierzig
+        Beitraege aus demselben Konto, und das Limit waere eine Beschriftung
+        ohne Wirkung. Je Kampagne zaehlen laesst sich weiterhin - fuer die
+        Anzeige, nicht fuer die Grenze.
+
+        Gezaehlt wird ab **oertlicher** Mitternacht, nicht ab UTC: "20 pro Tag"
+        meint den Tag des Menschen, der davorsitzt. Gespeichert ist in UTC, die
+        Grenze wird deshalb umgerechnet.
+
+        Gezaehlt wird **jeder** Versuch, auch der fehlgeschlagene. Das Limit
+        schuetzt nicht vor zu vielen Beitraegen, sondern vor zu viel Betrieb -
+        zehn Fehlschlaege hintereinander sind ein Grund, den Tag zu beenden,
+        kein Grund, es zwanzig weitere Male zu versuchen.
+        """
+        jetzt = jetzt or datetime.now()
+        mitternacht = jetzt.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+        seit = _iso(mitternacht.astimezone(UTC))
+
+        if campaign_id is None:
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS anzahl FROM post_versuche WHERE begonnen_am >= ?",
+                (seit,),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS anzahl FROM post_versuche "
+                "WHERE campaign_id = ? AND begonnen_am >= ?",
+                (campaign_id, seit),
+            ).fetchone()
+        return int(row["anzahl"] or 0)
+
+    def versuche_for(self, campaign_id: str, group_id: str) -> list[PostVersuch]:
+        rows = self.conn.execute(
+            "SELECT * FROM post_versuche WHERE campaign_id = ? AND group_id = ? "
+            "ORDER BY begonnen_am, versuch_id",
+            (campaign_id, group_id),
+        ).fetchall()
+        return [self._row_to_versuch(row) for row in rows]
+
+    def offene_versuche(self, campaign_id: str) -> list[PostVersuch]:
+        """Versuche ohne Abschluss - die Kandidaten fuer verwaiste Jobs."""
+        rows = self.conn.execute(
+            "SELECT * FROM post_versuche WHERE campaign_id = ? AND beendet_am IS NULL "
+            "ORDER BY begonnen_am",
+            (campaign_id,),
+        ).fetchall()
+        return [self._row_to_versuch(row) for row in rows]
+
     def resolve_code(self, tracking_code: str) -> CampaignGroup | None:
         """Findet Kampagne und Gruppe zu einem Tracking-Code."""
         row = self.conn.execute(
@@ -1087,6 +1600,37 @@ class MarketingStore:
         )
 
     @staticmethod
+    def _row_to_entwurf(row: sqlite3.Row) -> PostEntwurf:
+        return PostEntwurf(
+            entwurf_id=row["entwurf_id"],
+            campaign_id=row["campaign_id"],
+            group_id=row["group_id"],
+            variante=row["variante"],
+            text=row["text"],
+            quelle=row["quelle"],
+            modell=row["modell"],
+            erzeugt_am=row["erzeugt_am"],
+            gewaehlt=bool(row["gewaehlt"]),
+        )
+
+    @staticmethod
+    def _row_to_versuch(row: sqlite3.Row) -> PostVersuch:
+        return PostVersuch(
+            versuch_id=row["versuch_id"],
+            campaign_id=row["campaign_id"],
+            group_id=row["group_id"],
+            tracking_code=row["tracking_code"],
+            job_status=row["job_status"],
+            erfolg=bool(row["erfolg"]),
+            post_url=row["post_url"],
+            fehler=row["fehler"],
+            browser_session=row["browser_session"],
+            ausgeloest_von=row["ausgeloest_von"],
+            begonnen_am=row["begonnen_am"],
+            beendet_am=row["beendet_am"],
+        )
+
+    @staticmethod
     def _row_to_referral(row: sqlite3.Row) -> Referral:
         return Referral(
             referral_id=row["referral_id"],
@@ -1153,6 +1697,12 @@ class MarketingStore:
             last_attempt_at=row["last_attempt_at"],
             post_attempts=row["post_attempts"],
             post_error=row["post_error"],
+            job_status=row["job_status"],
+            post_text=row["post_text"],
+            text_quelle=row["text_quelle"],
+            generiert_am=row["generiert_am"],
+            freigegeben_am=row["freigegeben_am"],
+            freigegeben_von=row["freigegeben_von"],
         )
 
     @staticmethod

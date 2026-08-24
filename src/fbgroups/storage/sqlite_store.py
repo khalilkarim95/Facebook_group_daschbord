@@ -16,10 +16,11 @@ from pathlib import Path
 
 from fbgroups.marketing.store import SCHEMA as MARKETING_SCHEMA
 from fbgroups.marketing.store import SCHEMA_IDENTITAETEN as MARKETING_IDENTITAETEN_SCHEMA
+from fbgroups.marketing.store import SCHEMA_POSTING as MARKETING_POSTING_SCHEMA
 from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEMA
 from fbgroups.models import Group, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # Schritte, die eine aeltere Datei nachholt, ohne dass der Bestand neu
 # aufgebaut werden muss. Handgepflegte Notizen bleiben so erhalten.
@@ -108,6 +109,34 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
     # Kennungen mitbringen. Ein Bestand, der bis hierher gelaufen ist,
     # rechnet danach exakt dieselben Zahlen aus wie vorher.
     9: (MARKETING_IDENTITAETEN_SCHEMA,),
+    # Die Beitrags-Warteschlange: der Text selbst, sein Stand in der
+    # Vorbereitung, die Entwuerfe und das Versuchsprotokoll.
+    #
+    # Rein additiv. ``post_status`` wird NICHT angefasst: Jede bestehende
+    # Zuordnung behaelt ihren Ergebnisstand, und ``campaign queue``,
+    # ``retry``, ``post_counts`` und die Uebersicht lesen unveraendert
+    # weiter. Der neue ``job_status`` wird aus dem vorhandenen
+    # ``post_status`` einmalig abgeleitet - eine veroeffentlichte Zuordnung
+    # startet als 'published', nicht als 'draft'. Andersherum entstuende der
+    # Eindruck, 210 fertige Beitraege stuenden noch aus.
+    10: (
+        "ALTER TABLE campaign_groups ADD COLUMN job_status TEXT NOT NULL DEFAULT 'draft'",
+        "ALTER TABLE campaign_groups ADD COLUMN post_text TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE campaign_groups ADD COLUMN text_quelle TEXT NOT NULL DEFAULT 'vorlage'",
+        "ALTER TABLE campaign_groups ADD COLUMN generiert_am TEXT",
+        "ALTER TABLE campaign_groups ADD COLUMN freigegeben_am TEXT",
+        "ALTER TABLE campaign_groups ADD COLUMN freigegeben_von TEXT NOT NULL DEFAULT ''",
+        """
+        UPDATE campaign_groups SET job_status = CASE post_status
+            WHEN 'veroeffentlicht'  THEN 'published'
+            WHEN 'fehlgeschlagen'   THEN 'failed'
+            WHEN 'uebersprungen'    THEN 'cancelled'
+            ELSE 'draft' END
+        """,
+        MARKETING_POSTING_SCHEMA,
+        "CREATE INDEX IF NOT EXISTS idx_campaign_groups_job "
+        "ON campaign_groups(campaign_id, job_status)",
+    ),
 }
 
 SCHEMA = """
@@ -214,6 +243,7 @@ class SqliteStore:
         self.conn.executescript(MARKETING_SCHEMA)
         self.conn.executescript(MARKETING_TRACKING_SCHEMA)
         self.conn.executescript(MARKETING_IDENTITAETEN_SCHEMA)
+        self.conn.executescript(MARKETING_POSTING_SCHEMA)
         self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
 

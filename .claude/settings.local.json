@@ -36,7 +36,11 @@
       "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q --tb=line 2>&1 | Select-Object -Last 3; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest --collect-only 2>&1 | Select-String \"collected\")",
       "PowerShell(& \".\\\\suche.ps1\" -Plan)",
       "PowerShell(& \".\\\\suche.ps1\" -Anfragen 0 2>&1)",
-      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q --tb=short 2>&1 | Select-Object -Last 15; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests)"
+      "PowerShell($env:PYTHONIOENCODING=\"utf-8\"; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m pytest -q --tb=short 2>&1 | Select-Object -Last 15; & \".\\\\.venv\\\\Scripts\\\\python.exe\" -m ruff check src tests)",
+      "PowerShell(Get-Command ollama -ErrorAction SilentlyContinue)",
+      "PowerShell(Test-Path \"$env:LOCALAPPDATA\\\\Programs\\\\Ollama\\\\ollama.exe\")",
+      "Bash(./.venv/Scripts/python.exe -m pytest -q)",
+      "Bash(git check-ignore *)"
     ]
   }
 }

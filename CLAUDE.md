@@ -468,6 +468,160 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
 & $py -m fbgroups.cli marketing audit
 ```
 
+### KI-Anbieter: lokal als Standard
+
+```powershell
+& $py -m fbgroups.cli ki status          # Anbieter, Verbindung, Modell, Adresse
+& $py -m fbgroups.cli ki test            # eine sehr kurze echte Anfrage
+& $py -m fbgroups.cli ki modelle         # was bei Ollama wirklich liegt
+& $py -m fbgroups.cli campaign draft <kampagne> --dry-run   # zeigt nur, was liefe
+```
+
+- **Ollama ist die Voreinstellung, Anthropic der Sonderfall.** Ollama läuft auf
+  dem eigenen Rechner: keine Kosten je Anfrage, und die Angaben über die
+  Gruppen verlassen den Rechner nicht. Beides sind Gründe für den Standard,
+  nicht für eine Ausweichlösung. `AI_PROVIDER` schlägt
+  `marketing.posting.ki.anbieter` — dieselbe Reihenfolge wie bei
+  `APP_BASE_URL`. Ein **unbekannter** Wert fällt auf Ollama zurück: Ein
+  Tippfehler soll niemanden unversehens bei einem kostenpflichtigen Dienst
+  abliefern, und die kostenlose Voreinstellung ist die harmlose Richtung.
+- **Es wird nie stillschweigend gewechselt.** Läuft Ollama gerade nicht, wird
+  *nicht* auf Anthropic ausgewichen — das verwandelte einen abgeschalteten
+  Rechner in eine Rechnung. Dieselbe Überlegung wie bei `fallback_chain` in der
+  Suchschicht, die aus genau diesem Grund leer ist.
+- **`marketing/ki/` trennt Fachlichkeit von Anbieter.** `basis.py` hält Prompt,
+  Prüfung und Entwürfe und kennt **keinen** Anbieter; `ollama.py` und
+  `anthropic.py` sind zwei Umsetzungen des Protokolls `Modell`; `factory.py`
+  entscheidet. Deshalb ändert ein dritter Anbieter nichts an der Prüfung des
+  Tracking-Links — und die Tests laufen ohne Netz, ohne Dienst, ohne Kosten.
+- **Ollama braucht keine neue Abhängigkeit.** Es spricht HTTP, und `httpx` ist
+  seit jeher Kernabhängigkeit. `[ki]` (das Extra mit `anthropic`) ist
+  ausschließlich für den optionalen Weg — ohne es laufen Suche, Zuordnung,
+  Warteschlange, Freigabe, Veröffentlichung **und** die Beitragsvorschläge.
+- **Eine Anfrage je Fassung, als reiner Text — nicht drei in einem JSON.** Der
+  Anthropic-Weg holt drei Fassungen in einem Aufruf mit Schema. Ein kleines
+  lokales Modell hält das Schema nicht ein; dann ist nicht eine Fassung
+  unbrauchbar, sondern alle drei. Lokal kostet eine dritte Anfrage nichts außer
+  Zeit. Die Verschiedenheit kommt aus `temperature` (Ollama nimmt den Parameter,
+  Claude Opus 5 lehnt ihn mit 400 ab) und daraus, dass jede Anfrage die bereits
+  geschriebenen Fassungen mitbekommt.
+- **Genau ein Reparaturversuch.** Ein kleines Modell verfehlt `{link}` deutlich
+  öfter als ein großes. Schlägt `pruefe_platzhalter` an, wird **einmal**
+  nachgefasst — mit der Regel, an der es lag — und das Ergebnis geht durch
+  **dieselbe** Prüfung. Ohne das wäre ein guter Teil der Fassungen unbrauchbar;
+  mit mehr als einem Versuch würde daraus eine Schleife, deren Dauer (lokal)
+  und Kosten (bei Anthropic) niemand mehr überblickt.
+- **Der Statusabruf erzeugt nie etwas** und wird 10 s zwischengespeichert. Die
+  Übersicht fragt ihn bei jedem Seitenaufbau; ohne Zwischenspeicher zahlte
+  jedes Neuladen die volle Zeitgrenze. `fbgroups ki status` umgeht ihn
+  (`frisch=True`) — wer nachsieht, hat womöglich gerade Ollama gestartet.
+- **„Verbunden" allein ist eine irreführende Auskunft.** Der häufigste Fehler
+  nach der Einrichtung ist ein laufender Dienst **ohne** das Modell. `Status.
+  modell_vorhanden` unterscheidet das, und die Meldung nennt `ollama pull`.
+  Ebenso getrennt: HTTP 404 bei `/api/generate` heißt „Modell fehlt", ein
+  Verbindungsfehler heißt „Dienst läuft nicht" — zwei Fehler, zwei Lösungen.
+- **Ohne KI funktioniert alles Übrige vollständig.** Sie ist ein Aufsatz, keine
+  Voraussetzung: `sammle_daten` fängt jeden Fehler des Statusabrufs,
+  `POST /ki/test` antwortet auch bei totem Ollama mit **200** und `ok: false`
+  (ein 500 sähe aus wie ein Fehler des Dienstes statt wie ein abgeschaltetes
+  Ollama), und die Übersicht baut sich unverändert.
+- **`POST /ki/test` steht hinter `_nur_lokal`** wie jeder schreibende Weg. Er
+  erzeugt wirklich etwas — lokal Rechenzeit, bei Anthropic Geld —, und ein Weg,
+  den jeder von außen auslösen könnte, wäre bei einem lokalen Modell eine
+  Einladung, den Rechner lahmzulegen.
+
+### Der Arbeiter (`worker.py`, `veroeffentlicher/`)
+
+```powershell
+& $py -m fbgroups.cli campaign enqueue batreeq-syrian-germany --top 20  # nach Score einreihen
+& $py -m fbgroups.cli campaign worker batreeq-syrian-germany --dry-run  # Plan, Grenzen, Zeitplan
+& $py -m fbgroups.cli campaign worker batreeq-syrian-germany            # abarbeiten
+& $py -m fbgroups.cli campaign tageslauf batreeq-syrian-germany   # retry + enqueue + worker
+& $py -m fbgroups.cli campaign zeitplan batreeq-syrian-germany    # taeglich einrichten
+& $py -m fbgroups.cli campaign pause batreeq-syrian-germany   # wirkt im laufenden Arbeiter
+& $py -m fbgroups.cli campaign retry batreeq-syrian-germany   # ohne die aufgegebenen
+```
+
+- **`worker.py` ist Ablaufsteuerung und sonst nichts.** Wie ein Beitrag in eine
+  Gruppe kommt, steht dort nirgends — das ist Sache eines `Veroeffentlicher`.
+  Dieselbe Trennung wie `providers/base.py` in der Suchschicht und aus
+  demselben Grund: Der Teil, der über Tageslimit, Reihenfolge und Abbruch
+  entscheidet, muss ohne Netz und ohne Browser prüfbar sein.
+- **`veroeffentlicher/basis.py` enthält nur den Vertrag.** Kein Modul außerhalb
+  von `veroeffentlicher/` darf eine konkrete Umsetzung importieren —
+  abgesichert durch `test_kein_modul_ausserhalb_des_pakets_kennt_einen_adapter`
+  und `test_der_arbeiter_kennt_keinen_adapter`. Neuer Adapter = Klasse +
+  `@register_veroeffentlicher(...)` + eine Zeile in `__init__.py`; weder
+  Arbeiter noch CLI noch Übersicht ändern sich dabei. Implementiert:
+  `assistiert` (Text bereit, Gruppe offen, Absenden von Hand).
+- **Ein Adapter bekommt nie eine Anmeldung.** Weder Passwort noch Cookie noch
+  Token wird durchgereicht; `PostVersuch.browser_session` ist ein *Name* wie
+  `standard`. Das Modell hat für eine Anmeldung schlicht kein Feld — geprüft
+  von `test_kein_feld_fuer_eine_anmeldung`.
+- **Streng nacheinander — kein Thread, kein `asyncio`.** Zwei gleichzeitig
+  laufende Beiträge wären nicht doppelt so schnell, sondern der Unterschied
+  zwischen einem Menschen, der arbeitet, und einem Programm, das sendet. Die
+  Wartezeit dazwischen ist deshalb kein Schönheitsfehler des Ablaufs, sondern
+  sein Kern.
+- **Der Zustand wird vor jedem Job neu gelesen — und nach jeder Wartezeit.**
+  Nur so wirken `pause`, `resume` und `stop` **während** ein Arbeiter läuft:
+  Sie werden von einem anderen Prozess geschrieben (CLI oder Übersicht), und
+  ein Arbeiter, der seinen Zustand im Speicher hielte, sähe sie nie. Ohne die
+  zweite Prüfung wirkte `pause` erst sieben Minuten später — und in der
+  Zwischenzeit stünde ein Beitrag in einer Gruppe, den niemand mehr wollte.
+- **Das Tageslimit zählt aus `post_versuche`, nicht aus einem Zähler im
+  Speicher** (`store.versuche_heute`). Wer um 08:00 zwanzig Beiträge setzt,
+  abstürzt und um 14:00 neu startet, sähe sonst einen leeren Zähler und setzte
+  zwanzig weitere. Gezählt wird ab **örtlicher** Mitternacht: „20 pro Tag"
+  meint den Tag des Menschen, der davorsitzt. Mitgezählt wird **jeder** Versuch,
+  auch der fehlgeschlagene — zehn Fehlschläge hintereinander sind ein Grund,
+  den Tag zu beenden, kein Grund, es zwanzig weitere Male zu versuchen.
+- **Die Reihenfolge entsteht beim `enqueue`, nicht beim Abarbeiten.** Dort
+  sortiert `nach_prioritaet` nach Score. Sortierte der Arbeiter selbst,
+  entschiede eine Neubewertung mitten im Lauf, welcher Beitrag als nächstes
+  hinausgeht — und die Reihenfolge wäre von Tag zu Tag eine andere.
+- **Der Versuch wird vor dem Absetzen protokolliert.** `beginne_versuch` läuft,
+  bevor der Adapter etwas tut. Bricht der Arbeiter mitten im Absetzen ab,
+  bleibt eine Zeile ohne `beendet_am` stehen — unangenehm, aber beantwortbar.
+  Ohne sie wüsste niemand, ob in der Gruppe nun ein Beitrag steht.
+- **Ein werfender Adapter reißt den Lauf nicht mit.** Der Job stünde sonst für
+  immer auf `processing`: weder offen noch fertig, in keiner Liste, nie wieder
+  angefasst. Der Grund wandert stattdessen ins Protokoll, und der nächste Job
+  kommt dran — eine zickige Gruppe darf nicht den Rest des Tages kosten.
+- **`abbrechen` ist ein eigenes Feld, nicht aus `erfolg` abgeleitet.** Ein
+  Adapter, der es nicht hätte, liefe nach einem Fehler weiter gegen die Wand;
+  einer, der bei jedem Fehler abbräche, verlöre den Tag wegen einer Gruppe. Wer
+  so abbricht, verwirft nichts: Der Job geht per `erzwingen` zurück auf
+  `queued` (`processing -> queued` fehlt in der Übergangstabelle bewusst, damit
+  ein Job nicht unbemerkt zwischen beiden kreist) und ist morgen der nächste.
+- **Der Arbeiter schläft nicht bis zur Startzeit.** Ein Prozess, der vierzehn
+  Stunden wartet, überlebt keinen Neustart, keine Abmeldung und keinen
+  zugeklappten Deckel. `startzeit` in `settings.yaml` ist der Wert für die
+  Aufgabenplanung des Systems; `campaign zeitplan` trägt ihn dort ein und
+  zeigt ohne `--einrichten` nur, was er täte — etwas, das sich täglich von
+  selbst startet, legt man nicht beiläufig an.
+- **`campaign tageslauf` ist die Reihenfolge der drei Schritte, nicht ihr
+  Ersatz.** Erst `retry`, dann `enqueue`, dann `worker`. Ein gestern
+  gescheiterter Beitrag hat Text und Freigabe schon und gehört vor die Gruppen,
+  die heute zum ersten Mal drankommen; umgekehrt füllte sich die Warteschlange
+  mit Neuem, und der Fehlschlag rutschte Tag um Tag nach hinten. Eingereiht
+  wird nur, was ins Tageslimit passt — was darüber hinaus in der Schlange
+  stünde, überlebte den Tag und bräche morgen die Score-Reihenfolge.
+- **`max_versuche` (Vorgabe 3) wird beim `retry` durchgesetzt.** Die Zahl stand
+  seit jeher in der Konfiguration und wirkte nirgends: Jeder Aufruf holte
+  dieselbe Gruppe zurück, die aus einem *dauerhaften* Grund scheitert.
+  „Erlaubt keine Links" geht beim vierten Mal nicht anders aus als beim ersten,
+  kostet aber jedes Mal einen Platz im Tageslimit, den eine erreichbare Gruppe
+  gebraucht hätte. Die Aufgegebenen verschwinden nicht — `store.aufgegeben`
+  listet sie, und `retry --alle` übergeht die Grenze. Sie warten auf eine
+  Entscheidung (anderer Text, Gruppe ausschließen), nicht auf einen vierten
+  gleichen Versuch.
+- **`POST /kampagnen/{id}/queue` steuert die Warteschlange aus der Übersicht.**
+  Hinter `_nur_lokal` wie jeder schreibende Weg. Wer einen Lauf anhalten will,
+  sitzt selten vor dem Fenster, in dem er gestartet wurde. Die Antwort nennt,
+  wie viele Jobs ein `gestoppt` zurückgestellt hat — „gestoppt" allein ließe
+  offen, ob das 3 oder 300 Beiträge waren.
+
 ### Der Trichter und seine Zuordnung
 
 - **Die Stufen sind unabhängig, die Zuordnung ist die einzige Klammer.**

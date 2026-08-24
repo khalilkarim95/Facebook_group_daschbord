@@ -23,6 +23,93 @@ marketing:
     path: r           # ergibt {APP_BASE_URL}/r/{code}
     number_width: 3   # 001, 002, ...
 
+  # --- Beitrags-Warteschlange -----------------------------------------
+  # Alle Stellschrauben des Postens stehen hier und nirgends sonst. Verteilt
+  # auf mehrere Dateien waere die Frage "wie lange wartet das System
+  # eigentlich?" nur noch durch Lesen des Programms zu beantworten.
+  posting:
+    # Prioritaet nach ANTEIL der erreichten an den erreichbaren Punkten,
+    # nicht nach dem rohen Score. Der Score ist bewusst nicht auf 100
+    # normiert: score_max ist 100 ohne veroeffentlichten Beitrag und 175 mit
+    # gemessener Resonanz. Eine feste Schwelle bei 90 haette "100 von 100"
+    # ueber "130 von 175" gestellt - genau verkehrt herum.
+    prioritaet:
+      hoch:   0.80    # >= 80 % der erreichbaren Punkte
+      mittel: 0.60
+      normal: 0.40
+      # alles darunter: niedrig
+
+    # Wartezeit zwischen zwei Beitraegen, in Sekunden. Zufaellig aus dem
+    # Bereich gezogen: Ein exakt gleichmaessiger Takt ist kein menschliches
+    # Verhalten. Das ist keine Verschleierung - es ist die ehrliche Untergrenze
+    # dessen, was ein Mensch braucht, um einen Beitrag zu schreiben.
+    pause_sekunden_min: 180
+    pause_sekunden_max: 420
+
+    # Hoechstens so viele Beitraege je Lauf und je Tag. Die Tagesgrenze ist
+    # die wichtigere: 310 Beitraege an einem Tag sind aus jeder Entfernung als
+    # Automat erkennbar, gleich wie lange dazwischen gewartet wird.
+    max_pro_lauf: 10
+    max_pro_tag: 20
+
+    # Wann der taegliche Lauf beginnt. Der Arbeiter schlaeft **nicht** bis
+    # dahin: Ein Prozess, der vierzehn Stunden wartet, ueberlebt keinen
+    # Neustart und keine Anmeldung. Gestartet wird er von der Aufgaben-
+    # planung des Systems; dieser Wert ist die Zeit, die dort einzutragen ist,
+    # und `campaign worker --dry-run` gibt den fertigen Befehl aus.
+    startzeit: "08:00"
+
+    # Wie oft ein fehlgeschlagener Beitrag erneut versucht werden darf, bevor
+    # ein Mensch hinsehen muss.
+    max_versuche: 3
+
+    # Sprache und Produkt gehen in den Prompt ein. Sie stehen hier und nicht
+    # im Programm: Eine zweite Kampagne auf Deutsch ist eine fachliche
+    # Entscheidung, keine Codeaenderung.
+    sprache: arabisch
+    produkt: >-
+      B-Tarikak (بطريقك) - App, ueber die Reisende und Menschen, die etwas
+      mitgeben moechten, zueinander finden.
+
+    ki:
+      # Welcher Anbieter. 'ollama' laeuft auf dem eigenen Rechner, kostet
+      # nichts je Anfrage, und die Angaben ueber die Gruppen verlassen den
+      # Rechner nicht - deshalb ist es die Voreinstellung und nicht die
+      # Ausweichloesung. 'anthropic' schreibt besseres Arabisch und kostet
+      # Geld je Anfrage; es ist eine Entscheidung, kein Zustand.
+      #
+      # Die Umgebungsvariable AI_PROVIDER hat Vorrang - wie APP_BASE_URL.
+      # Es wird nie stillschweigend gewechselt: Ein Ausweichen auf Anthropic,
+      # wenn Ollama gerade nicht laeuft, verwandelte einen abgeschalteten
+      # Rechner in eine Rechnung.
+      anbieter: ollama
+
+      # Wie viele Fassungen je Gruppe. Mehr als eine ist kein Luxus: Bekaeme
+      # jede Gruppe den ersten Vorschlag, klaengen 310 Beitraege gleich - und
+      # das ist genau das Muster, nach dem Facebooks Spam-Erkennung sucht.
+      varianten: 3
+
+      ollama:
+        # OLLAMA_BASE_URL und OLLAMA_MODEL aus der Umgebung haben Vorrang.
+        base_url: http://localhost:11434
+        # Empfehlung fuer eine Karte mit 4 GB Speicher: Ein 4B-Modell passt
+        # vollstaendig hinein und antwortet in Sekunden. Ein 8B-Modell muesste
+        # sich den Hauptspeicher teilen und braeuchte ungefaehr die zehnfache
+        # Zeit je Beitrag - bei besserem Arabisch. Beides ist hier ein
+        # Zeilenwechsel, keine Codeaenderung.
+        modell: qwen3.5:4b
+
+      anthropic:
+        # Nur wirksam bei anbieter: anthropic. Ohne Schluessel und ohne das
+        # Paket bleibt der gesamte Rest des Systems voll benutzbar.
+        modell: claude-opus-5
+        max_tokens: 8000
+
+    # Ab wann ein 'processing' als verwaist gilt (Arbeiter abgestuerzt).
+    # Nichts wird dann automatisch wiederholt - es wird nur gemeldet: Ob in
+    # der Gruppe schon ein Beitrag steht, weiss allein ein Mensch, der nachsieht.
+    verwaist_nach_minuten: 30
+
 dedupe:
   # Unscharfer Namensabgleich: ab diesem Wert (0-100) gilt ein Paar als
   # Dublettenverdacht. Es wird NICHT automatisch zusammengefuehrt,

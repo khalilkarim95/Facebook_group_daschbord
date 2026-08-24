@@ -387,6 +387,12 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
         "kampagnen": kampagnen,
         "auswahl": auswahl,
         "trichter": trichter,
+        # Stand der KI. Billig und ungefaehrlich: Bei Ollama wird nur
+        # nachgesehen, welche Modelle dort liegen (2 s Zeitgrenze), bei
+        # Anthropic ueberhaupt nichts abgerufen. Es wird NIE etwas erzeugt -
+        # eine Seite, die bei jedem Aufruf ein Modell anwirft, waere bei
+        # Ollama langsam und bei Anthropic teuer.
+        "ki": _ki_stand(config),
         "kennzahlen": {
             "gesamt": len(zeilen),
             "bewertet": len(bewertet),
@@ -411,6 +417,39 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
 
 def _kachel(wert: str, label: str) -> str:
     return f'<div class="kachel"><b>{html.escape(wert)}</b><span>{html.escape(label)}</span></div>'
+
+def _ki_stand(config: AppConfig) -> dict[str, Any]:
+    """Der KI-Stand fuer die Anzeige - faellt nie aus.
+
+    Der Import steht in der Funktion: ``marketing.ki`` zieht ``httpx`` und die
+    Anbieter nach, und die Uebersicht soll auch dann bauen, wenn an der
+    KI-Schicht gerade etwas fehlt. Sie ist ein Aufsatz, keine Voraussetzung.
+    """
+    try:
+        from fbgroups.marketing.ki import gewaehlter_anbieter
+        from fbgroups.marketing.ki import status as ki_status
+
+        stand = ki_status(config)
+        return {
+            "anbieter": gewaehlter_anbieter(config),
+            "erreichbar": stand.erreichbar,
+            "modell": stand.modell,
+            "adresse": stand.adresse,
+            "meldung": stand.meldung,
+            "modell_vorhanden": stand.modell_vorhanden,
+            "modelle": stand.verfuegbare_modelle,
+        }
+    except Exception as exc:  # noqa: BLE001 - die Seite darf an nichts sterben
+        return {
+            "anbieter": "unbekannt",
+            "erreichbar": False,
+            "modell": "",
+            "adresse": "",
+            "meldung": f"KI-Stand nicht ermittelbar: {type(exc).__name__}: {exc}",
+            "modell_vorhanden": False,
+            "modelle": [],
+        }
+
 
 def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
     """Baut die vollstaendige Seite.
@@ -472,6 +511,41 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
             "Anwendung, und jeder Klick geht verloren, ohne dass es auffällt: "
             "Der Besucher sieht ja eine Seite.</div>"
         )
+
+    ki = daten.get("ki", {})
+    if ki.get("erreichbar") and ki.get("modell_vorhanden"):
+        ki_ampel, ki_text = "🟢", "Verbunden"
+    elif ki.get("erreichbar"):
+        ki_ampel, ki_text = "🟡", "Verbunden, Modell fehlt"
+    else:
+        ki_ampel, ki_text = "🔴", "Nicht erreichbar"
+
+    ki_hinweis = (
+        f'<div class="ki-hinweis">{html.escape(ki.get("meldung", ""))}</div>'
+        if ki.get("meldung")
+        else ""
+    )
+    # Der Testknopf erzeugt wirklich etwas und gehoert deshalb zu den
+    # schreibenden Wegen: Von aussen (nur_lesen) wird er ausgeblendet, und der
+    # Weg selbst prueft ohnehin selbst - siehe web._nur_lokal.
+    ki_knopf = (
+        ""
+        if nur_lesen
+        else '<button id="ki-test" class="knopf">Ollama testen</button>'
+        '<span id="ki-test-ergebnis" class="ki-ergebnis"></span>'
+    )
+    ki_block = (
+        '<div class="ki-karte">'
+        f'<div class="ki-kopf">{ki_ampel} <b>KI</b> '
+        f'<span class="res-leise">{html.escape(ki.get("anbieter", ""))}'
+        + (" (lokal)" if ki.get("anbieter") == "ollama" else "")
+        + "</span></div>"
+        f'<div class="ki-zeile">Status: {html.escape(ki_text)}</div>'
+        f'<div class="ki-zeile">Modell: <code>{html.escape(ki.get("modell") or "-")}</code></div>'
+        f'<div class="ki-zeile">URL: <code>{html.escape(ki.get("adresse") or "-")}</code></div>'
+        f"{ki_hinweis}{ki_knopf}"
+        "</div>"
+    )
 
     def status_auswahl(aktuell: str) -> str:
         """Die vier Kampagnenzustaende, der aktuelle vorgewaehlt."""
@@ -576,6 +650,14 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   h1 {{ font-size: 20px; margin: 0 0 4px; }}
   .hinweis {{ color: var(--leise); font-size: 13px; margin: 0 0 20px; }}
   .kacheln {{ display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }}
+  .ki-karte {{ border: 1px solid var(--linie); border-radius: 8px; padding: 12px 14px;
+               margin-bottom: 18px; background: var(--flaeche); max-width: 560px; }}
+  .ki-kopf {{ font-size: 15px; margin-bottom: 6px; }}
+  .ki-zeile {{ font-size: 13px; color: var(--text-leise); }}
+  .ki-hinweis {{ font-size: 12.5px; white-space: pre-wrap; margin: 8px 0;
+                 padding: 8px 10px; border-radius: 6px; background: var(--sunk, #f4f4f2);
+                 border-left: 3px solid var(--warn, #8a5a10); }}
+  .ki-ergebnis {{ font-size: 13px; margin-left: 10px; }}
   .kachel {{
     background: var(--karte); border: 1px solid var(--rand); border-radius: 10px;
     padding: 12px 18px; min-width: 108px;
@@ -733,6 +815,7 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
 </p>
 
 {warnung}
+{ki_block}
 <div class="kacheln">{kacheln}</div>
 
 <div class="filter">
@@ -1200,6 +1283,25 @@ document.getElementById("zeilen").addEventListener("click", async (ereignis) => 
 function gewaehlteWerte(id) {{
   return [...document.getElementById(id).selectedOptions].map((o) => o.value);
 }}
+
+// Der Testknopf erzeugt wirklich einen Satz - deshalb nur auf Klick und nie
+// beim Laden der Seite. Bei einem lokalen Modell dauert das je nach Karte ein
+// paar Sekunden; ohne Rueckmeldung sieht das aus, als waere nichts passiert.
+document.getElementById("ki-test")?.addEventListener("click", async (e) => {{
+  const knopf = e.target;
+  const ziel = document.getElementById("ki-test-ergebnis");
+  knopf.disabled = true;
+  ziel.textContent = "läuft …";
+  try {{
+    const antwort = await fetch("/ki/test", {{ method: "POST" }});
+    const daten = await antwort.json();
+    ziel.textContent = daten.ok ? "✅ " + daten.text : "❌ " + daten.text;
+  }} catch (fehler) {{
+    ziel.textContent = "❌ " + fehler;
+  }} finally {{
+    knopf.disabled = false;
+  }}
+}});
 
 document.getElementById("k-anlegen")?.addEventListener("click", async (e) => {{
   const knopf = e.target;

@@ -371,6 +371,134 @@ class PostStatus(StrEnum):
     UEBERSPRUNGEN = "uebersprungen"
 
 
+class JobStatus(StrEnum):
+    """Wo der Beitrag dieser Gruppe in der Vorbereitung steht.
+
+    Zweite Achse neben ``PostStatus``, nicht dessen Ersatz. ``PostStatus``
+    beantwortet "was kam in der Gruppe dabei heraus?" und wird seit Bestehen
+    von ``campaign queue``, ``campaign retry``, ``post_counts`` und der
+    Uebersicht gelesen; ``JobStatus`` beantwortet "wie weit ist der Text?".
+    Beides in ein Feld zu zwaengen hiesse, entweder die Vorbereitung oder das
+    Ergebnis zu verlieren.
+
+    Damit die beiden nie auseinanderlaufen, wird ``PostStatus`` aus dem
+    ``JobStatus`` **abgeleitet** (``POST_STATUS_ZU_JOB``) und an genau einer
+    Stelle mitgeschrieben. Jeder aeltere Leser sieht dadurch unveraendert das,
+    was er immer gesehen hat.
+
+    ``PROCESSING`` ist der einzige Zustand, den nicht ein Mensch setzt,
+    sondern der Arbeiter, der den Beitrag gerade in der Hand hat. Er ist
+    deshalb auch der einzige, der nach einem Absturz haengenbleiben kann -
+    ``queue.verwaiste_jobs`` findet genau diese wieder.
+    """
+
+    DRAFT = "draft"                    # Job angelegt, noch kein Text
+    AI_GENERATED = "ai_generated"      # Claude hat einen Text erzeugt
+    PENDING_REVIEW = "pending_review"  # wartet auf einen Menschen
+    APPROVED = "approved"              # freigegeben, aber noch nicht eingereiht
+    QUEUED = "queued"                  # in der Warteschlange
+    PROCESSING = "processing"          # ein Arbeiter hat ihn gerade
+    PUBLISHED = "published"            # steht in der Gruppe
+    FAILED = "failed"                  # Versuch fehlgeschlagen
+    CANCELLED = "cancelled"            # abgebrochen oder "passt nicht"
+
+
+# Welcher Ergebnisstand zu welchem Vorbereitungsstand gehoert.
+#
+# Die Richtung ist Absicht: Der Job fuehrt, das Ergebnis folgt. Umgekehrt
+# waere es nicht eindeutig - "offen" kann Entwurf, Freigabe oder Warteschlange
+# heissen, und aus einem einzigen Wert liesse sich das nicht zurueckholen.
+POST_STATUS_ZU_JOB: dict[JobStatus, PostStatus] = {
+    JobStatus.DRAFT: PostStatus.OFFEN,
+    JobStatus.AI_GENERATED: PostStatus.OFFEN,
+    JobStatus.PENDING_REVIEW: PostStatus.OFFEN,
+    JobStatus.APPROVED: PostStatus.OFFEN,
+    JobStatus.QUEUED: PostStatus.OFFEN,
+    JobStatus.PROCESSING: PostStatus.OFFEN,
+    JobStatus.PUBLISHED: PostStatus.VEROEFFENTLICHT,
+    JobStatus.FAILED: PostStatus.FEHLGESCHLAGEN,
+    JobStatus.CANCELLED: PostStatus.UEBERSPRUNGEN,
+}
+
+
+class TextQuelle(StrEnum):
+    """Woher der Beitragstext stammt.
+
+    Steht am Datensatz, weil die Frage spaeter niemand mehr beantworten kann:
+    Ein Text, den Claude geschrieben und ein Mensch ueberarbeitet hat, sieht
+    aus wie ein Text, den ein Mensch geschrieben hat. Fuer die Beurteilung der
+    Ergebnisse ist der Unterschied aber der ganze Punkt.
+    """
+
+    VORLAGE = "vorlage"    # aus campaign.message_template
+    KI = "ki"              # von Claude, unveraendert
+    HAND = "hand"          # von Hand geschrieben oder ueberarbeitet
+
+
+class QueueZustand(StrEnum):
+    """Ob die Warteschlange einer Kampagne gerade laufen darf.
+
+    ``PAUSIERT`` haelt nur die Ausgabe an - ein Beitrag, der gerade
+    geschrieben wird, wird zu Ende gebracht. ``GESTOPPT`` raeumt zusaetzlich
+    die Warteschlange: Alles, was noch nicht angefangen wurde, geht auf
+    ``approved`` zurueck. Der Unterschied ist der zwischen "kurz warten" und
+    "heute nicht mehr" - und er muss im Zustand stehen, nicht im Kopf des
+    Bedienenden.
+    """
+
+    LAUFEND = "laufend"
+    PAUSIERT = "pausiert"
+    GESTOPPT = "gestoppt"
+
+
+class PostEntwurf(BaseModel):
+    """Eine erzeugte Textfassung fuer eine Gruppe.
+
+    Mehrere je Gruppe: Der Nutzer soll waehlen koennen, statt den ersten
+    Vorschlag nehmen zu muessen. Die gewaehlte Fassung wird in
+    ``CampaignGroup.post_text`` kopiert - der Entwurf bleibt daneben stehen,
+    damit sichtbar ist, wogegen entschieden wurde.
+    """
+
+    entwurf_id: int | None = None
+    campaign_id: str
+    group_id: str
+    variante: int = 1
+    text: str = ""
+    quelle: TextQuelle = TextQuelle.KI
+    modell: str = ""               # z. B. "claude-sonnet-5"
+    erzeugt_am: datetime = Field(default_factory=_utcnow)
+    gewaehlt: bool = False
+
+
+class PostVersuch(BaseModel):
+    """Ein einzelner Veroeffentlichungsversuch - das Protokoll.
+
+    Bisher hielt ``CampaignGroup`` nur einen Zaehler und den **letzten**
+    Fehler. Damit liess sich nicht beantworten, ob eine Gruppe dreimal am
+    selben Fehler scheiterte oder an drei verschiedenen - und das ist der
+    Unterschied zwischen "die Gruppe erlaubt keine Links" und "das Netz war
+    weg". Jeder Versuch bekommt deshalb seine eigene Zeile.
+
+    ``browser_session`` benennt die Sitzung, in der es geschah - nie ein
+    Passwort, nie ein Cookie, nur ein Name wie ``standard``. Der Unterschied
+    ist wichtig genug, dass das Feld nicht ``credentials`` heisst.
+    """
+
+    versuch_id: int | None = None
+    campaign_id: str
+    group_id: str
+    tracking_code: str = ""
+    job_status: JobStatus = JobStatus.PROCESSING
+    erfolg: bool = False
+    post_url: str = ""             # falls Facebook eine Beitrags-URL zeigt
+    fehler: str = ""
+    browser_session: str = ""
+    ausgeloest_von: str = ""       # "cli", "uebersicht", "worker"
+    begonnen_am: datetime = Field(default_factory=_utcnow)
+    beendet_am: datetime | None = None
+
+
 class CampaignGroup(BaseModel):
     """Zuordnung Kampagne <-> Gruppe samt ihrem Tracking-Code.
 
@@ -398,3 +526,16 @@ class CampaignGroup(BaseModel):
     # Warum es nicht ging - im Klartext, wie ein Mensch es aufschreibt
     # ("Gruppe erlaubt keine Links", "Beitrag wartet auf Freigabe").
     post_error: str = ""
+    # -- Der Beitrag selbst -----------------------------------------------
+    # Bisher entstand der Text jedes Mal neu aus der Vorlage der Kampagne und
+    # war nach der Ausgabe wieder weg. Sobald ein Mensch ihn ueberarbeitet
+    # oder Claude ihn je Gruppe verschieden schreibt, ist das nicht mehr
+    # haltbar: Freigegeben wird ein bestimmter Text, und veroeffentlicht muss
+    # genau dieser werden - nicht einer, der sich beim naechsten Aufruf neu
+    # zusammensetzt.
+    job_status: JobStatus = JobStatus.DRAFT
+    post_text: str = ""
+    text_quelle: TextQuelle = TextQuelle.VORLAGE
+    generiert_am: datetime | None = None
+    freigegeben_am: datetime | None = None
+    freigegeben_von: str = ""

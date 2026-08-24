@@ -26,7 +26,7 @@ from rich.table import Table
 
 from fbgroups.config import AppConfig, load_config
 from fbgroups.export import export_csv, export_excel
-from fbgroups.marketing.cli import campaign_app, marketing_app
+from fbgroups.marketing.cli import campaign_app, ki_app, marketing_app
 from fbgroups.marketing.selection import synchronisiere
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.marketing.tracking import app_base_url
@@ -63,6 +63,7 @@ console = Console()
 # Befehle bleiben unveraendert; wer sie nicht nutzt, merkt nichts davon.
 app.add_typer(campaign_app, name="campaign")
 app.add_typer(marketing_app, name="marketing")
+app.add_typer(ki_app, name="ki")
 
 
 def _config() -> AppConfig:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterator
 from dataclasses import replace
 
 import pytest
@@ -30,6 +31,27 @@ def _ohne_env_datei(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for name in UMGEBUNG_AUS_ENV:
         monkeypatch.setenv(name, "")
+
+
+@pytest.fixture(autouse=True)
+def _ohne_gemerkten_ki_stand() -> Iterator[None]:
+    """Leert den Status-Zwischenspeicher der KI vor und nach jedem Test.
+
+    ``ki.factory`` merkt sich den Stand eines Anbieters zehn Sekunden lang,
+    damit die Uebersicht ihn nicht bei jedem Seitenaufbau neu erfragt.
+    Geschluesselt ist er nach dem **Anbieternamen**, nicht nach der Adresse -
+    im Betrieb richtig, im Test verhaengnisvoll: Ein Test, der bei laufendem
+    Ollama die Uebersicht baut, hinterlaesst dort "erreichbar", und der
+    naechste, der ausdruecklich den Fall "nichts laeuft" prueft, liest diesen
+    Stand statt seinen eigenen. Das Ergebnis haengt dann an der Reihenfolge
+    der Tests - ein Fehler, der beim Ausfuehren einer einzelnen Datei
+    verschwindet und im vollen Lauf wiederkommt.
+    """
+    from fbgroups.marketing.ki import factory
+
+    factory._STATUS_CACHE.clear()
+    yield
+    factory._STATUS_CACHE.clear()
 
 
 @pytest.fixture(scope="session")

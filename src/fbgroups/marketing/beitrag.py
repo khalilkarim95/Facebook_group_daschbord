@@ -46,8 +46,19 @@ def beitragstext(campaign: Campaign, link: CampaignGroup) -> str:
     ``{link}`` ist der Platzhalter, um den es geht. Der Code steht bewusst
     nirgends fest im Text: Bei 300 Gruppen sind das 300 verschiedene Links,
     und jeder einzelne von Hand eingetragen waere eine Fehlerquelle je Gruppe.
+
+    **Der Text der Zuordnung geht der Vorlage vor.** Steht in
+    ``link.post_text`` etwas, ist das der Text, den ein Mensch fuer *diese*
+    Gruppe geschrieben oder freigegeben hat - er darf nicht von der
+    allgemeinen Vorlage ueberstimmt werden. Ohne diesen Vorrang gaebe ein
+    Mensch eine Fassung frei und eine andere ginge hinaus, und der
+    Unterschied fiele erst in der Gruppe auf.
+
+    Die Ersetzung bleibt dieselbe, gleich woher der Text stammt: Ein
+    Vorschlag von Claude enthaelt ``{link}`` und sonst nichts Linkartiges -
+    ``ki.pruefe_platzhalter`` laesst nichts anderes durch.
     """
-    text = campaign.message_template or ""
+    text = link.post_text or campaign.message_template or ""
     return (
         text.replace("{link}", link.tracking_url)
         .replace("{tracking_code}", link.tracking_code)

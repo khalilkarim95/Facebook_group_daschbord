@@ -240,3 +240,63 @@ def synchronisiere(
             "kampagne_sync", campaign.campaign_id, f"{plan.anzahl_neu} neue Zuordnungen"
         )
     return plan
+
+
+# --- Prioritaet fuer die Warteschlange ---------------------------------
+
+# Reihenfolge von hoch nach niedrig. Die Namen sind die Schluessel in
+# config/settings.yaml unter marketing.posting.prioritaet; "niedrig" steht
+# nicht darin - es ist der Rest.
+PRIORITAETEN: tuple[str, ...] = ("hoch", "mittel", "normal", "niedrig")
+
+
+def anteil(group: Group) -> float | None:
+    """Anteil der erreichten an den erreichbaren Punkten - oder None.
+
+    **Nicht der rohe Score.** Der ist bewusst nicht auf 100 normiert:
+    ``score_max`` ist 100 ohne veroeffentlichten Beitrag und 175 mit gemessener
+    Resonanz. Eine feste Schwelle auf dem Rohwert stellte "100 von 100" ueber
+    "130 von 175" - genau verkehrt herum, und ausgerechnet die belegten
+    Gruppen fielen zurueck.
+
+    ``None`` heisst nicht bewertbar. Es gibt keinen Ersatzwert: Eine Gruppe
+    ohne Score ist keine Gruppe mit Score 0, und sie einzureihen, als waere
+    sie schlecht, waere eine Behauptung ueber sie statt ueber unsere Datenlage.
+    """
+    if group.score is None or not group.score_max:
+        return None
+    return group.score / group.score_max
+
+
+def prioritaet(group: Group, config: AppConfig) -> str:
+    """Prioritaetsklasse einer Gruppe - "hoch" bis "niedrig".
+
+    Die Schwellen stehen in ``config/settings.yaml``. Sie sind eine fachliche
+    Entscheidung ueber die Reihenfolge der eigenen Arbeit; verteilt auf
+    mehrere Dateien waere die Frage "warum kommt diese Gruppe zuerst?" nur
+    noch durch Lesen des Programms zu beantworten.
+    """
+    wert = anteil(group)
+    if wert is None:
+        return "niedrig"
+
+    schwellen = config.get("marketing", "posting", "prioritaet", default={}) or {}
+    for name in ("hoch", "mittel", "normal"):
+        grenze = schwellen.get(name)
+        if grenze is not None and wert >= float(grenze):
+            return name
+    return "niedrig"
+
+
+def nach_prioritaet(gruppen: list[Group], config: AppConfig) -> list[Group]:
+    """Sortiert die besten zuerst - dieselbe Rangfolge wie ``sort_by_rank``.
+
+    Bei 310 Gruppen bringt niemand die Liste an einem Tag zu Ende. Wer
+    abbricht, soll die wertvollsten Beitraege geschrieben haben und nicht die
+    alphabetisch ersten. Deshalb wird beim **Einreihen** sortiert und nicht
+    beim Abarbeiten: Sonst entschiede eine Neubewertung mitten im Lauf, welcher
+    Beitrag als naechstes hinausgeht.
+    """
+    from fbgroups.scoring import sort_by_rank
+
+    return sort_by_rank(gruppen)

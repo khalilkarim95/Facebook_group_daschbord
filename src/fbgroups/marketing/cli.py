@@ -14,6 +14,9 @@ Browser - einfuegen und abschicken muss beides ein Mensch.
 from __future__ import annotations
 
 import csv
+import subprocess
+import sys
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -31,6 +34,17 @@ from fbgroups.marketing.analytics import (
     top_groups,
 )
 from fbgroups.marketing.beitrag import beitragstext, in_zwischenablage, oeffne_im_browser
+from fbgroups.marketing.ki import (
+    ANBIETER,
+    KINichtVerfuegbar,
+    UngueltigerVorschlag,
+    auftrag_aus_gruppe,
+    baue_modell,
+    erzeuge_entwuerfe,
+    gewaehlter_anbieter,
+)
+from fbgroups.marketing.ki import status as ki_status
+from fbgroups.marketing.ki import teste as ki_teste
 from fbgroups.marketing.models import (
     MARKETING_FORTSCHRITT,
     Campaign,
@@ -39,12 +53,16 @@ from fbgroups.marketing.models import (
     CampaignStatus,
     ContactStatus,
     GroupMarketing,
+    JobStatus,
     MarketingStatus,
     PermissionStatus,
     PostStatus,
+    QueueZustand,
     ReferralStatus,
     RewardStatus,
+    TextQuelle,
 )
+from fbgroups.marketing.queue import UngueltigerUebergang
 from fbgroups.marketing.referral import code_fuer_benutzer, setze_status
 from fbgroups.marketing.rewards import bewerte_benutzer, fortschritt, load_reward_rules
 from fbgroups.marketing.selection import (
@@ -53,7 +71,9 @@ from fbgroups.marketing.selection import (
     Zuordnungsplan,
     auswahl_der_kampagne,
     baue_plan,
+    nach_prioritaet,
     passt,
+    prioritaet,
     synchronisiere,
 )
 from fbgroups.marketing.store import MarketingStore, UnknownGroupError
@@ -64,6 +84,13 @@ from fbgroups.marketing.tracking import (
     slug,
     tracking_url,
 )
+from fbgroups.marketing.veroeffentlicher import (
+    UnbekannterVeroeffentlicher,
+    Veroeffentlicher,
+    baue_veroeffentlicher,
+    verfuegbare,
+)
+from fbgroups.marketing.worker import arbeite, lade_grenzen
 from fbgroups.models import Group
 from fbgroups.scoring import sort_by_rank
 from fbgroups.storage import SqliteStore
@@ -922,18 +949,543 @@ def campaign_posted(
 
 
 @campaign_app.command("retry")
-def campaign_retry(campaign_id: str = typer.Argument(...)) -> None:
+def campaign_retry(
+    campaign_id: str = typer.Argument(...),
+    alle: bool = typer.Option(
+        False, "--alle", help="Auch die, die ihre Versuche aufgebraucht haben."
+    ),
+) -> None:
     """Stellt die fehlgeschlagenen Beitraege zurueck in die Arbeitsliste.
 
     ``uebersprungen`` bleibt stehen - dort hat ein Mensch entschieden, dass
     die Gruppe nicht passt.
+
+    Wer ``max_versuche`` (Vorgabe 3) erreicht hat, bleibt ebenfalls stehen und
+    wird am Ende genannt: "erlaubt keine Links" geht beim vierten Mal nicht
+    anders aus als beim ersten, kostet aber jedes Mal einen Platz im
+    Tageslimit. ``--alle`` uebergeht die Grenze.
+    """
+    config = _config()
+    grenze = 0 if alle else int(
+        config.get("marketing", "posting", "max_versuche", default=3) or 0
+    )
+    with MarketingStore(config.path("sqlite_path")) as store:
+        _kampagne_oder_ende(store, campaign_id)
+        anzahl = store.fehlgeschlagene_zuruecksetzen(campaign_id, max_versuche=grenze)
+        stehengeblieben = store.aufgegeben(campaign_id, grenze)
+
+    console.print(f"[green]{anzahl}[/green] wieder offen. Uebersprungene bleiben unberuehrt.")
+    if stehengeblieben:
+        console.print(
+            f"\n[yellow]{len(stehengeblieben)}[/yellow] haben {grenze} Versuche aufgebraucht "
+            "und warten auf eine Entscheidung:"
+        )
+        for link in stehengeblieben[:10]:
+            console.print(
+                f"  [dim]{link.post_attempts}x[/dim] {link.group_id} - "
+                f"{link.post_error or 'ohne Angabe'}"
+            )
+        if len(stehengeblieben) > 10:
+            console.print(f"  [dim]... und {len(stehengeblieben) - 10} weitere[/dim]")
+        console.print(
+            f"[dim]Trotzdem erneut versuchen:  fbgroups campaign retry {campaign_id} --alle[/dim]"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Beitrags-Warteschlange: erzeugen, freigeben, einreihen, anhalten
+# ---------------------------------------------------------------------------
+
+def _job_oder_ende(store: MarketingStore, campaign_id: str, group_id: str) -> CampaignGroup:
+    """Die Zuordnung - oder ein Hinweis, wie sie entsteht."""
+    link = store.link_for(campaign_id, group_id)
+    if link is None:
+        console.print(
+            f"[red]Keine Zuordnung[/red] fuer {group_id} in {campaign_id}.\n"
+            f"Anlegen mit:  fbgroups campaign sync {campaign_id}"
+        )
+        raise typer.Exit(code=1)
+    return link
+
+
+def _wechsle(
+    store: MarketingStore,
+    campaign_id: str,
+    group_id: str,
+    ziel: JobStatus,
+    *,
+    akteur: str = "",
+    fehler: str | None = None,
+) -> CampaignGroup | None:
+    """Setzt den Stand und meldet einen unerlaubten Schritt lesbar.
+
+    Die Fehlermeldung der Zustandsmaschine nennt bereits die moeglichen Wege -
+    sie wird deshalb durchgereicht und nicht durch eine eigene ersetzt.
+    """
+    try:
+        return store.set_job_status(
+            campaign_id, group_id, ziel, akteur=akteur, fehler=fehler
+        )
+    except UngueltigerUebergang as exc:
+        console.print(f"[red]{group_id}:[/red] {exc}")
+        return None
+
+
+@campaign_app.command("draft")
+def campaign_draft(
+    campaign_id: str = typer.Argument(...),
+    gruppe: str = typer.Option("", "--gruppe", help="Nur diese eine Gruppe."),
+    top: int = typer.Option(0, "--top", help="Die besten N ohne Text (0 = alle)."),
+    varianten: int = typer.Option(0, "--varianten", help="Fassungen je Gruppe."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Nur zeigen, was erzeugt wuerde - kein Aufruf, keine Kosten."
+    ),
+) -> None:
+    """Laesst Claude Beitragsvorschlaege schreiben - je Gruppe mehrere Fassungen.
+
+    Erzeugt **Entwuerfe**, sonst nichts. Nichts wird dabei freigegeben,
+    eingereiht oder veroeffentlicht; jeder Vorschlag wartet auf einen Menschen.
+
+    Der Tracking-Code wird dem Modell nie gezeigt: Es schreibt den Platzhalter
+    ``{link}``, und erst beim Zusammensetzen des Beitrags kommt der Code
+    **dieser** Gruppe hinein. Was das Modell nie sieht, kann es nicht
+    verfaelschen.
+
+    ``--dry-run`` zeigt die Auswahl, ohne einen Aufruf zu machen - jeder Aufruf
+    kostet, und bei 310 Gruppen ist das eine Zahl, die man vorher kennen will.
+    """
+    config = _config()
+    anzahl_varianten = varianten or int(
+        config.get("marketing", "posting", "ki", "varianten", default=3)
+    )
+    anbieter = gewaehlter_anbieter(config)
+
+    gruppen_store, store = _stores(config)
+    try:
+        campaign = _kampagne_oder_ende(store, campaign_id)
+        gruppen = _gruppen_nach_id(gruppen_store)
+        links = store.jobs_mit_status(campaign_id)
+    finally:
+        gruppen_store.close()
+
+    try:
+        if gruppe:
+            offen = [link for link in links if link.group_id == gruppe]
+            if not offen:
+                console.print(f"[red]{gruppe}[/red] gehoert nicht zu {campaign_id}.")
+                raise typer.Exit(code=1)
+        else:
+            # Nur die ohne Text: Ein zweiter Lauf soll nicht 310 Aufrufe
+            # wiederholen, fuer die es laengst Entwuerfe gibt.
+            offen = [
+                link
+                for link in links
+                if not link.post_text and link.job_status is JobStatus.DRAFT
+            ]
+            geordnet = nach_prioritaet(
+                [gruppen[link.group_id] for link in offen if link.group_id in gruppen], config
+            )
+            reihenfolge = {g.group_id: i for i, g in enumerate(geordnet)}
+            offen.sort(key=lambda link: reihenfolge.get(link.group_id, len(reihenfolge)))
+            if top:
+                offen = offen[:top]
+
+        if not offen:
+            console.print("[green]Nichts zu erzeugen[/green] - alle haben schon einen Text.")
+            return
+
+        if dry_run:
+            table = Table(title=f"Wuerde erzeugen ({len(offen)} Gruppen)")
+            table.add_column("Gruppe")
+            table.add_column("Prioritaet")
+            table.add_column("Score", justify="right")
+            for link in offen:
+                g = gruppen.get(link.group_id)
+                table.add_row(
+                    (g.name if g else link.group_id)[:40],
+                    prioritaet(g, config) if g else "[dim]unbekannt[/dim]",
+                    _score_text(g),
+                )
+            console.print(table)
+            stand = ki_status(config)
+            console.print(
+                f"[dim]{len(offen)} Gruppen x {anzahl_varianten} Fassungen ueber "
+                f"'{anbieter}' ({stand.modell or 'kein Modell eingestellt'}). "
+                f"Ohne --dry-run wird das wirklich erzeugt.[/dim]"
+            )
+            if anbieter == "ollama" and not stand.erreichbar:
+                console.print(
+                    "[yellow]Ollama antwortet gerade nicht[/yellow] - "
+                    "der echte Lauf wuerde scheitern. Pruefen mit: fbgroups ki status"
+                )
+            return
+
+        try:
+            modell = baue_modell(config)
+        except KINichtVerfuegbar as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=2) from exc
+
+        erzeugt = verworfen_gesamt = 0
+        for link in offen:
+            group = gruppen.get(link.group_id)
+            if group is None:
+                continue
+            auftrag = auftrag_aus_gruppe(
+                group, campaign, config, varianten=anzahl_varianten
+            )
+            auftrag.bisherige_texte = [
+                e.text for e in store.entwuerfe_for(campaign_id, link.group_id)
+            ]
+            try:
+                entwuerfe, verworfen = erzeuge_entwuerfe(
+                    modell,
+                    auftrag,
+                    campaign_id=campaign_id,
+                    group_id=link.group_id,
+                )
+            except (UngueltigerVorschlag, KINichtVerfuegbar) as exc:
+                console.print(f"[red]{group.name or link.group_id}:[/red] {exc}")
+                continue
+
+            for entwurf in entwuerfe:
+                store.add_entwurf(entwurf)
+            erzeugt += len(entwuerfe)
+            verworfen_gesamt += len(verworfen)
+
+            if entwuerfe:
+                # Die erste Fassung wird uebernommen - waehlbar bleibt jede
+                # andere ueber 'campaign entwuerfe'.
+                store.set_post_text(
+                    campaign_id, link.group_id, entwuerfe[0].text, TextQuelle.KI
+                )
+                _wechsle(store, campaign_id, link.group_id, JobStatus.AI_GENERATED)
+                console.print(
+                    f"[green]OK[/green] {group.name or link.group_id}: "
+                    f"{len(entwuerfe)} Fassungen"
+                )
+            else:
+                console.print(f"[yellow]--[/yellow] {group.name or link.group_id}: nichts Gutes")
+            for grund in verworfen:
+                console.print(f"   [dim]verworfen: {grund}[/dim]")
+    finally:
+        store.close()
+
+    console.print(
+        f"\n[green]{erzeugt}[/green] Entwuerfe erzeugt"
+        + (f", [yellow]{verworfen_gesamt}[/yellow] verworfen." if verworfen_gesamt else ".")
+    )
+    console.print(f"[dim]Ansehen:  fbgroups campaign entwuerfe {campaign_id} <gruppe>[/dim]")
+
+
+@campaign_app.command("entwuerfe")
+def campaign_entwuerfe(
+    campaign_id: str = typer.Argument(...),
+    group_id: str = typer.Argument(...),
+    waehle: int = typer.Option(0, "--waehle", help="Diese Variantennummer uebernehmen."),
+) -> None:
+    """Zeigt die Fassungen einer Gruppe - und uebernimmt auf Wunsch eine.
+
+    Die verworfenen bleiben stehen. Sie kosten nichts und beantworten spaeter
+    die Frage, wogegen entschieden wurde.
     """
     config = _config()
     with MarketingStore(config.path("sqlite_path")) as store:
         _kampagne_oder_ende(store, campaign_id)
-        anzahl = store.fehlgeschlagene_zuruecksetzen(campaign_id)
+        link = _job_oder_ende(store, campaign_id, group_id)
+        entwuerfe = store.entwuerfe_for(campaign_id, group_id)
 
-    console.print(f"[green]{anzahl}[/green] wieder offen. Uebersprungene bleiben unberuehrt.")
+        if waehle:
+            passend = next((e for e in entwuerfe if e.variante == waehle), None)
+            if passend is None or passend.entwurf_id is None:
+                console.print(f"[red]Variante {waehle}[/red] gibt es nicht.")
+                raise typer.Exit(code=1)
+            store.waehle_entwurf(passend.entwurf_id)
+            console.print(f"[green]Variante {waehle} uebernommen.[/green]")
+            console.print(
+                f"[dim]Freigeben:  fbgroups campaign approve {campaign_id} {group_id}[/dim]"
+            )
+            return
+
+        if not entwuerfe:
+            console.print(
+                f"Keine Entwuerfe. Erzeugen mit:\n"
+                f"  fbgroups campaign draft {campaign_id} --gruppe {group_id}"
+            )
+            return
+
+        console.print(f"[bold]{group_id}[/bold] - Stand: {link.job_status.value}\n")
+        for entwurf in entwuerfe:
+            marke = "[green]* gewaehlt[/green]" if entwurf.gewaehlt else ""
+            console.print(f"[bold]Variante {entwurf.variante}[/bold] "
+                          f"([dim]{entwurf.modell}[/dim]) {marke}")
+            console.print(entwurf.text)
+            console.print()
+        console.print(
+            f"[dim]Uebernehmen:  fbgroups campaign entwuerfe {campaign_id} "
+            f"{group_id} --waehle 2[/dim]"
+        )
+
+
+# Staende, aus denen ein Beitrag zur Pruefung vorgelegt werden kann.
+# ``draft`` gehoert dazu: Ein von Hand geschriebener Text ist genauso
+# freizugeben wie einer von Claude - sonst waere Handarbeit der einzige Weg,
+# der in der Warteschlange nicht ankommt.
+_VOR_DER_PRUEFUNG: frozenset[JobStatus] = frozenset(
+    {JobStatus.DRAFT, JobStatus.AI_GENERATED}
+)
+
+
+@campaign_app.command("approve")
+def campaign_approve(
+    campaign_id: str = typer.Argument(...),
+    group_id: str = typer.Argument(..., help="Kennung der Gruppe, oder 'alle'."),
+    akteur: str = typer.Option("", "--von", help="Wer freigibt - fuers Protokoll."),
+) -> None:
+    """Gibt einen Beitrag frei. Ohne Freigabe geht nichts in die Warteschlange.
+
+    ``alle`` gibt jede Gruppe frei, die auf Pruefung wartet. Das ist bewusst
+    ein eigenes Wort und kein Schalter: Eine Sammelfreigabe ist eine
+    Entscheidung ueber viele Beitraege auf einmal, und sie soll sich beim
+    Tippen anfuehlen wie eine.
+    """
+    config = _config()
+    with MarketingStore(config.path("sqlite_path")) as store:
+        _kampagne_oder_ende(store, campaign_id)
+
+        if group_id == "alle":
+            offen = [
+                *store.jobs_mit_status(campaign_id, JobStatus.PENDING_REVIEW),
+                *(
+                    link
+                    for stand in _VOR_DER_PRUEFUNG
+                    for link in store.jobs_mit_status(campaign_id, stand)
+                    # Ein Entwurf ohne Text ist kein Beitrag. Er wuerde beim
+                    # Uebergang ohnehin abgewiesen - ihn hier zu uebergehen
+                    # spart eine Fehlermeldung je Gruppe bei 310 Zeilen.
+                    if link.post_text.strip()
+                ),
+            ]
+            if not offen:
+                console.print("Nichts wartet auf Freigabe.")
+                return
+            fertig = 0
+            for link in offen:
+                if link.job_status in _VOR_DER_PRUEFUNG:
+                    _wechsle(store, campaign_id, link.group_id, JobStatus.PENDING_REVIEW)
+                if _wechsle(
+                    store, campaign_id, link.group_id, JobStatus.APPROVED, akteur=akteur
+                ):
+                    fertig += 1
+            console.print(f"[green]{fertig}[/green] freigegeben.")
+            return
+
+        link = _job_oder_ende(store, campaign_id, group_id)
+        if link.job_status in _VOR_DER_PRUEFUNG:
+            _wechsle(store, campaign_id, group_id, JobStatus.PENDING_REVIEW)
+        if _wechsle(store, campaign_id, group_id, JobStatus.APPROVED, akteur=akteur):
+            console.print("[green]Freigegeben.[/green]")
+            console.print(
+                f"[dim]Einreihen:  fbgroups campaign enqueue {campaign_id}[/dim]"
+            )
+
+
+@campaign_app.command("enqueue")
+def campaign_enqueue(
+    campaign_id: str = typer.Argument(...),
+    top: int = typer.Option(0, "--top", help="Hoechstens so viele (0 = alle freigegebenen)."),
+) -> None:
+    """Stellt freigegebene Beitraege in die Warteschlange - die besten zuerst.
+
+    Sortiert wird **hier** und nicht beim Abarbeiten: Sonst entschiede eine
+    Neubewertung mitten im Lauf, welcher Beitrag als naechstes hinausgeht, und
+    die Reihenfolge waere von Tag zu Tag eine andere.
+    """
+    config = _config()
+    gruppen_store, store = _stores(config)
+    try:
+        _kampagne_oder_ende(store, campaign_id)
+        gruppen = _gruppen_nach_id(gruppen_store)
+        freigegeben = store.jobs_mit_status(campaign_id, JobStatus.APPROVED)
+    finally:
+        gruppen_store.close()
+
+    try:
+        if not freigegeben:
+            console.print(
+                "Nichts freigegeben.\n"
+                f"[dim]Freigeben:  fbgroups campaign approve {campaign_id} alle[/dim]"
+            )
+            return
+
+        geordnet = nach_prioritaet(
+            [gruppen[link.group_id] for link in freigegeben if link.group_id in gruppen], config
+        )
+        reihenfolge = {g.group_id: i for i, g in enumerate(geordnet)}
+        freigegeben.sort(key=lambda link: reihenfolge.get(link.group_id, len(reihenfolge)))
+        if top:
+            freigegeben = freigegeben[:top]
+
+        eingereiht = 0
+        for link in freigegeben:
+            if _wechsle(store, campaign_id, link.group_id, JobStatus.QUEUED):
+                eingereiht += 1
+
+        zustand = store.queue_zustand(campaign_id)
+    finally:
+        store.close()
+
+    console.print(f"[green]{eingereiht}[/green] in der Warteschlange.")
+    if zustand is not QueueZustand.LAUFEND:
+        console.print(
+            f"[yellow]Achtung:[/yellow] Die Warteschlange ist {zustand.value}. "
+            f"Weiter mit:  fbgroups campaign resume {campaign_id}"
+        )
+
+
+@campaign_app.command("cancel")
+def campaign_cancel(
+    campaign_id: str = typer.Argument(...),
+    group_id: str = typer.Argument(...),
+    grund: str = typer.Option("", "--grund", help="Warum - fuers Protokoll."),
+) -> None:
+    """Bricht den Beitrag einer Gruppe ab.
+
+    Der Tracking-Code bleibt gueltig: Er steht moeglicherweise schon in einem
+    veroeffentlichten Beitrag, und ein Klick darauf muss ankommen und gezaehlt
+    werden. Abbrechen ist eine Entscheidung ueber die eigene Arbeit, kein
+    Widerruf des Codes.
+    """
+    config = _config()
+    with MarketingStore(config.path("sqlite_path")) as store:
+        _kampagne_oder_ende(store, campaign_id)
+        _job_oder_ende(store, campaign_id, group_id)
+        if _wechsle(store, campaign_id, group_id, JobStatus.CANCELLED, fehler=grund):
+            console.print("[green]Abgebrochen.[/green] Der Tracking-Code bleibt gueltig.")
+
+
+def _queue_umschalten(campaign_id: str, zustand: QueueZustand) -> None:
+    """Gemeinsamer Rumpf von pause/resume/stop - eine Regel, eine Stelle."""
+    config = _config()
+    with MarketingStore(config.path("sqlite_path")) as store:
+        _kampagne_oder_ende(store, campaign_id)
+        zurueck = store.set_queue_zustand(campaign_id, zustand)
+        store.audit("queue_zustand", campaign_id, zustand.value)
+        zaehler = store.job_counts(campaign_id)
+
+    console.print(f"Warteschlange {campaign_id}: [bold]{zustand.value}[/bold]")
+    if zurueck:
+        console.print(
+            f"[yellow]{zurueck}[/yellow] eingereihte Beitraege sind auf 'approved' "
+            f"zurueckgegangen - die Freigabe bleibt erhalten."
+        )
+    if zaehler.get(JobStatus.PROCESSING.value):
+        console.print(
+            f"[dim]{zaehler[JobStatus.PROCESSING.value]} Beitrag/Beitraege sind gerade "
+            f"in Arbeit und laufen zu Ende - sie werden nicht abgebrochen.[/dim]"
+        )
+
+
+@campaign_app.command("pause")
+def campaign_pause(campaign_id: str = typer.Argument(...)) -> None:
+    """Haelt die Warteschlange an. Was eingereiht ist, bleibt eingereiht."""
+    _queue_umschalten(campaign_id, QueueZustand.PAUSIERT)
+
+
+@campaign_app.command("resume")
+def campaign_resume(campaign_id: str = typer.Argument(...)) -> None:
+    """Laesst die Warteschlange weiterlaufen."""
+    _queue_umschalten(campaign_id, QueueZustand.LAUFEND)
+
+
+@campaign_app.command("stop")
+def campaign_stop(campaign_id: str = typer.Argument(...)) -> None:
+    """Haelt an und raeumt die Warteschlange.
+
+    Unterschied zu ``pause``: Was noch nicht angefangen wurde, geht auf
+    ``approved`` zurueck. Das ist der Unterschied zwischen "kurz warten" und
+    "heute nicht mehr" - und er soll im Zustand stehen, nicht im Kopf des
+    Bedienenden.
+    """
+    _queue_umschalten(campaign_id, QueueZustand.GESTOPPT)
+
+
+@campaign_app.command("jobs")
+def campaign_jobs(
+    campaign_id: str = typer.Argument(...),
+    status: str = typer.Option("", "--status", help="Nur dieser Stand."),
+    limit: int = typer.Option(30, "--limit", help="Hoechstens so viele Zeilen."),
+) -> None:
+    """Der Stand aller Beitraege einer Kampagne - Zaehler und Liste."""
+    config = _config()
+    gruppen_store, store = _stores(config)
+    try:
+        _kampagne_oder_ende(store, campaign_id)
+        gruppen = _gruppen_nach_id(gruppen_store)
+        zaehler = store.job_counts(campaign_id)
+        zustand = store.queue_zustand(campaign_id)
+        gewaehlt: JobStatus | None = None
+        if status:
+            try:
+                gewaehlt = JobStatus(status)
+            except ValueError:
+                moeglich = ", ".join(j.value for j in JobStatus)
+                console.print(f"[red]Unbekannter Stand:[/red] {status}\nMoeglich: {moeglich}")
+                raise typer.Exit(code=1) from None
+        links = store.jobs_mit_status(campaign_id, gewaehlt)
+    finally:
+        gruppen_store.close()
+        store.close()
+
+    kopf = Table(title=f"{campaign_id} - Warteschlange {zustand.value}",
+                 show_header=False, box=None)
+    for stand in JobStatus:
+        anzahl = zaehler.get(stand.value, 0)
+        if anzahl or stand in (JobStatus.DRAFT, JobStatus.APPROVED, JobStatus.QUEUED):
+            kopf.add_row(stand.value, str(anzahl))
+    console.print(kopf)
+
+    if not links:
+        return
+
+    geordnet = nach_prioritaet(
+        [gruppen[link.group_id] for link in links if link.group_id in gruppen], config
+    )
+    reihenfolge = {g.group_id: i for i, g in enumerate(geordnet)}
+    links.sort(key=lambda link: reihenfolge.get(link.group_id, len(reihenfolge)))
+
+    table = Table(title="Beitraege")
+    table.add_column("Gruppe")
+    table.add_column("Score", justify="right")
+    table.add_column("Prio")
+    table.add_column("Stand")
+    table.add_column("Text")
+    table.add_column("Letzter Versuch")
+    for link in links[:limit]:
+        g = gruppen.get(link.group_id)
+        table.add_row(
+            (g.name if g else link.group_id)[:32],
+            _score_text(g),
+            prioritaet(g, config) if g else "[dim]-[/dim]",
+            link.job_status.value,
+            (link.post_text[:34] + "...") if link.post_text else "[dim]-[/dim]",
+            link.last_attempt_at.strftime("%d.%m. %H:%M") if link.last_attempt_at
+            else "[dim]-[/dim]",
+        )
+    console.print(table)
+    if len(links) > limit:
+        console.print(f"[dim]... und {len(links) - limit} weitere.[/dim]")
+
+
+def _score_text(group: Group | None) -> str:
+    """Score als "130/175" - nie als blosse Zahl.
+
+    Der Score ist nicht auf 100 normiert; ohne den Nenner ist "130" nicht
+    einzuordnen und "100" sieht besser aus, als es ist.
+    """
+    if group is None or group.score is None:
+        return "[dim]-[/dim]"
+    return f"{group.score:.0f}/{group.score_max:.0f}" if group.score_max else f"{group.score:.0f}"
 
 
 # Staende, in denen ein Beitrag ueberhaupt moeglich ist: Bei Facebook muss man
@@ -1072,6 +1624,308 @@ def campaign_next(
         console.print(_fortschritt_zeile(store.post_counts(campaign_id)))
     finally:
         store.close()
+
+
+def _baue_veroeffentlicher(name: str) -> Veroeffentlicher:
+    """Sucht den Adapter aus der Registry - oder endet mit einer Auskunft.
+
+    Die Liste steht nicht hier: Ein neuer Adapter traegt sich ueber
+    ``@register_veroeffentlicher`` selbst ein, und diese Datei aendert sich
+    dabei nicht. Was die Kommandozeile anbietet, ist damit immer genau das,
+    was es wirklich gibt.
+    """
+    try:
+        return baue_veroeffentlicher(
+            name,
+            frage=console.input,
+            melde=lambda zeile: console.print(Panel(zeile)),
+        )
+    except UnbekannterVeroeffentlicher as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+
+@campaign_app.command("worker")
+def campaign_worker(
+    campaign_id: str = typer.Argument(...),
+    limit: int = typer.Option(
+        0, "--limit", help="Hoechstens so viele in diesem Lauf (0 = Wert aus der Konfiguration)."
+    ),
+    tageslimit: int = typer.Option(
+        0, "--tageslimit", help="Ueberschreibt max_pro_tag fuer diesen Lauf."
+    ),
+    adapter: str = typer.Option(
+        "assistiert", "--adapter", help=" | ".join(verfuegbare())
+    ),
+    trocken: bool = typer.Option(
+        False, "--dry-run", help="Zeigt den Plan und die Grenzen, ohne etwas abzusetzen."
+    ),
+) -> None:
+    """Arbeitet die Warteschlange ab - eine Gruppe nach der anderen.
+
+    Die Reihenfolge kommt aus der Warteschlange und damit aus dem Score: Beim
+    ``enqueue`` wird nach Rang sortiert, hier nicht mehr - sonst entschiede
+    eine Neubewertung mitten im Lauf, welcher Beitrag als naechstes hinausgeht.
+
+    ``pause``, ``resume`` und ``stop`` wirken **waehrend** der Arbeiter laeuft:
+    Der Zustand wird vor jedem Beitrag und nach jeder Wartezeit frisch aus der
+    Datenbank gelesen. Ein zweites Fenster genuegt.
+
+    Das Tageslimit zaehlt aus ``post_versuche`` und ueberlebt damit einen
+    Neustart - zwei Laeufe am selben Tag setzen zusammen nicht mehr Beitraege
+    als einer.
+    """
+    config = _config()
+    gruppen_store, store = _stores(config)
+    try:
+        campaign = _kampagne_oder_ende(store, campaign_id)
+        gruppen = _gruppen_nach_id(gruppen_store)
+    finally:
+        gruppen_store.close()
+
+    try:
+        grenzen = lade_grenzen(config)
+        if limit:
+            grenzen = replace(grenzen, max_pro_lauf=limit)
+        if tageslimit:
+            grenzen = replace(grenzen, tageslimit=tageslimit)
+
+        heute = store.versuche_heute(campaign_id)
+        offen = store.job_counts(campaign_id).get(JobStatus.QUEUED.value, 0)
+        zustand = store.queue_zustand(campaign_id)
+
+        tabelle = Table(box=None, show_header=False)
+        tabelle.add_column(style="dim")
+        tabelle.add_column()
+        tabelle.add_row("Warteschlange", f"{offen} eingereiht · Zustand: {zustand.value}")
+        tabelle.add_row("Heute schon", f"{heute} von {grenzen.tageslimit} Versuchen")
+        tabelle.add_row("Dieser Lauf", f"hoechstens {grenzen.max_pro_lauf}")
+        tabelle.add_row(
+            "Wartezeit", f"{grenzen.pause_min:.0f}-{grenzen.pause_max:.0f}s zwischen Beitraegen"
+        )
+        tabelle.add_row("Adapter", f"{adapter} - {verfuegbare().get(adapter, 'unbekannt')}")
+        console.print(tabelle)
+        console.print()
+
+        if trocken:
+            # Der Arbeiter schlaeft nicht bis zur Startzeit: Ein Prozess, der
+            # vierzehn Stunden wartet, ueberlebt keinen Neustart. Die
+            # Aufgabenplanung des Systems kann das, und sie tut es zuverlaessig
+            # - hier steht der fertige Befehl dafuer.
+            startzeit = str(
+                config.get("marketing", "posting", "startzeit", default="08:00")
+            )
+            console.print(
+                f"[dim]Taeglich um {startzeit} starten (einmalig einrichten):[/dim]\n"
+                f'  schtasks /create /tn "fbgroups-worker-{campaign_id}" /sc daily '
+                f'/st {startzeit} /tr "cmd /c cd /d {Path.cwd()} && '
+                f'.venv\\Scripts\\python.exe -m fbgroups.cli campaign worker {campaign_id}"'
+            )
+            console.print()
+            console.print("[dim]--dry-run: es wurde nichts abgesetzt.[/dim]")
+            return
+
+        if zustand is not QueueZustand.LAUFEND:
+            console.print(
+                f"[yellow]Die Warteschlange ist {zustand.value}.[/yellow]\n"
+                f"Weiter mit:  fbgroups campaign resume {campaign_id}"
+            )
+            raise typer.Exit(code=2)
+
+        veroeffentlicher = _baue_veroeffentlicher(adapter)
+        bericht = arbeite(
+            store,
+            campaign,
+            gruppen,
+            veroeffentlicher,
+            grenzen,
+            melde=lambda zeile: console.print(f"[dim]{zeile}[/dim]"),
+        )
+    finally:
+        store.close()
+
+    console.print()
+    for name, ausgang in bericht.zeilen:
+        farbe = "green" if ausgang == "veroeffentlicht" else "dim"
+        console.print(f"  [{farbe}]{ausgang:<24}[/{farbe}] {name}")
+    console.print()
+    console.print(
+        f"[green]{bericht.veroeffentlicht}[/green] veroeffentlicht · "
+        f"[red]{bericht.fehlgeschlagen}[/red] fehlgeschlagen · "
+        f"{bericht.uebersprungen} uebersprungen"
+    )
+    console.print(f"[dim]Ende: {bericht.grund}[/dim]")
+
+
+@campaign_app.command("tageslauf")
+def campaign_tageslauf(
+    campaign_id: str = typer.Argument(...),
+    adapter: str = typer.Option("assistiert", "--adapter", help=" | ".join(verfuegbare())),
+    trocken: bool = typer.Option(False, "--dry-run", help="Nur zeigen, was liefe."),
+) -> None:
+    """Der ganze Tag in einem Befehl: nachfuellen, einreihen, abarbeiten.
+
+    Genau das, was die Aufgabenplanung des Systems taeglich aufruft. Die drei
+    Schritte stehen bewusst auch einzeln zur Verfuegung (``retry``,
+    ``enqueue``, ``worker``) - dieser Befehl ist ihre Reihenfolge, nicht ihr
+    Ersatz.
+
+    **Zuerst ``retry``, dann ``enqueue``.** Ein gestern gescheiterter Beitrag
+    hat seinen Text und seine Freigabe schon; er gehoert vor die Gruppen, die
+    heute zum ersten Mal drankommen. Umgekehrt fuellte die Warteschlange sich
+    mit Neuem, und der Fehlschlag von gestern rutschte Tag um Tag nach hinten.
+
+    Eingereiht wird nur so viel, wie heute noch hineinpasst: Das Tageslimit
+    zaehlt ueber alle Kampagnen, und was darueber hinaus in der Warteschlange
+    stuende, waere eine Liste, die den Tag ueberlebt und morgen die
+    Score-Reihenfolge durcheinanderbraechte.
+    """
+    config = _config()
+    grenzen = lade_grenzen(config)
+    max_versuche = int(config.get("marketing", "posting", "max_versuche", default=3) or 0)
+
+    gruppen_store, store = _stores(config)
+    try:
+        campaign = _kampagne_oder_ende(store, campaign_id)
+        gruppen = _gruppen_nach_id(gruppen_store)
+    finally:
+        gruppen_store.close()
+
+    try:
+        heute_schon = store.versuche_heute()
+        rest = max(0, grenzen.tageslimit - heute_schon)
+        bereits_offen = store.job_counts(campaign_id).get(JobStatus.QUEUED.value, 0)
+
+        console.print(f"[bold]Tageslauf {campaign_id}[/bold]")
+        console.print(
+            f"[dim]Heute schon {heute_schon} von {grenzen.tageslimit} Versuchen · "
+            f"{bereits_offen} bereits eingereiht[/dim]\n"
+        )
+
+        if rest == 0:
+            console.print("[yellow]Tageslimit erreicht - heute geht nichts mehr hinaus.[/yellow]")
+            return
+
+        # 1. Gescheiterte von gestern zurueckholen.
+        zurueck = 0 if trocken else store.fehlgeschlagene_zuruecksetzen(
+            campaign_id, max_versuche=max_versuche
+        )
+        if zurueck:
+            console.print(f"  [green]{zurueck}[/green] fehlgeschlagene zurueckgeholt")
+
+        # 2. Auffuellen - die besten zuerst, hoechstens bis zur Tagesgrenze.
+        nachzulegen = max(0, rest - store.job_counts(campaign_id).get(JobStatus.QUEUED.value, 0))
+        freigegeben = store.jobs_mit_status(campaign_id, JobStatus.APPROVED)
+        geordnet = nach_prioritaet(
+            [gruppen[link.group_id] for link in freigegeben if link.group_id in gruppen], config
+        )
+        reihenfolge = {g.group_id: i for i, g in enumerate(geordnet)}
+        freigegeben.sort(key=lambda link: reihenfolge.get(link.group_id, len(reihenfolge)))
+
+        eingereiht = 0
+        for link in freigegeben[:nachzulegen]:
+            if trocken or _wechsle(store, campaign_id, link.group_id, JobStatus.QUEUED):
+                eingereiht += 1
+        if eingereiht:
+            console.print(f"  [green]{eingereiht}[/green] nach Score eingereiht")
+
+        offen = store.job_counts(campaign_id).get(JobStatus.QUEUED.value, 0)
+        console.print(f"  [bold]{offen}[/bold] in der Warteschlange · heute noch {rest} moeglich\n")
+
+        if trocken:
+            console.print("[dim]--dry-run: es wurde nichts geaendert und nichts abgesetzt.[/dim]")
+            return
+
+        # 3. Abarbeiten.
+        zustand = store.queue_zustand(campaign_id)
+        if zustand is not QueueZustand.LAUFEND:
+            console.print(
+                f"[yellow]Die Warteschlange ist {zustand.value} - "
+                f"es wird nichts abgesetzt.[/yellow]\n"
+                f"Weiter mit:  fbgroups campaign resume {campaign_id}"
+            )
+            raise typer.Exit(code=2)
+
+        bericht = arbeite(
+            store,
+            campaign,
+            gruppen,
+            _baue_veroeffentlicher(adapter),
+            grenzen,
+            melde=lambda zeile: console.print(f"[dim]{zeile}[/dim]"),
+        )
+    finally:
+        store.close()
+
+    console.print()
+    console.print(
+        f"[green]{bericht.veroeffentlicht}[/green] veroeffentlicht · "
+        f"[red]{bericht.fehlgeschlagen}[/red] fehlgeschlagen · "
+        f"{bericht.uebersprungen} uebersprungen"
+    )
+    console.print(f"[dim]Ende: {bericht.grund}[/dim]")
+
+
+@campaign_app.command("zeitplan")
+def campaign_zeitplan(
+    campaign_id: str = typer.Argument(...),
+    einrichten: bool = typer.Option(
+        False, "--einrichten", help="Die Aufgabe wirklich anlegen (sonst nur zeigen)."
+    ),
+    entfernen: bool = typer.Option(False, "--entfernen", help="Die Aufgabe wieder loeschen."),
+) -> None:
+    """Richtet den taeglichen Lauf in der Aufgabenplanung von Windows ein.
+
+    Der Arbeiter schlaeft **nicht** bis zur Startzeit: Ein Prozess, der
+    vierzehn Stunden wartet, ueberlebt keinen Neustart, keine Abmeldung und
+    keinen zugeklappten Deckel. Die Aufgabenplanung kann genau das, und sie
+    tut es seit Jahrzehnten zuverlaessig - dieser Befehl traegt dort ein, was
+    in ``startzeit`` steht.
+
+    Ohne ``--einrichten`` wird der Befehl nur angezeigt. Etwas, das sich
+    taeglich von selbst startet, legt man nicht beilaeufig an.
+    """
+    config = _config()
+    startzeit = str(config.get("marketing", "posting", "startzeit", default="08:00"))
+    aufgabe = f"fbgroups-tageslauf-{campaign_id}"
+
+    with MarketingStore(config.path("sqlite_path")) as store:
+        _kampagne_oder_ende(store, campaign_id)
+
+    if entfernen:
+        befehl = ["schtasks", "/delete", "/tn", aufgabe, "/f"]
+    else:
+        ziel = (
+            f'cmd /c cd /d "{Path.cwd()}" && '
+            f".venv\\Scripts\\python.exe -m fbgroups.cli campaign tageslauf {campaign_id}"
+        )
+        befehl = ["schtasks", "/create", "/tn", aufgabe, "/sc", "daily", "/st", startzeit,
+                  "/tr", ziel, "/f"]
+
+    if not einrichten and not entfernen:
+        console.print(f"[bold]Taeglicher Lauf um {startzeit}[/bold]  ({aufgabe})\n")
+        console.print(subprocess.list2cmdline(befehl))
+        console.print(
+            f"\n[dim]Wirklich einrichten:  fbgroups campaign zeitplan {campaign_id} --einrichten"
+            f"\nStartzeit aendern:     marketing.posting.startzeit in config/settings.yaml[/dim]"
+        )
+        return
+
+    if sys.platform != "win32":
+        console.print(
+            "[yellow]schtasks gibt es nur unter Windows.[/yellow]\n"
+            "Anderswo: cron, systemd-timer oder launchd - der Befehl dahinter ist derselbe:\n"
+            f"  fbgroups campaign tageslauf {campaign_id}"
+        )
+        raise typer.Exit(code=2)
+
+    ergebnis = subprocess.run(befehl, capture_output=True, text=True, check=False)
+    if ergebnis.returncode != 0:
+        console.print(f"[red]Fehlgeschlagen:[/red] {ergebnis.stderr.strip() or ergebnis.stdout}")
+        raise typer.Exit(code=1)
+    console.print(
+        f"[green]{'Entfernt' if entfernen else f'Eingerichtet - taeglich um {startzeit}'}.[/green]"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1529,6 +2383,106 @@ _WOHER: dict[str, str] = {
     "qualified": "API",
     "conversion": "API",
 }
+
+
+# ---------------------------------------------------------------------------
+# KI-Anbieter: Stand und Selbsttest
+# ---------------------------------------------------------------------------
+
+ki_app = typer.Typer(help="Lokale KI (Ollama) und der optionale Anthropic-Weg.")
+
+
+@ki_app.command("status")
+def ki_stand() -> None:
+    """Zeigt, welcher Anbieter eingestellt ist und ob er antwortet.
+
+    Ruft nichts ab, was Geld kostet: Bei Ollama wird nur nachgesehen, welche
+    Modelle dort liegen; bei Anthropic wird ueberhaupt nichts abgerufen,
+    sondern nur geprueft, ob Paket und Schluessel da sind.
+    """
+    config = _config()
+    anbieter = gewaehlter_anbieter(config)
+    # Ausdruecklich frisch: Wer diesen Befehl tippt, sieht gerade nach und will
+    # nicht die Antwort von vor zehn Sekunden - er hat womoeglich genau
+    # dazwischen Ollama gestartet.
+    stand = ki_status(config, frisch=True)
+
+    table = Table(title="KI-Status", show_header=False, box=None)
+    table.add_row("Anbieter", f"{anbieter}" + (" (Standard)" if anbieter == "ollama" else ""))
+    table.add_row(
+        "Verbindung",
+        "[green]verbunden[/green]" if stand.erreichbar else "[red]nicht erreichbar[/red]",
+    )
+    table.add_row("Modell", stand.modell or "[dim]-[/dim]")
+    table.add_row("Adresse", stand.adresse or "[dim]-[/dim]")
+    if stand.erreichbar and stand.verfuegbare_modelle:
+        table.add_row(
+            "Modell liegt vor",
+            "[green]ja[/green]" if stand.modell_vorhanden else "[red]nein[/red]",
+        )
+    console.print(table)
+
+    if stand.verfuegbare_modelle:
+        console.print(f"[dim]Vorhanden: {', '.join(stand.verfuegbare_modelle)}[/dim]")
+    if stand.meldung:
+        farbe = "yellow" if stand.erreichbar else "red"
+        console.print(f"[{farbe}]{stand.meldung}[/{farbe}]")
+
+    # Kein Exit-Code ungleich 0: Der Befehl hat seine Auskunft gegeben, auch
+    # wenn die Auskunft "laeuft nicht" lautet. Ein Fehlercode waere hier ein
+    # Fehler des Befehls, und das ist er nicht.
+
+
+@ki_app.command("test")
+def ki_test(
+    anbieter: str = typer.Option("", "--anbieter", help=f"Einer von: {', '.join(ANBIETER)}"),
+) -> None:
+    """Schickt eine sehr kurze echte Anfrage - einen Testsatz auf Arabisch.
+
+    Anders als ``ki status`` wird hier wirklich etwas erzeugt. Bei Ollama
+    kostet das nichts ausser Sekunden; bei Anthropic ein paar Cent. Der Test
+    beantwortet in einem Zug drei Fragen: Laeuft der Dienst, liegt das Modell
+    vor, und gibt es arabische Schrift sauber aus.
+    """
+    config = _config()
+    name = anbieter or gewaehlter_anbieter(config)
+    console.print(f"[dim]Frage '{name}' ...[/dim]")
+
+    geklappt, text = ki_teste(config, anbieter)
+    if geklappt:
+        console.print(f"[green]OK[/green] {name} funktioniert.\n")
+        console.print(text)
+        return
+
+    console.print(f"[red]Fehlgeschlagen[/red] - {name} hat nicht geantwortet.\n")
+    console.print(text)
+    raise typer.Exit(code=1)
+
+
+@ki_app.command("modelle")
+def ki_modelle() -> None:
+    """Listet die Modelle, die bei Ollama tatsaechlich vorliegen."""
+    config = _config()
+    stand = ki_status(config, "ollama")
+
+    if not stand.erreichbar:
+        console.print(f"[red]{stand.meldung}[/red]")
+        raise typer.Exit(code=1)
+    if not stand.verfuegbare_modelle:
+        console.print(
+            "Ollama laeuft, aber es liegt kein Modell vor.\n"
+            f"[dim]Holen mit:  ollama pull {stand.modell}[/dim]"
+        )
+        return
+
+    table = Table(title=f"Modelle auf {stand.adresse}")
+    table.add_column("Modell")
+    table.add_column("eingestellt", justify="center")
+    eingestellt = stand.modell.split(":")[0]
+    for name in stand.verfuegbare_modelle:
+        marke = "[green]<--[/green]" if name.split(":")[0] == eingestellt else ""
+        table.add_row(name, marke)
+    console.print(table)
 
 
 # ---------------------------------------------------------------------------

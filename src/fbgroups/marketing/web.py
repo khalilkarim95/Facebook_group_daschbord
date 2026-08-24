@@ -47,8 +47,10 @@ from fbgroups.marketing.models import (
     Campaign,
     CampaignStatus,
     EventType,
+    JobStatus,
     MarketingStatus,
     PostStatus,
+    QueueZustand,
     ReferralStatus,
     TrackingEvent,
 )
@@ -126,6 +128,17 @@ class KampagneNeu(BaseModel):
 
 class KampagneStatusMeldung(BaseModel):
     status: CampaignStatus
+
+
+class QueueMeldung(BaseModel):
+    """Welcher Zustand der Warteschlange gesetzt werden soll.
+
+    Ein eigenes Modell statt eines freien Textes: ``pausiert`` und ``gestoppt``
+    unterscheiden sich darin, was mit den eingereihten Jobs geschieht, und ein
+    Tippfehler duerfte nicht als das eine oder das andere durchgehen.
+    """
+
+    zustand: QueueZustand
 
 
 class SyncMeldung(BaseModel):
@@ -604,6 +617,38 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             store.audit("kampagne_status", campaign_id, meldung.status.value)
         return JSONResponse({"campaign_id": campaign_id, "status": meldung.status.value})
 
+    @app.post("/kampagnen/{campaign_id}/queue")
+    def kampagne_queue(  # noqa: ANN202
+        campaign_id: str, meldung: QueueMeldung, request: Request
+    ):
+        """Haelt die Warteschlange an, laesst sie weiterlaufen oder raeumt sie.
+
+        Wirkt **waehrend** ein Arbeiter laeuft: Er liest den Zustand vor jedem
+        Beitrag und nach jeder Wartezeit frisch aus der Datenbank. Genau dafuer
+        gibt es diesen Weg - wer einen Lauf anhalten will, sitzt selten vor dem
+        Fenster, in dem er gestartet wurde.
+
+        ``gestoppt`` raeumt zusaetzlich die Warteschlange: Alles, was noch
+        nicht angefangen wurde, geht auf ``approved`` zurueck. Die Antwort
+        nennt deshalb, wie viele Jobs das betraf - "gestoppt" allein liesse
+        offen, ob gerade 3 oder 300 Beitraege zurueckgestellt wurden.
+        """
+        _nur_lokal(request)
+        with _store() as store:
+            if store.load_campaign(campaign_id) is None:
+                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
+            zurueckgestellt = store.set_queue_zustand(campaign_id, meldung.zustand)
+            store.audit("queue_zustand", campaign_id, meldung.zustand.value)
+            zaehler = store.job_counts(campaign_id)
+        return JSONResponse(
+            {
+                "campaign_id": campaign_id,
+                "zustand": meldung.zustand.value,
+                "zurueckgestellt": zurueckgestellt,
+                "eingereiht": zaehler.get(JobStatus.QUEUED.value, 0),
+            }
+        )
+
     @app.post("/kampagnen/{campaign_id}/auswahl")
     def kampagne_auswahl(  # noqa: ANN202
         campaign_id: str, meldung: AuswahlMeldung, request: Request
@@ -779,6 +824,26 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             {"anzahl": len(meldung.group_ids), "bearbeiten": meldung.bearbeiten,
              "grund": "" if meldung.bearbeiten else meldung.grund}
         )
+
+    @app.post("/ki/test")
+    def ki_testen(request: Request):  # noqa: ANN202
+        """Schickt eine sehr kurze echte Anfrage an den eingestellten Anbieter.
+
+        Hinter ``_nur_lokal`` wie jeder schreibende Weg: Der Aufruf erzeugt
+        wirklich etwas - bei Ollama Sekunden Rechenzeit, bei Anthropic Geld.
+        Ein Weg, den jeder von aussen ausloesen koennte, waere bei einem
+        lokalen Modell eine Einladung, den Rechner lahmzulegen.
+
+        Antwortet immer mit 200 und einem ``ok``-Feld, nie mit einem
+        Fehlercode: Der Aufruf hat seine Auskunft gegeben, auch wenn die
+        Auskunft "laeuft nicht" lautet. Ein 500 saehe aus wie ein Fehler des
+        Dienstes und nicht wie ein abgeschaltetes Ollama.
+        """
+        _nur_lokal(request)
+        from fbgroups.marketing.ki import teste as ki_teste
+
+        geklappt, text = ki_teste(cfg)
+        return JSONResponse({"ok": geklappt, "text": text})
 
     @app.get("/r/{tracking_code}")
     def redirect(tracking_code: str, request: Request):  # noqa: ANN202
