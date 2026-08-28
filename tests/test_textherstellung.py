@@ -108,14 +108,21 @@ def test_jede_gruppe_bekommt_ihren_eigenen_text(client: TestClient, bestand: Pat
     assert "بون" not in texte["100000000000003"]
 
 
-def test_die_zielgruppe_steht_im_text(client: TestClient, bestand: Path) -> None:
+def test_die_zielgruppe_bestimmt_das_reiseziel(client: TestClient, bestand: Path) -> None:
+    """Seit dem 28.08.2026 traegt der Beitrag das Ziel, nicht die Anrede.
+
+    Die arabischen Vorlagen sprechen die Zielgruppe nicht mehr an; sie fragen
+    nach Reisenden **dorthin**. Abgeleitet wird das weiterhin aus derselben
+    Zielgruppe - "syrians" ergibt Syrien, und "arabs" hat kein einzelnes Land
+    und faellt auf ``ziel_allgemein`` zurueck, statt eines zu erfinden.
+    """
     _fuelle(client)
     with MarketingStore(bestand) as store:
         texte = {
             link.group_id: link.post_text for link in store.links_for_campaign(KAMPAGNE)
         }
-    assert "السوريين" in texte["100000000000001"]
-    assert "العرب" in texte["100000000000002"]
+    assert "سوريا" in texte["100000000000001"]
+    assert "الوطن" in texte["100000000000002"]
 
 
 def test_der_tracking_platzhalter_bleibt_im_gespeicherten_text(
@@ -218,29 +225,26 @@ def test_eine_eigene_vorlage_ohne_link_wird_abgewiesen(
 # --- Der Kommentar ---------------------------------------------------------
 
 
-def _mit_kommentaren(bestand: Path) -> None:
-    """Schaltet die Kommentartexte dieser Kampagne ein."""
-    with MarketingStore(bestand) as store:
-        campaign = store.load_campaign(KAMPAGNE)
-        campaign.kommentare = True
-        store.save_campaign(campaign)
-
-
-def test_ohne_kommentare_entsteht_kein_kommentartext(
+def test_jede_kampagne_bekommt_kommentartexte(
     client: TestClient, bestand: Path
 ) -> None:
-    """Ein Text, den niemand braucht, ist ein Text, den jemand durchliest."""
+    """Seit dem 28.08.2026 gibt es die Frage nicht mehr.
+
+    Vorher hing der Kommentar an einem Haken je Kampagne. Der stand in jeder
+    Zeile der Uebersicht und musste in keiner beantwortet werden: Wer in einer
+    Gruppe postet, kommentiert dort auch. Ein Kommentar zu viel kostet einen
+    Blick, ein fehlender einen Handgriff.
+    """
     _fuelle(client)
     with MarketingStore(bestand) as store:
         for link in store.links_for_campaign(KAMPAGNE):
-            assert link.kommentar_text == ""
+            assert link.kommentar_text.strip(), link.group_id
 
 
 def test_beitrag_und_kommentar_kommen_aus_getrennten_toepfen(
     client: TestClient, bestand: Path
 ) -> None:
     """Ein gekuerzter Beitrag als Kommentar liest sich wie eingeworfene Werbung."""
-    _mit_kommentaren(bestand)
     _fuelle(client)
 
     with MarketingStore(bestand) as store:
@@ -250,9 +254,12 @@ def test_beitrag_und_kommentar_kommen_aus_getrennten_toepfen(
     assert link.kommentar_vorlage_key.startswith("ar/kommentar/")
     assert link.kommentar_text.strip()
     assert link.kommentar_text != link.post_text
-    # Beide personalisiert, beide mit Platzhalter - der Code kommt erst beim
-    # Lesen hinein.
-    assert "بون" in link.kommentar_text
+    # Beide gefuellt, beide mit Platzhalter - der Code kommt erst beim Lesen
+    # hinein. Nicht auf einen Stadtnamen geprueft: Eine Kommentarvorlage darf
+    # ohne Stadt auskommen und im Topf "mit_stadt" stehen; nur umgekehrt waere
+    # es ein Fehler. Was zaehlt, ist, dass kein Platzhalter offen bleibt.
+    assert "{stadt}" not in link.kommentar_text
+    assert "{zielgruppe}" not in link.kommentar_text
     assert "{link}" in link.kommentar_text
     assert link.tracking_code not in link.kommentar_text
 
@@ -265,7 +272,6 @@ def test_der_kommentar_bleibt_kurz(client: TestClient, bestand: Path) -> None:
     in Ordnung. Was einen Kommentar ausmacht, ist, dass er nicht eroeffnet:
     wenige Zeilen, kein Aufbau mit Anrede, Erklaerung und Aufruf.
     """
-    _mit_kommentaren(bestand)
     _fuelle(client)
     with MarketingStore(bestand) as store:
         for link in store.links_for_campaign(KAMPAGNE):
@@ -277,7 +283,6 @@ def test_der_kommentar_bleibt_kurz(client: TestClient, bestand: Path) -> None:
 def test_ein_vorhandener_kommentar_wird_nicht_ueberschrieben(
     client: TestClient, bestand: Path
 ) -> None:
-    _mit_kommentaren(bestand)
     with MarketingStore(bestand) as store:
         store.set_post_text(
             KAMPAGNE,
@@ -297,7 +302,6 @@ def test_ein_vorhandener_kommentar_wird_nicht_ueberschrieben(
 
 def test_eine_neue_gruppe_bekommt_eigene_texte(client: TestClient, bestand: Path) -> None:
     """Bestehende Gruppentexte bleiben, die neue bekommt ihre eigenen."""
-    _mit_kommentaren(bestand)
     _fuelle(client)
     with MarketingStore(bestand) as store:
         vorher = {
@@ -343,7 +347,6 @@ def test_eine_neue_gruppe_bekommt_eigene_texte(client: TestClient, bestand: Path
 
 def test_die_arbeitsseite_zeigt_beide_spalten(client: TestClient, bestand: Path) -> None:
     """Dieselbe Gruppe, derselbe Handgriff - eine Seite, zwei Spalten."""
-    _mit_kommentaren(bestand)
     _fuelle(client)
 
     seite = client.get(f"/arbeit/{KAMPAGNE}").text
@@ -357,21 +360,18 @@ def test_die_arbeitsseite_zeigt_beide_spalten(client: TestClient, bestand: Path)
     assert "ar/kommentar/" in seite
 
 
-def test_die_kommentarspalte_steht_auch_ohne_text(
+def test_die_kommentarspalte_steht_vor_dem_ersten_lauf(
     client: TestClient, bestand: Path
 ) -> None:
     """Sie ist die Stelle, an der ein Kommentar entsteht.
 
-    Fuehrt die Kampagne keine Kommentare, entsteht auch keiner - die Spalte
-    steht trotzdem und sagt, wo man das umschaltet. Eine Stelle, die es nur
-    gibt, wenn man sie nicht mehr braucht, ist keine.
+    Ohne gefuellte Fassungen steht sie trotzdem - eine Stelle, die es nur
+    gibt, wenn schon etwas dasteht, ist keine. Der frueher hier gepruefte
+    zweite Grund ("Diese Kampagne fuehrt keine Kommentare") ist entfallen:
+    Jede Kampagne fuehrt welche.
     """
-    _fuelle(client)
-
-    seite = client.get(f"/arbeit/{KAMPAGNE}").text
+    seite = client.get(f"/arbeit/{KAMPAGNE}?gruppe=1").text
     assert "data-spalte='kommentar'" in seite
-    assert "fuehrt keine Kommentare" in seite
-    assert "Kommentar kopieren" not in seite
 
 
 # --- Zurueckholen ----------------------------------------------------------
@@ -494,54 +494,25 @@ def test_ohne_platzhalter_wird_nichts_gespeichert(client: TestClient) -> None:
 # --- Die Kampagne und ihre Textarten ---------------------------------------
 
 
-def test_eine_neue_kampagne_kann_kommentare_fuehren(
+def test_eine_frisch_angelegte_kampagne_fuehrt_kommentare(
     client: TestClient, bestand: Path
 ) -> None:
+    """Ohne Angabe und ohne Haken - es gibt beides nicht mehr."""
     antwort = client.post(
-        "/kampagnen",
-        json={"name": "Mit Kommentaren", "campaign_id": "mit-k", "kommentare": True},
+        "/kampagnen", json={"name": "Schlicht", "campaign_id": "schlicht"}
     )
     assert antwort.status_code == 201, antwort.text
 
     with MarketingStore(bestand) as store:
-        assert store.load_campaign("mit-k").kommentare is True
+        campaign = store.load_campaign("schlicht")
+    assert campaign is not None
+    assert not hasattr(campaign, "kommentare")
 
 
-def test_ohne_angabe_fuehrt_eine_kampagne_keine_kommentare(
-    client: TestClient, bestand: Path
-) -> None:
-    """Ein Text, den niemand braucht, ist ein Text, den jemand durchliest."""
-    client.post("/kampagnen", json={"name": "Schlicht", "campaign_id": "schlicht"})
-    with MarketingStore(bestand) as store:
-        assert store.load_campaign("schlicht").kommentare is False
-
-
-def test_die_textarten_lassen_sich_spaeter_umschalten(
-    client: TestClient, bestand: Path
-) -> None:
-    """Sonst waere die Angabe nur beim Anlegen erreichbar."""
+def test_den_umschaltweg_gibt_es_nicht_mehr(client: TestClient) -> None:
+    """``POST /kampagnen/{id}/texte`` ist entfallen - es gibt nichts zu schalten."""
     antwort = client.post(f"/kampagnen/{KAMPAGNE}/texte", json={"kommentare": True})
-    assert antwort.status_code == 200
-    assert antwort.json()["kommentare"] is True
-
-    with MarketingStore(bestand) as store:
-        assert store.load_campaign(KAMPAGNE).kommentare is True
-
-
-def test_ausschalten_loescht_keinen_geschriebenen_kommentar(
-    client: TestClient, bestand: Path
-) -> None:
-    """Ein Schalter, der beilaeufig Texte loescht, waere unumkehrbar."""
-    _mit_kommentaren(bestand)
-    _fuelle(client)
-    with MarketingStore(bestand) as store:
-        vorher = store.link_for(KAMPAGNE, "100000000000001").kommentar_text
-    assert vorher.strip()
-
-    client.post(f"/kampagnen/{KAMPAGNE}/texte", json={"kommentare": False})
-
-    with MarketingStore(bestand) as store:
-        assert store.link_for(KAMPAGNE, "100000000000001").kommentar_text == vorher
+    assert antwort.status_code == 404
 
 
 # --- Die Rechte ------------------------------------------------------------
@@ -576,22 +547,11 @@ def test_von_aussen_geht_keiner_dieser_wege(
     assert fremd.post(f"/arbeit/{KAMPAGNE}/{weg}", json=rumpf).status_code == 404
 
 
-def test_die_textarten_sind_von_aussen_nicht_umschaltbar(bestand: Path, config) -> None:
-    fremd = TestClient(
-        create_app(config=config, db_path=bestand), client=("203.0.113.7", 44321)
-    )
-    antwort = fremd.post(f"/kampagnen/{KAMPAGNE}/texte", json={"kommentare": True})
-    assert antwort.status_code == 404
-    with MarketingStore(bestand) as store:
-        assert store.load_campaign(KAMPAGNE).kommentare is False
-
-
 # --- Der Rueckweg auf der Seite -------------------------------------------
 
 
 def _seite(client: TestClient, bestand: Path) -> str:
     """Die Arbeitsseite dieser Kampagne, mit gefuellten Fassungen."""
-    _mit_kommentaren(bestand)
     _fuelle(client)
     return client.get(f"/arbeit/{KAMPAGNE}").text
 
@@ -628,13 +588,21 @@ def test_beide_spalten_melden_ihren_eigenen_ausgang(
     assert "id='schlecht-kommentar'" in seite
 
 
-def test_der_rueckweg_zur_vorlage_steht_in_jeder_spalte(
+def test_statt_des_rueckwegs_steht_die_gruppe_in_jeder_spalte(
     client: TestClient, bestand: Path
 ) -> None:
-    """Genau dafuer steht ``generated_text`` neben ``text``."""
+    """Der dritte Knopf ist der naechste Schritt, nicht der vorige.
+
+    "Zurueck zur Vorlage" beantwortete eine Frage, die sich hier selten
+    stellt, und stand an der Stelle, an der man nach dem Kopieren weitergeht:
+    in die Gruppe. Der Weg zurueck bleibt - ``generated_text`` steht
+    unveraendert neben ``text`` und ``/vorschlag/zuruecksetzen`` holt ihn.
+    """
     seite = _seite(client, bestand)
-    assert "id='zurueck-post'" in seite
-    assert "id='zurueck-kommentar'" in seite
+    assert "id='zurueck-post'" not in seite
+    assert "id='zurueck-kommentar'" not in seite
+    # Zweimal in den Spalten, einmal in der Gruppen-Navigation darueber.
+    assert seite.count("Gruppe bei Facebook oeffnen") == 3
 
 
 # --- Die Migration ---------------------------------------------------------
@@ -676,7 +644,7 @@ def test_eine_datei_ohne_kommentarspalten_holt_sie_nach(bestand: Path) -> None:
         campaign = store.load_campaign(KAMPAGNE)
     assert link.post_text == "Beitrag {link}"       # unangetastet
     assert link.kommentar_text == ""                # keine Abschrift
-    assert campaign.kommentare is False             # niemand hat es eingeschaltet
+    assert campaign is not None                     # die Kampagne laedt weiterhin
 
 
 def test_der_marketing_speicher_holt_den_schritt_ebenfalls_nach(bestand: Path) -> None:
@@ -697,14 +665,6 @@ def test_der_marketing_speicher_holt_den_schritt_ebenfalls_nach(bestand: Path) -
         assert store.link_for(KAMPAGNE, "100000000000001") is not None
 
 
-def test_die_uebersicht_zeigt_den_schalter_je_kampagne(
-    client: TestClient, bestand: Path
-) -> None:
-    """Ohne ihn waere die Angabe nur beim Anlegen erreichbar."""
-    seite = client.get("/").text
-    assert "k-kommentare" in seite
-    assert "checked" not in seite.split("k-kommentare")[1][:80]
-
-    client.post(f"/kampagnen/{KAMPAGNE}/texte", json={"kommentare": True})
-    seite = client.get("/").text
-    assert "checked" in seite.split("k-kommentare")[1][:80]
+def test_die_uebersicht_zeigt_keinen_schalter_mehr(client: TestClient) -> None:
+    """Eine Frage, die in jeder Zeile stand und in keiner beantwortet wurde."""
+    assert "k-kommentare" not in client.get("/").text

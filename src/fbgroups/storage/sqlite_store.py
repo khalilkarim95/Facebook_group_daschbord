@@ -183,9 +183,13 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
     # gesetzt, ist genau das, was hier vermieden werden soll - ihn dorthin zu
     # kopieren waere eine Behauptung, er tauge dafuer.
     #
-    # ``campaigns.kommentare`` startet auf 0: Eine laufende Kampagne aendert
-    # ihre Arbeitsweise nicht dadurch, dass jemand eine neue Fassung
-    # ausrollt. Wer Kommentare will, schaltet sie ein.
+    # ``campaigns.kommentare`` startete auf 0: Eine laufende Kampagne sollte
+    # ihre Arbeitsweise nicht dadurch aendern, dass jemand eine neue Fassung
+    # ausrollt. Seit dem 28.08.2026 entstehen Kommentare fuer jede Kampagne,
+    # und die Spalte wird nicht mehr gelesen. Der Schritt bleibt unveraendert
+    # stehen - eine Datei, die ihn schon ausgefuehrt hat, fuehrt ihn nie
+    # wieder aus, und ein nachtraeglich geaenderter Schritt wirkte deshalb
+    # nur auf Dateien, die noch gar nicht so weit sind.
     13: (
         "ALTER TABLE campaign_groups ADD COLUMN kommentar_text TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE campaign_groups ADD COLUMN kommentar_generated TEXT NOT NULL DEFAULT ''",

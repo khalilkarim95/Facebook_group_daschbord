@@ -413,11 +413,6 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
                     "passend": sum(1 for g in groups if passt(g, regel)),
                     "bestand": len(groups),
                 },
-                # Fuehrt diese Kampagne auch Kommentartexte? Sichtbar in der
-                # Zeile und dort umschaltbar: Ohne das waere die Angabe nur
-                # beim Anlegen erreichbar, und jede bestehende Kampagne
-                # brauchte die Kommandozeile.
-                "kommentare": c.kommentare,
                 "gruppen": len(links.get(c.campaign_id, [])),
                 # Wie weit die Kampagne beim Veroeffentlichen ist - in
                 # derselben Zeile wie ihre Trichterzahlen. Ohne Beitrag gibt es
@@ -544,14 +539,10 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
         f"{' · nimmt neue Funde automatisch auf' if c['regel']['auto_assign'] else ''}"
         f"</span>"
         f"<span class='k-kennung'><code>{html.escape(c['id'])}</code></span>"
-        # Beitrag immer, Kommentar auf Wunsch. Der Haken steht bei der
-        # Kampagne und nicht bei der Gruppe: "wir kommentieren hier" ist eine
-        # Entscheidung ueber die Arbeitsweise, keine ueber eine Gruppe.
-        f"<label class='k-texte' title='Erzeugt zusaetzlich einen kurzen "
-        f"Kommentartext je Gruppe - eigene Vorlagen, eigener Kopierknopf.'>"
-        f"<input type='checkbox' class='k-kommentare' "
-        f"data-id=\"{html.escape(c['id'])}\"{' checked' if c['kommentare'] else ''}>"
-        f" Kommentare</label></td>"
+        # Kein Haken fuer Kommentare mehr: Beitrag **und** Kommentar
+        # entstehen fuer jede Kampagne. Der Schalter war eine Frage, die in
+        # jeder Zeile stand und in keiner beantwortet werden musste.
+        f"</td>"
         f"<td><select class='k-status' data-id=\"{html.escape(c['id'])}\" "
         f"data-vorher=\"{html.escape(c['status'])}\">"
         f"{status_auswahl(c['status'])}"
@@ -836,8 +827,6 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   }}
   .knopfzelle {{ display: flex; gap: 6px; }}
   .k-regel {{ cursor: pointer; padding: 6px 12px; border-radius: 6px; }}
-  .k-texte {{ display: block; font-size: 12px; color: var(--mittel); margin-top: 2px; }}
-  .k-texte input {{ vertical-align: -1px; margin-right: 3px; }}
   /* Der Weg zur Arbeitsseite - hervorgehoben, weil er der Einstieg in die
      eigentliche Arbeit ist und nicht eine Einstellung daneben. */
   .k-arbeit {{ padding: 6px 12px; border-radius: 6px; text-decoration: none;
@@ -873,7 +862,6 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   body.nur-lesen th.auswahl, body.nur-lesen td.auswahl,
   body.nur-lesen .knopfzelle, body.nur-lesen .k-status,
   body.nur-lesen .neu-kampagne,
-  body.nur-lesen .k-texte {{ display: none; }}
 </style>
 </head>
 <body{koerper_klasse}>
@@ -1067,32 +1055,6 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
     </label>
     <label>Landingpage
       <input type="text" id="k-landing" placeholder="https://b-tarikak.de/">
-    </label>
-    <label class="breit">Eigene Textvorlage
-      <span class="zart">– leer lassen ist der Normalfall</span>
-      <textarea id="k-vorlage" rows="2"
-        placeholder="leer = fünf Fassungen aus config/textvorlagen.yaml"></textarea>
-      <span class="zart">
-        Ein Text hier gilt für <strong>alle</strong> Gruppen der Kampagne –
-        dann klingen alle Beiträge gleich, und genau danach sucht Facebooks
-        Spam-Erkennung. Leer gelassen wählt jede Gruppe eine von fünf Fassungen.
-        Platzhalter: {{zielgruppe}}, {{stadt}}, {{link}}.
-      </span>
-    </label>
-    <label class="breit">
-      <span>Textarten
-        <span class="zart">– der Beitrag entsteht immer</span>
-      </span>
-      <span class="knopfreihe">
-        <label class="zart" style="flex-direction: row; gap: 6px;">
-          <input type="checkbox" id="k-kommentare"> auch Kommentartexte
-        </label>
-      </span>
-      <span class="zart">
-        Ein Kommentar steht unter einem fremden Beitrag: kurz, hilfreich,
-        ohne Werbeeinstieg. Er bekommt eigene Vorlagen – ein gekürzter
-        Beitrag als Kommentar liest sich wie eingeworfene Werbung.
-      </span>
     </label>
     <div class="breit knopfreihe">
       <button id="k-anlegen">Anlegen</button>
@@ -1611,8 +1573,11 @@ document.getElementById("k-anlegen")?.addEventListener("click", async (e) => {{
         cities: gewaehlteWerte("k-staedte"),
         language: document.getElementById("k-sprache").value.trim(),
         landing_page: document.getElementById("k-landing").value.trim(),
-        message_template: document.getElementById("k-vorlage").value,
-        kommentare: document.getElementById("k-kommentare").checked,
+        // Eigene Textvorlage und Kommentar-Haken stehen hier nicht mehr:
+        // Die Vorlage galt fuer ALLE Gruppen der Kampagne und war der
+        // haeufigste Griff daneben, und die Textarten sind in der
+        // Kampagnenzeile umschaltbar. Beides bleibt erreichbar - ueber
+        // "campaign set <kampagne> --vorlage ..." und den Haken in der Zeile.
       }}),
     }});
     const ergebnis = await antwort.json();
@@ -1740,32 +1705,6 @@ document.addEventListener("click", (ereignis) => {{
   block.open = true;
   regelAnzeigen(knopf.dataset.id);
   block.scrollIntoView({{behavior: "smooth", block: "nearest"}});
-}});
-
-// Kommentartexte an oder aus. Es entsteht dabei nichts - die Texte kommen
-// beim naechsten "Texte erzeugen"; ein vorhandener Kommentar bleibt stehen,
-// auch wenn der Haken faellt.
-document.addEventListener("change", async (ereignis) => {{
-  const feld = ereignis.target;
-  if (!feld.classList.contains("k-kommentare")) return;
-  const an = feld.checked;
-  feld.disabled = true;
-  try {{
-    const antwort = await fetch(
-      "/kampagnen/" + encodeURIComponent(feld.dataset.id) + "/texte",
-      {{
-        method: "POST",
-        headers: {{"Content-Type": "application/json"}},
-        body: JSON.stringify({{kommentare: an}}),
-      }},
-    );
-    if (!antwort.ok) throw new Error("HTTP " + antwort.status);
-  }} catch (fehler) {{
-    feld.checked = !an;
-    alert("Konnte die Textarten nicht aendern: " + fehler.message);
-  }} finally {{
-    feld.disabled = false;
-  }}
 }});
 
 document.addEventListener("change", async (ereignis) => {{

@@ -152,9 +152,6 @@ class Gruppenarbeit:
     nummer: int = 1
     gesamt: int = 1
     zustand: QueueZustand = QueueZustand.LAUFEND
-    # Fuehrt die Kampagne ueberhaupt Kommentare? Ist sie es nicht, steht die
-    # rechte Spalte trotzdem - aber mit dem Hinweis, wo man das umschaltet.
-    kommentare_erwuenscht: bool = True
 
     @property
     def name(self) -> str:
@@ -298,14 +295,15 @@ def stelle_texte_bereit(
     unveraenderten Regel: Der erzeugte Text wird immer aufgefrischt, der
     laufende nur, wenn dort noch nichts steht.
 
-    Der Kommentar entsteht nur, wenn die Kampagne welche fuehrt: Ein Text, den
-    niemand braucht, ist ein Text, den jemand durchlesen muss.
+    **Beide Zwecke entstehen immer** (seit dem 28.08.2026). Vorher hing der
+    Kommentar an einem Haken der Kampagne; der stand in jeder Zeile und musste
+    in keiner beantwortet werden. Wer in einer Gruppe postet, kommentiert dort
+    auch - und ein Kommentar zu viel kostet einen Blick, ein fehlender einen
+    Handgriff.
     """
     from fbgroups.marketing import vorlagen
 
-    zwecke = [Texttyp.POST]
-    if campaign.kommentare:
-        zwecke.append(Texttyp.KOMMENTAR)
+    zwecke = list(Texttyp)
 
     entstanden: dict[Texttyp, int] = {}
     for texttyp in zwecke:
@@ -352,6 +350,7 @@ def hole_gruppenarbeit(
     store: MarketingStore,
     campaign: Campaign,
     gruppen: dict[str, Group],
+    config: AppConfig,
     *,
     nummer: int = 1,
     group_id: str = "",
@@ -366,6 +365,10 @@ def hole_gruppenarbeit(
 
     ``group_id`` geht vor ``nummer``: Wer eine bestimmte Gruppe meint, meint
     sie auch dann noch, wenn sich die Rangfolge zwischendurch geaendert hat.
+
+    ``config`` geht bis in ``beitrag.mit_link`` durch: Dort wird ``{datum}``
+    aufgeloest, und dafuer braucht es die Sprache der Kampagne und die
+    Monatsnamen aus ``textvorlagen.yaml``.
 
     ``reihe`` darf mitgegeben werden, wenn der Aufrufer sie ohnehin schon hat
     (die Auswahlliste braucht sie auch). Dieselbe Liste fuer beide ist keine
@@ -389,12 +392,11 @@ def hole_gruppenarbeit(
     return Gruppenarbeit(
         link=link,
         gruppe=gruppen.get(link.group_id),
-        posts=_fassungen(store, campaign, link, Texttyp.POST),
-        kommentare=_fassungen(store, campaign, link, Texttyp.KOMMENTAR),
+        posts=_fassungen(store, campaign, link, Texttyp.POST, config),
+        kommentare=_fassungen(store, campaign, link, Texttyp.KOMMENTAR, config),
         nummer=nummer,
         gesamt=len(reihe),
         zustand=store.queue_zustand(campaign.campaign_id),
-        kommentare_erwuenscht=bool(campaign.kommentare),
     )
 
 
@@ -517,6 +519,7 @@ def _fassungen(
     campaign: Campaign,
     link: CampaignGroup,
     texttyp: Texttyp,
+    config: AppConfig,
 ) -> list[Fassung]:
     """Die gespeicherten Fassungen eines Zwecks, fertig gelesen.
 
@@ -525,6 +528,9 @@ def _fassungen(
     kommt.
     """
     return [
-        Fassung(vorschlag=vorschlag, angezeigt=mit_link(campaign, link, vorschlag.text))
+        Fassung(
+            vorschlag=vorschlag,
+            angezeigt=mit_link(campaign, link, vorschlag.text, config=config),
+        )
         for vorschlag in store.vorschlaege(campaign.campaign_id, link.group_id, texttyp)
     ]

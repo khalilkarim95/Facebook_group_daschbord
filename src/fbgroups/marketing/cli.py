@@ -789,7 +789,7 @@ def campaign_message(
     for texttyp in Texttyp:
         if gewuenscht and texttyp.value != gewuenscht:
             continue
-        text = beitragstext(campaign, link, texttyp)
+        text = beitragstext(campaign, link, texttyp, config=config)
         # Ohne ausdruecklichen Wunsch nur zeigen, was es gibt: Eine leere
         # Kommentarkachel unter jedem Beitrag waere eine Meldung ueber eine
         # Kampagne, die gar keine Kommentare fuehrt.
@@ -1092,9 +1092,9 @@ def campaign_text(
     Hand ueberarbeiteter oder freigegebener Text ist Arbeit eines Menschen; ein
     Sammelbefehl macht sie nicht beilaeufig zunichte.
 
-    Welche Textarten entstehen, sagt die Kampagne (``kommentare``); ``--typ``
-    ueberstimmt das fuer diesen einen Lauf. Beide Arten haben eigene Vorlagen
-    und eigene Felder - ein Beitrag wird nie als Kommentar wiederverwendet.
+    Ohne ``--typ`` entstehen **beide** Textarten; ``--typ`` schraenkt den Lauf
+    auf eine ein. Beide haben eigene Vorlagen und eigene Felder - ein Beitrag
+    wird nie als Kommentar wiederverwendet.
     """
     if not aus_vorlage:
         console.print(
@@ -1139,9 +1139,7 @@ def campaign_text(
                 console.print(f"[red]Unbekannter Texttyp:[/red] {typ}")
                 raise typer.Exit(code=2) from None
         else:
-            zwecke = [Texttyp.POST]
-            if campaign.kommentare:
-                zwecke.append(Texttyp.KOMMENTAR)
+            zwecke = list(Texttyp)
 
         links = store.links_for_campaign(campaign_id)
         betroffen = [
@@ -1583,7 +1581,7 @@ def campaign_next(
         for nummer, link in enumerate(links, start=1):
             group = gruppen.get(link.group_id)
             name = (group.name if group else "") or link.group_id
-            text = beitragstext(campaign, link)
+            text = beitragstext(campaign, link, config=config)
 
             kopiert = False if keine_zwischenablage else in_zwischenablage(text)
             geoeffnet = (

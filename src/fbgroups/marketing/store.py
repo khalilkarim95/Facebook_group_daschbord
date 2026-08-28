@@ -74,8 +74,11 @@ CREATE TABLE IF NOT EXISTS campaigns (
     target_min_score        REAL,
     target_include_unscored INTEGER NOT NULL DEFAULT 0,
     auto_assign             INTEGER NOT NULL DEFAULT 0,
-    -- Braucht diese Kampagne neben dem Beitrag auch Kommentartexte?
-    kommentare              INTEGER NOT NULL DEFAULT 0,
+    -- Trug einmal die Frage "braucht diese Kampagne Kommentartexte?".
+    -- Seit dem 28.08.2026 entstehen sie fuer jede Kampagne; die Spalte bleibt,
+    -- weil Migrationen hier additiv sind, und wird auf 1 geschrieben, damit
+    -- eine aeltere Fassung des Programms dieselbe Datei nicht anders liest.
+    kommentare              INTEGER NOT NULL DEFAULT 1,
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL
 );
@@ -563,7 +566,8 @@ class MarketingStore:
                 campaign.target_min_score,
                 int(campaign.target_include_unscored),
                 int(campaign.auto_assign),
-                int(campaign.kommentare),
+                # Konstante 1: Die Kampagne entscheidet das nicht mehr.
+                1,
                 _iso(campaign.created_at),
                 _iso(campaign.updated_at),
             ),
@@ -2229,7 +2233,6 @@ class MarketingStore:
             target_min_score=row["target_min_score"],
             target_include_unscored=bool(row["target_include_unscored"]),
             auto_assign=bool(row["auto_assign"]),
-            kommentare=bool(row["kommentare"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

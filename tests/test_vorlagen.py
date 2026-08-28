@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from datetime import datetime
 
 import pytest
 
@@ -25,6 +26,7 @@ from fbgroups.marketing.vorlagen import (
     VorlageFehlt,
     erzeuge,
     fuelle,
+    monat_jetzt,
     personalisierung,
     pruefe,
     schluessel_fuer,
@@ -64,9 +66,20 @@ def kampagne(sprache: str = "ar", audiences: list[str] | None = None) -> Campaig
 
 
 def test_stadt_und_zielgruppe_stehen_arabisch_im_text(config: AppConfig) -> None:
+    """Im Beitrag stehen die arabischen Namen, nie die deutschen aus dem Bestand.
+
+    Die Anrede wird an der ``Personalisierung`` geprueft und nicht am fertigen
+    Text: Seit dem 28.08.2026 sprechen die arabischen Beitragsvorlagen die
+    Zielgruppe nicht mehr an, sondern nennen ihr Reiseziel ({ziel}). Am
+    fertigen Text gemessen pruefte dieser Test damit die Vorlage und nicht die
+    Ableitung.
+    """
+    daten = personalisierung(gruppe(), kampagne("ar"), config)
+    assert daten.stadt == "بون"
+    assert daten.zielgruppe == "السوريين"
+
     _, text = erzeuge(gruppe(), kampagne("ar"), config)
     assert "بون" in text
-    assert "السوريين" in text
     assert "Bonn" not in text
 
 
@@ -108,6 +121,57 @@ def test_ein_erfundener_platzhalter_wird_abgewiesen() -> None:
     daten = Personalisierung(zielgruppe="Syrer", stadt="Bonn")
     with pytest.raises(UnbekannterPlatzhalter):
         fuelle("Hallo {beruf} in {stadt}: {link}", daten)
+
+
+# -- Ziel, Gegenstand, Datum ------------------------------------------------
+
+
+def test_das_ziel_kommt_von_der_zielgruppe(config: AppConfig) -> None:
+    """``{ziel}`` ist ein Land, keine Anrede.
+
+    "من بون إلى السوريين" waere kein Reiseziel, sondern ein Satzfehler - die
+    Anrede steht im Genitiv Plural. Deshalb ein eigenes Feld an der
+    Zielgruppe und nicht der Rueckfall auf ``label_ar``.
+    """
+    daten = personalisierung(gruppe(), kampagne("ar"), config)
+    assert daten.ziel == "سوريا"
+    assert daten.ziel != daten.zielgruppe
+
+
+def test_eine_zielgruppe_ohne_land_faellt_auf_den_allgemeinen_wert(
+    config: AppConfig,
+) -> None:
+    """"arabs" ist kein Reiseziel - hier greift ``ziel_allgemein``.
+
+    Ein erfundenes Land waere schlimmer als ein allgemeines Wort: Es stuende
+    als Behauptung ueber die Gruppe in einem Beitrag, den 300 Menschen lesen.
+    """
+    daten = personalisierung(
+        gruppe(tags=["arabs"]), kampagne("ar", audiences=["arabs"]), config
+    )
+    assert daten.ziel == "الوطن"
+
+
+def test_das_datum_bleibt_beim_fuellen_stehen(config: AppConfig) -> None:
+    """``{datum}`` gehoert ``beitrag.mit_link``, nicht diesem Modul.
+
+    Es traegt den laufenden Monat. Beim Erzeugen eingesetzt und gespeichert
+    stuende in einem Beitrag, der drei Wochen spaeter hinausgeht, der Monat
+    von damals - eine Frage nach Reisenden im letzten Monat ist falsch.
+    """
+    daten = personalisierung(gruppe(), kampagne("ar"), config)
+    assert fuelle("Wer reist in {datum}? {link}", daten) == "Wer reist in {datum}? {link}"
+
+
+def test_der_monatsname_ist_levantinisch(config: AppConfig) -> None:
+    """"أيلول" und nicht "سبتمبر" - der Zielmarkt sind syrische Communities.
+
+    ``jetzt`` statt des echten Kalenders: Ein Test, der die Uhr liest, prueft
+    im August etwas anderes als im September.
+    """
+    september = datetime(2026, 9, 15)
+    assert monat_jetzt(config, "ar", jetzt=september) == "أيلول"
+    assert monat_jetzt(config, "de", jetzt=september) == "September"
 
 
 # -- Die beiden Toepfe ------------------------------------------------------
@@ -206,21 +270,24 @@ def test_die_zielgruppe_der_kampagne_gewinnt_bei_mehreren_tags(config: AppConfig
     Beide Tags sind richtig; die Kampagne entscheidet, welcher angesprochen
     wird - sonst haengt die Anrede an der Reihenfolge der Klassifikation.
     """
-    _, text = erzeuge(
+    daten = personalisierung(
         gruppe(tags=["arabs", "syrians"]), kampagne("ar", audiences=["syrians"]), config
     )
-    assert "السوريين" in text
-    assert "العرب" not in text
+    assert daten.zielgruppe == "السوريين"
+    assert daten.ziel == "سوريا"
 
 
 def test_gruppe_ohne_tag_erbt_die_zielgruppe_der_kampagne(config: AppConfig) -> None:
-    _, text = erzeuge(gruppe(tags=[]), kampagne("ar", audiences=["syrians"]), config)
-    assert "السوريين" in text
+    daten = personalisierung(gruppe(tags=[]), kampagne("ar", audiences=["syrians"]), config)
+    assert daten.zielgruppe == "السوريين"
 
 
 def test_ohne_jede_zielgruppe_die_allgemeine_anrede(config: AppConfig) -> None:
+    daten = personalisierung(gruppe(tags=[]), kampagne("ar", audiences=[]), config)
+    assert daten.zielgruppe == "الأصدقاء"
+
+    # Und im fertigen Text bleibt kein offener Platzhalter stehen.
     _, text = erzeuge(gruppe(tags=[]), kampagne("ar", audiences=[]), config)
-    assert "الأصدقاء" in text
     assert "{zielgruppe}" not in text
 
 
@@ -311,7 +378,7 @@ def test_die_kennung_ueberlebt_das_umsortieren(config: AppConfig) -> None:
 
 def test_ein_gespeicherter_schluessel_wird_wiederverwendet(config: AppConfig) -> None:
     """Der Text darf sich nicht aendern, nur weil neu gefuellt wird."""
-    fest = f"ar/post/{MIT_STADT}/einladung"
+    fest = f"ar/post/{MIT_STADT}/reisende"
     schluessel, text = erzeuge(gruppe(), kampagne("ar"), config, schluessel=fest)
     assert schluessel == fest
     assert text == fuelle(
@@ -336,7 +403,7 @@ def test_ein_alter_schluessel_zeigt_weiter_auf_dieselbe_vorlage(
     Fuellen eine andere Vorlage, ohne dass jemand etwas geaendert hat.
     """
     alt = vorlage_zu(config, f"ar/{MIT_STADT}/3")
-    neu = vorlage_zu(config, f"ar/post/{MIT_STADT}/alltag")
+    neu = vorlage_zu(config, f"ar/post/{MIT_STADT}/frage")
     assert alt == neu
 
 

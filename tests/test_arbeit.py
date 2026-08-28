@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from fbgroups.config import load_config
 from fbgroups.marketing.arbeit import (
     Ergebnis,
     Grund,
@@ -77,7 +78,6 @@ def bestand(tmp_path: Path) -> Path:
                 language="ar",
                 audiences=["syrians"],
                 landing_page="https://b-tarikak.de/",
-                kommentare=True,
             )
         )
         for gid, (_, code, _) in GRUPPEN.items():
@@ -119,7 +119,9 @@ def gefuellt(store: MarketingStore, campaign: Campaign, gruppen, config) -> None
 
 
 def hole(store, campaign, gruppen, **kwargs) -> Gruppenarbeit:
-    stand = hole_gruppenarbeit(store, campaign, gruppen, **kwargs)
+    # ``config`` geht bis in ``beitrag.mit_link`` durch - dort wird {datum}
+    # aufgeloest. Die echte Projektkonfiguration, wie die ``config``-Fixture.
+    stand = hole_gruppenarbeit(store, campaign, gruppen, load_config(), **kwargs)
     assert stand is not None
     return stand
 

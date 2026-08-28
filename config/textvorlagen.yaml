@@ -49,6 +49,18 @@
 #                 das zuerst.
 #                 DEUTSCH: label_kurz_de steht im Nominativ Plural ("Syrer").
 #                 "Wer von euch {zielgruppe}" waere Dativ und damit falsch.
+#   {ziel}        Wohin die Reise geht - ziel_ar/ziel_de der Zielgruppe
+#                 ("سوريا"). Hat die Zielgruppe kein einzelnes Land (arabs),
+#                 greift "ziel_allgemein" weiter unten.
+#   {gegenstand}  Was verschickt wird ("غرض"). In den Vorlagen folgt "صغير"
+#                 darauf, der Wert muss also maennlich, unbestimmt und
+#                 Einzahl sein - "أمانة" waere weiblich und ergaebe
+#                 "أمانة صغير".
+#   {datum}       Der laufende Monat ("آب"). WIRD HIER NICHT ERSETZT, sondern
+#                 erst beim Lesen in "beitrag.mit_link" - wie {link}. Ein beim
+#                 Erzeugen eingesetzter Monat stuende noch im Text, wenn der
+#                 Beitrag drei Wochen spaeter hinausgeht, und ein Beitrag, der
+#                 nach Reisenden im letzten Monat fragt, ist falsch.
 #   {link}        Der Tracking-Link. WIRD HIER NICHT ERSETZT: Er kommt erst
 #                 beim Lesen in "beitrag.beitragstext" hinein, damit kein
 #                 Sprachmodell je einen Tracking-Code zu sehen bekommt.
@@ -57,7 +69,7 @@
 #                 gutgeschrieben bekommt. "vorlagen.pruefe" weist das ab,
 #                 statt es durchgehen zu lassen.
 #
-# Ein anderer Platzhalter als diese sechs ist ein Fehler und keine Freiheit:
+# Ein anderer Platzhalter als diese ist ein Fehler und keine Freiheit:
 # Er bliebe in geschweiften Klammern im Beitrag stehen. "vorlagen.pruefe"
 # meldet ihn, und das Fuellen bricht fuer diese eine Gruppe ab.
 #
@@ -86,56 +98,110 @@ anrede_allgemein:
   ar: الأصدقاء
   de: Freunde
 
+# Das Reiseziel, wenn die Zielgruppe keines nennt ({ziel}). "arabs" ist kein
+# Land; "الوطن" ist die Antwort, die keine Behauptung ueber die Gruppe
+# aufstellt - und in jeden der Saetze passt, in denen {ziel} vorkommt.
+ziel_allgemein:
+  ar: الوطن
+  de: die Heimat
+
+# Was verschickt wird ({gegenstand}). Ein Wort, nicht mehrere Fassungen: In
+# den Vorlagen steht "{gegenstand} صغير" - jede Fassung muesste dieselbe
+# Genus- und Numerusform haben, und dann sind es fuenf Woerter fuer einen
+# Unterschied, den niemand liest.
+gegenstand_allgemein:
+  ar: غرض
+  de: Gegenstand
+
+# Monatsnamen fuer {datum}, eingesetzt beim Lesen. Levantinisch (آب, أيلول)
+# und nicht die aegyptisch-arabische Reihe (أغسطس, سبتمبر): Der Zielmarkt sind
+# syrische und arabische Communities in Deutschland, und in einer syrischen
+# Gruppe klingt "سبتمبر" nach Fremdsprache.
+monate:
+  ar: [كانون الثاني, شباط, آذار, نيسان, أيّار, حزيران, تموز, آب, أيلول,
+       تشرين الأول, تشرين الثاني, كانون الأول]
+  de: [Januar, Februar, März, April, Mai, Juni, Juli, August, September,
+       Oktober, November, Dezember]
+
 vorlagen:
 
   ar:
 
     # ----------------------------------------------------------------- POST
     post:
+      # Die fuenf Fassungen, die der Nutzer vorgegeben hat (28.08.2026). Drei
+      # Zusicherungen stehen in JEDER von ihnen und sind keine Formulierung,
+      # sondern die Grenze der App: sie vermittelt nur, sie kennt keinen Preis,
+      # und sie wickelt keine Zahlung ab. Wer eine sechste Fassung schreibt,
+      # schreibt sie mit - ein Beitrag, der Bezahlung, Zustellgarantie oder
+      # Versicherung verspricht, verspricht etwas, das es nicht gibt.
       mit_stadt:
+        - id: suche
+          text: |
+            هل يوجد شخص مسافر من {stadt} إلى {ziel} قريبًا؟
+
+            أحتاج إلى إرسال {gegenstand} صغير إلى هناك، ووجدت منصة «بطريقك»
+            التي تربط الأشخاص الذين يريدون إرسال أغراض صغيرة بالمسافرين الذين
+            لديهم مساحة في أمتعتهم.
+
+            التطبيق مجرد وسيط ولا تتم من خلاله أي عملية دفع أو تحديد سعر.
+
+            لمن يريد معرفة التفاصيل:
+            {link}
+
+        - id: reisende
+          text: |
+            إذا كنت مسافرًا من {stadt} إلى {ziel} ولديك مساحة صغيرة إضافية في
+            حقيبتك، قد تهمك منصة «بطريقك».
+
+            المنصة تربط المسافرين بأشخاص يريدون إرسال أغراض صغيرة مثل الوثائق
+            أو الهدايا أو الأجهزة.
+
+            لا يوجد سعر أو نظام دفع داخل التطبيق، فهو يعمل كوسيط للتواصل فقط.
+
+            التفاصيل هنا:
+            {link}
+
         - id: frage
           text: |
-            مَن مِن {zielgruppe} في {stadt} مسافر إلى بلده قريبًا؟
+            سؤال لأهل {stadt}:
 
-            كثيرون هنا يريدون إرسال أمانة صغيرة إلى أهلهم، وكثير من المسافرين
-            عندهم متّسع في الحقيبة. تطبيق «بطريقك» (B-Tarikak) يجمع الطرفين.
+            هل سبق لأحد أن احتاج إلى إرسال غرض صغير إلى سوريا أو منها ولم يجد
+            مسافرًا مناسبًا؟
 
+            وجدت منصة اسمها «بطريقك» مخصصة لهذا الأمر، حيث تربط صاحب الغرض
+            بالمسافر الذي لديه مساحة في حقيبته.
+
+            يمكن الاطلاع على طريقة عملها هنا:
             {link}
 
-        - id: einladung
+        # "في {datum}" und nicht "بتاريخ {datum}": {datum} traegt einen
+        # Monatsnamen, und "بتاريخ" verlangt ein volles Datum.
+        - id: termin
           text: |
-            أهلًا بأهلنا {zielgruppe} في {stadt} 👋
+            هل يوجد أحد مسافر من {stadt} إلى {ziel} في {datum}؟
 
-            أنشأنا «بطريقك» (B-Tarikak) لسبب بسيط: أن يجد المسافرُ مَن يوصّل له
-            أمانته، وأن يجد صاحبُ الأمانة مسافرًا يثق به.
+            أبحث عن طريقة لإيصال {gegenstand} صغير، ووجدت «بطريقك»، وهي منصة
+            تربط المسافرين بالأشخاص الذين يريدون إرسال أغراض صغيرة.
 
-            انضمّوا إلينا من هنا:
+            المهم أن المنصة لا تتعامل مع الأموال ولا تحتوي على حقل للأسعار.
+
+            المزيد من المعلومات:
             {link}
 
-        - id: alltag
+        - id: hinweis
           text: |
-            أمانة صغيرة بقيت في الدرج شهورًا، وأنت تنتظر مسافرًا إلى هناك.
+            مشاركة معلومة لمن يعيش في {stadt} أو يسافر منها وإليها:
 
-            هذا بالضبط ما يحلّه «بطريقك» (B-Tarikak): مسافرون من {stadt} وإليها،
-            وأمانات تنتظر مَن يحملها. ومجتمع {zielgruppe} أولى الناس بها.
+            وجدت منصة «بطريقك» لفكرة بسيطة: مسافر لديه مساحة فارغة في حقيبته
+            يمكنه التواصل مع شخص يريد إرسال غرض صغير من سوريا أو إليها.
 
-            {link}
+            يمكن أن يكون الغرض وثائق أو جهازًا أو هدية وغيرها من الأغراض
+            الصغيرة.
 
-        - id: kurz
-          text: |
-            إلى {zielgruppe} في {stadt}: مسافر، أو تريد إرسال أمانة؟
-            «بطريقك» (B-Tarikak) يجمع بينكما.
+            المنصة نفسها مجرد وسيط ولا يتم من خلالها تحويل الأموال.
 
-            {link}
-
-        - id: ablauf
-          text: |
-            إلى {zielgruppe} في {stadt} — كيف يعمل «بطريقك» (B-Tarikak)؟
-
-            • المسافر يسجّل رحلته والمساحة المتاحة عنده
-            • صاحب الأمانة يبحث عن رحلة تناسبه
-            • تتّفقون على التفاصيل بينكم مباشرة
-
+            رابط المنصة:
             {link}
 
       ohne_stadt:
@@ -188,33 +254,38 @@ vorlagen:
     # Kurz, reagierend, ohne Begruessung: Der Beitrag darueber hat schon einen
     # Anlass; ein zweiter Anlass daneben liest sich wie eingeworfene Werbung.
     kommentar:
+      # Die fuenf Kommentarfassungen des Nutzers (28.08.2026). "erklaerung"
+      # nennt keine Stadt und steht trotzdem hier: Nur {stadt} in "ohne_stadt"
+      # ist ein Fehler, umgekehrt nicht.
       mit_stadt:
         - id: hilfreich
           text: |
-            إن كان أحد هنا في {stadt} يريد إرسال أمانة إلى أهله، فهناك تطبيق
-            يجمع المسافرين بأصحاب الأمانات:
+            إذا كان هناك مسافر من {stadt} إلى {ziel}، ربما تكون منصة «بطريقك»
+            مفيدة لهذا النوع من الإرسال:
+            {link}
+
+        - id: erklaerung
+          text: |
+            فكرة «بطريقك» هي الربط بين المسافر وصاحب الغرض، خصوصًا للأغراض
+            الصغيرة من وإلى سوريا. لا يوجد دفع أو سعر داخل التطبيق:
             {link}
 
         - id: direkt
           text: |
-            لمن يبحث عن مسافر من {stadt} إلى بلده: «بطريقك» (B-Tarikak).
+            لمن يبحث عن مسافر من {stadt} إلى {ziel}، يمكنه الاطلاع على «بطريقك»
+            هنا:
             {link}
 
-        - id: empfehlung
+        - id: reisende
           text: |
-            فكرة «بطريقك» (B-Tarikak) بسيطة: مسافر من {stadt} عنده متّسع في
-            الحقيبة، وأمانة تنتظر مَن يحملها. ربما تنفعكم:
+            إذا كنت مسافرًا من {stadt} ولديك مساحة في الحقيبة، يمكنك التعرف على
+            «بطريقك» هنا:
             {link}
 
-        - id: frage
+        - id: passend
           text: |
-            هل تبحث عن مسافر من {stadt} إلى بلدك هذا الشهر؟ هنا تجد مَن سجّل
-            رحلته:
-            {link}
-
-        - id: kurz
-          text: |
-            ربما يفيد أهلنا {zielgruppe} في {stadt}:
+            قد تكون «بطريقك» مناسبة إذا كان المطلوب إرسال {gegenstand} صغير مع
+            مسافر بين {stadt} و{ziel}. التطبيق وسيط فقط:
             {link}
 
       ohne_stadt:

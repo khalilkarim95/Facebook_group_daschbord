@@ -57,7 +57,6 @@ def bestand(tmp_path: Path) -> Path:
                 language="ar",
                 audiences=["syrians"],
                 landing_page="https://b-tarikak.de/",
-                kommentare=True,
             )
         )
         for i, gruppe in enumerate(gruppen, 1):

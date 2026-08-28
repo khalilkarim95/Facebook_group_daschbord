@@ -21,10 +21,16 @@ ist keine Bequemlichkeit, sondern die Voraussetzung dafuer, dass ein
 Sprachmodell den gespeicherten Text ueberarbeiten darf, ohne je einen Code zu
 sehen. Was das Modell nie bekommt, kann es nicht verfaelschen.
 
-Ersetzt werden ausschliesslich ``{zielgruppe}``, ``{stadt}`` und ``{gruppe}``:
-Angaben, die zu *dieser* Gruppe gehoeren, sich nicht mehr aendern und deshalb
-mitgespeichert werden duerfen. So steht in ``generated_text`` genau das, was
-hinausgeht - abgesehen von dem einen Link.
+Ersetzt werden ausschliesslich ``{zielgruppe}``, ``{stadt}``, ``{ziel}``,
+``{gegenstand}`` und ``{gruppe}``: Angaben, die zu *dieser* Gruppe gehoeren,
+sich nicht mehr aendern und deshalb mitgespeichert werden duerfen. So steht in
+``generated_text`` genau das, was hinausgeht - abgesehen von dem einen Link.
+
+``{datum}`` gehoert ausdruecklich **nicht** dazu, obwohl es kein Link ist. Es
+traegt den laufenden Monat, und der aendert sich; eingesetzt und gespeichert
+stuende in einem Beitrag, der drei Wochen nach dem Erzeugen hinausgeht, der
+Monat von damals. Deshalb geht es wie ``{link}`` durch und wird erst in
+``beitrag.mit_link`` aufgeloest.
 """
 
 from __future__ import annotations
@@ -32,6 +38,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from fbgroups.config import AppConfig, Audience, City
@@ -46,10 +53,26 @@ PLATZHALTER_LINK = "{link}"
 #: ein Fehler und keine Freiheit: Es bliebe unersetzt im Beitrag stehen, und
 #: das faellt erst auf, wenn er in der Gruppe steht.
 #:
-#: Die ersten drei loest dieses Modul auf, die letzten drei
-#: ``beitrag.beitragstext`` beim Lesen.
+#: Die ersten fuenf loest dieses Modul auf, die letzten vier
+#: ``beitrag.mit_link`` beim Lesen.
+#:
+#: ``datum`` steht bei den spaeten: Ein beim Erzeugen eingesetzter Monatsname
+#: bliebe im gespeicherten Text stehen, und der Beitrag ginge drei Wochen
+#: spaeter mit dem Monat von damals hinaus. ``zielgruppe``, ``stadt``,
+#: ``ziel`` und ``gegenstand`` sind dagegen Angaben ueber *diese* Gruppe, die
+#: sich nicht mehr aendern - sie duerfen mitgespeichert werden.
 ERLAUBTE_PLATZHALTER = frozenset(
-    {"zielgruppe", "stadt", "gruppe", "link", "tracking_code", "landing_page"}
+    {
+        "zielgruppe",
+        "stadt",
+        "ziel",
+        "gegenstand",
+        "gruppe",
+        "link",
+        "tracking_code",
+        "landing_page",
+        "datum",
+    }
 )
 
 _PLATZHALTER_MUSTER = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
@@ -186,6 +209,12 @@ class Personalisierung:
     zielgruppe: str
     stadt: str
     gruppe: str = ""
+    # Wohin die Reise geht ("سوريا") und was verschickt wird ("غرض"). Beides
+    # steht in der Konfiguration und nicht im Text: Eine Vorlage, die "سوريا"
+    # ausschreibt, ist fuer eine irakische Kampagne falsch, und man sieht es
+    # ihr nicht an.
+    ziel: str = ""
+    gegenstand: str = ""
 
     @property
     def topf(self) -> str:
@@ -266,6 +295,36 @@ def _allgemeine_anrede(config: AppConfig, sprache: str) -> str:
     return str(anreden.get(sprache, "")).strip()
 
 
+def _aus_textvorlagen(config: AppConfig, block: str, sprache: str) -> str:
+    """Ein sprachabhaengiger Rueckfallwert aus ``textvorlagen.yaml``.
+
+    Dieselbe Form wie ``anrede_allgemein``: ein Block, darunter je Sprache ein
+    Wort. Sie stehen dort und nicht hier, weil "الوطن" statt "بلدك" und "غرض"
+    statt "طرد" Entscheidungen ueber den Tonfall eines Beitrags sind - und
+    die gehoeren zum Text.
+    """
+    werte = config.textvorlagen.get(block) or {}
+    return str(werte.get(sprache, "")).strip()
+
+
+def monat_jetzt(config: AppConfig, sprache: str, *, jetzt: datetime | None = None) -> str:
+    """Der Name des laufenden Monats fuer ``{datum}``.
+
+    ``jetzt`` gibt es allein fuer den Test: Ein Test, der den echten Kalender
+    liest, prueft im August etwas anderes als im September.
+
+    Fehlt die Liste oder ist sie unvollstaendig, kommt eine leere Zeichenkette
+    zurueck. ``config-check`` meldet das vorher; hier still auf eine
+    lateinische Zahl auszuweichen hiesse, mitten in einen arabischen Satz "8"
+    zu schreiben.
+    """
+    monate = (config.textvorlagen.get("monate") or {}).get(sprache) or []
+    nummer = (jetzt or datetime.now()).month
+    if len(monate) < 12:
+        return ""
+    return str(monate[nummer - 1]).strip()
+
+
 def personalisierung(group: Group, campaign: Campaign, config: AppConfig) -> Personalisierung:
     """Sammelt die Angaben fuer *diese* Gruppe."""
     sprache = sprache_der_kampagne(campaign, config)
@@ -279,6 +338,15 @@ def personalisierung(group: Group, campaign: Campaign, config: AppConfig) -> Per
         ),
         stadt=city.anzeige(sprache) if city else "",
         gruppe=group.name or "",
+        # Das Ziel kommt von der Zielgruppe, nicht von der Gruppe: Wer syrische
+        # Gruppen bewirbt, meint Syrien - auch wenn die Gruppe selbst in Bonn
+        # sitzt. Ohne hinterlegtes Land ("arabs") faellt es auf "الوطن"
+        # zurueck, statt eines zu erfinden.
+        ziel=(
+            (audience.ziel(sprache) if audience else "")
+            or _aus_textvorlagen(config, "ziel_allgemein", sprache)
+        ),
+        gegenstand=_aus_textvorlagen(config, "gegenstand_allgemein", sprache),
     )
 
 
@@ -440,10 +508,10 @@ def unbekannte_platzhalter(text: str) -> list[str]:
 def fuelle(text: str, daten: Personalisierung) -> str:
     """Setzt die Angaben der Gruppe ein - und **nur** diese.
 
-    ``{link}``, ``{tracking_code}`` und ``{landing_page}`` bleiben stehen. Sie
-    gehoeren ``beitrag.beitragstext``, und dass sie hier durchgehen, ist der
-    Grund, warum der gespeicherte Text einem Sprachmodell vorgelegt werden
-    darf.
+    ``{link}``, ``{tracking_code}``, ``{landing_page}`` und ``{datum}`` bleiben
+    stehen. Sie gehoeren ``beitrag.mit_link``, und dass sie hier durchgehen,
+    ist der Grund, warum der gespeicherte Text einem Sprachmodell vorgelegt
+    werden darf.
 
     Ein Platzhalter, den weder dieses Modul noch ``beitragstext`` kennt, wirft
     ``UnbekannterPlatzhalter``. Er bliebe sonst in geschweiften Klammern im
@@ -452,6 +520,8 @@ def fuelle(text: str, daten: Personalisierung) -> str:
     gefuellt = (
         text.replace("{zielgruppe}", daten.zielgruppe)
         .replace("{stadt}", daten.stadt)
+        .replace("{ziel}", daten.ziel)
+        .replace("{gegenstand}", daten.gegenstand)
         .replace("{gruppe}", daten.gruppe)
     )
     if offen := unbekannte_platzhalter(gefuellt):
@@ -625,8 +695,11 @@ def pruefe(config: AppConfig) -> list[str]:
     Beitrag auffiele: eine Vorlage ohne ``{link}`` (die Gruppe bekaeme nie
     einen Klick gutgeschrieben), ein ``{stadt}`` im Topf ``ohne_stadt`` (der
     Platzhalter bliebe unersetzt), ein erfundener Platzhalter, eine doppelt
-    vergebene Kennung (der Schluessel waere mehrdeutig) und eine Zielgruppe
-    ohne Beschriftung fuer die Sprache, in der sie angesprochen wird.
+    vergebene Kennung (der Schluessel waere mehrdeutig), eine Zielgruppe
+    ohne Beschriftung fuer die Sprache, in der sie angesprochen wird, und die
+    drei Rueckfaelle (``ziel_allgemein``, ``gegenstand_allgemein``,
+    ``monate``): Fehlt einer, wird der Platzhalter durch nichts ersetzt - ein
+    Loch mitten im Satz sieht man dem Beitrag nicht an.
     """
     fehler: list[str] = []
     alle: dict[str, Any] = config.textvorlagen.get("vorlagen") or {}
@@ -660,6 +733,23 @@ def pruefe(config: AppConfig) -> list[str]:
 
         if not _allgemeine_anrede(config, str(sprache)):
             fehler.append(f"anrede_allgemein fehlt fuer '{sprache}'.")
+
+        # Die beiden Rueckfaelle und die Monatsliste. Fehlt einer, wird der
+        # Platzhalter durch nichts ersetzt - im Beitrag steht dann ein Loch
+        # mitten im Satz, und das faellt erst in der Gruppe auf.
+        if not _aus_textvorlagen(config, "ziel_allgemein", str(sprache)):
+            fehler.append(f"ziel_allgemein fehlt fuer '{sprache}' - {{ziel}} bliebe leer.")
+        if not _aus_textvorlagen(config, "gegenstand_allgemein", str(sprache)):
+            fehler.append(
+                f"gegenstand_allgemein fehlt fuer '{sprache}' - "
+                f"{{gegenstand}} bliebe leer."
+            )
+        monate = (config.textvorlagen.get("monate") or {}).get(str(sprache)) or []
+        if len(monate) != 12:
+            fehler.append(
+                f"monate['{sprache}'] hat {len(monate)} Eintraege statt 12 - "
+                f"{{datum}} bliebe leer."
+            )
 
         # Die Anrede ist eine Angabe ueber die Zielgruppe, kein Suchbegriff.
         # Fehlt sie, faellt in der Vorlage entweder das deutsche Label in

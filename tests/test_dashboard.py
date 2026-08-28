@@ -511,6 +511,24 @@ def test_anlegen_vergibt_keinen_einzigen_code(client: TestClient, bestand: Path)
     assert neu.auto_assign is False
 
 
+def test_das_formular_bietet_keine_eigene_textvorlage_mehr(
+    bestand: Path, config
+) -> None:
+    """Sie galt fuer **alle** Gruppen der Kampagne - der haeufigste Griff daneben.
+
+    Dann klingen 310 Beitraege gleich, und genau danach sucht Facebooks
+    Spam-Erkennung. Der Weg bleibt ueber ``campaign set --vorlage``; was fehlt,
+    ist der Knopf im Formular, in dem eine Kampagne entsteht.
+
+    Der Kommentar-Haken ist seit dem 28.08.2026 ueberall weg - auch aus der
+    Kampagnenzeile: Kommentare entstehen fuer jede Kampagne.
+    """
+    seite = render(sammle_daten(config, bestand))
+
+    assert 'id="k-vorlage"' not in seite
+    assert "k-kommentare" not in seite
+
+
 def test_auswahlregel_bildet_die_beschreibung_ab(client: TestClient, bestand: Path) -> None:
     """Leer hiesse "keine Einschraenkung" - also der ganze Bestand.
 

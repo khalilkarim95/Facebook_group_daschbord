@@ -310,8 +310,13 @@ def test_unbekannter_stand_nennt_die_moeglichen(projekt: Path) -> None:
 # --- Beitrag und Kommentar auf der Kommandozeile -------------------------
 
 
-def test_campaign_text_schreibt_nur_beitraege(projekt: Path) -> None:
-    """Ohne Angabe folgt der Befehl der Kampagne - und die fuehrt keine."""
+def test_campaign_text_schreibt_ohne_angabe_beide_arten(projekt: Path) -> None:
+    """Ohne ``--typ`` entstehen Beitrag **und** Kommentar.
+
+    Vorher folgte der Befehl dem Haken der Kampagne. Den gibt es seit dem
+    28.08.2026 nicht mehr; ``--typ`` schraenkt den Lauf auf eine Art ein,
+    statt eine zweite freizuschalten.
+    """
     ergebnis = runner.invoke(
         cli.app, ["campaign", "text", "batreeq", "--aus-vorlage", "--ja"]
     )
@@ -320,7 +325,7 @@ def test_campaign_text_schreibt_nur_beitraege(projekt: Path) -> None:
     with MarketingStore(projekt) as store:
         for link in store.links_for_campaign("batreeq"):
             assert link.post_text.strip()
-            assert link.kommentar_text == ""
+            assert link.kommentar_text.strip()
 
 
 def test_campaign_text_mit_typ_beide(projekt: Path) -> None:

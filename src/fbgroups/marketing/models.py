@@ -196,14 +196,13 @@ class Campaign(BaseModel):
     # nebenbei eine Kampagne veraendern. Anders als bei der Suche kostet das
     # Einschalten aber nichts - es wird nichts abgerufen und nichts bezahlt.
     auto_assign: bool = False
-    # Erzeugt diese Kampagne neben dem Beitrag auch einen Kommentartext?
-    #
-    # Vorgabe aus, und das ist keine Geringschaetzung des Kommentars: Ein
-    # Text, den niemand braucht, ist ein Text, den jemand durchlesen muss.
-    # Die Frage gehoert an die Kampagne und nicht an die Gruppe - "wir
-    # kommentieren in dieser Kampagne" ist eine Entscheidung ueber die
-    # Arbeitsweise, keine ueber eine einzelne Gruppe.
-    kommentare: bool = False
+    # Kein Feld fuer "fuehrt diese Kampagne Kommentare?" mehr (28.08.2026).
+    # Beitrag **und** Kommentar entstehen fuer jede Kampagne. Die Frage stand
+    # vorher in jeder Kampagnenzeile und musste in keiner beantwortet werden:
+    # Wer in einer Gruppe postet, kommentiert dort auch - und ein Kommentar,
+    # den niemand braucht, kostet einen Blick, waehrend ein fehlender einen
+    # Handgriff kostet. Die Spalte ``campaigns.kommentare`` bleibt im Schema
+    # (Migrationen sind hier additiv), wird aber nicht mehr gelesen.
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 

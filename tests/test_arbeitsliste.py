@@ -88,7 +88,7 @@ def bestand(tmp_path: Path) -> Path:
 
 # --- Der Text --------------------------------------------------------------
 
-def test_der_text_traegt_den_link_dieser_gruppe(bestand: Path) -> None:
+def test_der_text_traegt_den_link_dieser_gruppe(bestand: Path, config) -> None:
     """Der Code steht nirgends im Code - er kommt aus der Zuordnung.
 
     Das ist der ganze Zweck: Bei 300 Gruppen sind das 300 verschiedene Links,
@@ -98,7 +98,7 @@ def test_der_text_traegt_den_link_dieser_gruppe(bestand: Path) -> None:
         campaign = store.load_campaign("batreeq")
         assert campaign is not None
         texte = {
-            link.group_id: beitragstext(campaign, link)
+            link.group_id: beitragstext(campaign, link, config=config)
             for link in store.links_for_campaign("batreeq")
         }
 
@@ -108,14 +108,14 @@ def test_der_text_traegt_den_link_dieser_gruppe(bestand: Path) -> None:
     assert len(set(texte.values())) == 3
 
 
-def test_arabischer_text_bleibt_unveraendert(bestand: Path) -> None:
+def test_arabischer_text_bleibt_unveraendert(bestand: Path, config) -> None:
     """Keine Kodierungsschleife auf dem Weg durch die Datenbank."""
     with MarketingStore(bestand) as store:
         campaign = store.load_campaign("batreeq")
         assert campaign is not None
         link = store.link_for("batreeq", REAL_ID_A)
         assert link is not None
-        assert beitragstext(campaign, link).startswith("مرحبا!")
+        assert beitragstext(campaign, link, config=config).startswith("مرحبا!")
 
 
 # --- Die Zusage: nichts doppelt --------------------------------------------

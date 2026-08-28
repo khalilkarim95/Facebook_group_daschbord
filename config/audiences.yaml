@@ -13,12 +13,21 @@
 #   label_ar       fuer {zielgruppe} in arabischen Vorlagen. Nicht aus
 #                  terms.ar ableitbar: das sind Suchbegriffe fuer den
 #                  Abgleich, keine Anrede.
+#
+# ziel_ar / ziel_de -> WOHIN die Reise geht, fuer {ziel} in den Vorlagen
+#                  ("مسافر من بون إلى سوريا"). Ein Land, keine Anrede: Die
+#                  Anrede steht im Genitiv Plural ("السوريين") und ergaebe
+#                  "من بون إلى السوريين" - kein Ziel, sondern ein Satzfehler.
+#                  Zielgruppen ohne einzelnes Land (arabs) lassen das Feld
+#                  leer; dann greift "ziel_allgemein" aus textvorlagen.yaml.
 
 audiences:
   syrians:
     label_de: Syrer in Deutschland
     label_ar: السوريين
     label_kurz_de: Syrer
+    ziel_ar: سوريا
+    ziel_de: Syrien
     priority: 1
     phase: 1
     terms:
@@ -30,6 +39,8 @@ audiences:
     label_de: Araber in Deutschland
     label_ar: العرب
     label_kurz_de: Araber
+    # Kein ziel_ar: "die Araber" sind kein Reiseziel. Hier greift
+    # "ziel_allgemein" aus textvorlagen.yaml ("الوطن").
     priority: 1
     phase: 1
     terms:
@@ -42,6 +53,8 @@ audiences:
     label_de: Libanesen in Deutschland
     label_ar: اللبنانيين
     label_kurz_de: Libanesen
+    ziel_ar: لبنان
+    ziel_de: den Libanon
     priority: 2
     phase: 2
     terms:
@@ -53,6 +66,8 @@ audiences:
     label_de: Iraker in Deutschland
     label_ar: العراقيين
     label_kurz_de: Iraker
+    ziel_ar: العراق
+    ziel_de: den Irak
     priority: 2
     phase: 2
     terms:
@@ -64,6 +79,8 @@ audiences:
     label_de: Palaestinenser in Deutschland
     label_ar: الفلسطينيين
     label_kurz_de: Palästinenser
+    ziel_ar: فلسطين
+    ziel_de: Palaestina
     priority: 2
     phase: 2
     terms:
@@ -75,6 +92,8 @@ audiences:
     label_de: Jordanier in Deutschland
     label_ar: الأردنيين
     label_kurz_de: Jordanier
+    ziel_ar: الأردن
+    ziel_de: Jordanien
     priority: 3
     phase: 2
     terms:
@@ -86,6 +105,8 @@ audiences:
     label_de: Aegypter in Deutschland
     label_ar: المصريين
     label_kurz_de: Ägypter
+    ziel_ar: مصر
+    ziel_de: Aegypten
     priority: 2
     phase: 2
     terms:
@@ -97,6 +118,8 @@ audiences:
     label_de: Marokkaner in Deutschland
     label_ar: المغاربة
     label_kurz_de: Marokkaner
+    ziel_ar: المغرب
+    ziel_de: Marokko
     priority: 3
     phase: 2
     terms:
@@ -108,6 +131,8 @@ audiences:
     label_de: Algerier in Deutschland
     label_ar: الجزائريين
     label_kurz_de: Algerier
+    ziel_ar: الجزائر
+    ziel_de: Algerien
     priority: 3
     phase: 2
     terms:
@@ -119,6 +144,8 @@ audiences:
     label_de: Tunesier in Deutschland
     label_ar: التونسيين
     label_kurz_de: Tunesier
+    ziel_ar: تونس
+    ziel_de: Tunesien
     priority: 3
     phase: 2
     terms:
@@ -130,6 +157,8 @@ audiences:
     label_de: Jemeniten in Deutschland
     label_ar: اليمنيين
     label_kurz_de: Jemeniten
+    ziel_ar: اليمن
+    ziel_de: den Jemen
     priority: 3
     phase: 2
     terms:
@@ -141,6 +170,8 @@ audiences:
     label_de: Libyer in Deutschland
     label_ar: الليبيين
     label_kurz_de: Libyer
+    ziel_ar: ليبيا
+    ziel_de: Libyen
     priority: 3
     phase: 2
     terms:
@@ -152,6 +183,8 @@ audiences:
     label_de: Sudanesen in Deutschland
     label_ar: السودانيين
     label_kurz_de: Sudanesen
+    ziel_ar: السودان
+    ziel_de: den Sudan
     priority: 3
     phase: 2
     terms:

@@ -26,8 +26,8 @@ Gruppe. Nach einer Meldung bleibt der Bildschirm stehen, wo er stand.
 **Die Seite haelt keinen Zustand, aber sie laedt auch nicht neu.** Alle zehn
 Fassungen kommen mit dem ersten Aufruf mit; Blaettern zwischen ihnen ist ein
 Tausch im Browser und keine Anfrage. Geschrieben wird ausschliesslich ueber
-die drei Wege ``/vorschlag/text``, ``/vorschlag/zuruecksetzen`` und
-``/vorschlag/ergebnis``, und jeder davon antwortet mit dem neuen Stand
+die Wege ``/vorschlag/text`` und ``/vorschlag/ergebnis``, und jeder davon
+antwortet mit dem neuen Stand
 **dieser einen** Fassung. Die Wahrheit steht damit weiterhin in der
 Datenbank - der Browser zeigt sie nur an, ohne sich fuer sie zu halten.
 
@@ -528,20 +528,19 @@ def _spalte(texttyp: Texttyp, fassungen: list[Fassung], arbeit: Gruppenarbeit) -
     klasse = "posts" if texttyp is Texttyp.POST else "kommentare"
 
     if not fassungen:
-        fehlt = (
-            "Diese Kampagne fuehrt keine Kommentare. Umschalten in der "
-            "Kampagnenzeile der Uebersicht."
-            if texttyp is Texttyp.KOMMENTAR and not arbeit.kommentare_erwuenscht
-            else "Noch keine Fassung erzeugt. Unten schreiben und speichern, "
-            "oder ueber &bdquo;Texte erzeugen&ldquo; aus dem Vorrat fuellen."
+        # Seit dem 28.08.2026 gibt es nur noch diesen einen Grund: Eine
+        # Kampagne, die keine Kommentare fuehrt, gibt es nicht mehr.
+        inhalt = (
+            "<p class='leer'>Noch keine Fassung erzeugt. Unten schreiben und "
+            "speichern, oder ueber &bdquo;Texte erzeugen&ldquo; aus dem "
+            "Vorrat fuellen.</p>"
         )
-        inhalt = f"<p class='leer'>{fehlt}</p>"
     else:
         inhalt = (
             _nummernleiste(kennung, fassungen)
             + _standzeile(kennung, fassungen[0])
             + _textfeld(kennung, zweck, fassungen[0])
-            + _knopfreihe(kennung, zweck)
+            + _knopfreihe(kennung, zweck, arbeit.url)
             + _meldeblock(kennung, zweck, arbeit)
         )
 
@@ -629,7 +628,11 @@ def _textfeld(kennung: str, zweck: str, fassung: Fassung) -> str:
     return (
         f"<label for='feld-{kennung}'>{escape(zweck)}text &ndash; "
         "{link} muss genau einmal darin vorkommen; dort kommt der "
-        "Tracking-Link hinein.</label>"
+        # {datum} steht im Feld und nicht im kopierten Text - ohne diesen
+        # Satz sieht es aus wie ein Platzhalter, den jemand vergessen hat,
+        # und wer ihn von Hand ausfuellt, schreibt den Monat fest.
+        "Tracking-Link hinein. {datum} wird erst beim Kopieren durch den "
+        "laufenden Monat ersetzt.</label>"
         f"<textarea id='feld-{kennung}' dir='{richtung}' spellcheck='false' "
         f"placeholder='{escape(zweck)} fuer diese Gruppe schreiben ... {{link}}'>"
         # Der fuehrende Zeilenumbruch ist kein Versehen: Ein Browser verwirft
@@ -643,16 +646,39 @@ def _textfeld(kennung: str, zweck: str, fassung: Fassung) -> str:
     )
 
 
-def _knopfreihe(kennung: str, zweck: str) -> str:
-    """Kopieren, Speichern, Zuruecksetzen - alles, was den Text betrifft."""
+def _knopfreihe(kennung: str, zweck: str, url: str) -> str:
+    """Speichern, Kopieren, Gruppe oeffnen - der Handgriff in seiner Reihenfolge.
+
+    Der dritte Knopf war "Zurueck zur Vorlage" und ist es seit dem 28.08.2026
+    nicht mehr. Er beantwortete eine Frage, die sich hier selten stellt, und
+    stand an der Stelle, an der man nach dem Kopieren weitergeht: in die
+    Gruppe. Die Reihe liest sich jetzt als das, was sie ist - schreiben,
+    kopieren, einfuegen.
+
+    **Der Weg zurueck bleibt, nur der Knopf ist weg.** ``generated_text``
+    steht unveraendert neben ``text``, und ``POST /arbeit/{k}/vorschlag/
+    zuruecksetzen`` holt ihn weiterhin. Wer eine ueberarbeitete Fassung
+    verwerfen will, waehlt eine der vier anderen Nummern - oder ruft den Weg
+    auf.
+
+    Der Knopf steht in **beiden** Spalten. Derselbe Link im Kopf der Seite
+    bleibt: Er gehoert zur Gruppen-Navigation und ist auch dann da, wenn man
+    nur blaettert und gar keinen Text kopiert.
+    """
+    oeffnen = (
+        f"<a class='knopf' href='{escape(url)}' target='_blank' "
+        "rel='noopener noreferrer'>Gruppe bei Facebook oeffnen</a>"
+        if url
+        else ""
+    )
     return (
         "<div class='knoepfe' style='margin-top:.7rem'>"
         f"<button type='button' class='haupt' id='speichern-{kennung}'>"
         "Speichern</button>"
         f"<button type='button' id='kopieren-{kennung}'>"
         f"{escape(zweck)} kopieren</button>"
-        f"<button type='button' id='zurueck-{kennung}'>Zurueck zur Vorlage</button>"
-        "</div>"
+        + oeffnen
+        + "</div>"
         f"<div class='meldung' id='meldung-{kennung}'></div>"
     )
 
@@ -987,27 +1013,6 @@ def _skript(campaign_id: str, arbeit: Gruppenarbeit) -> str:
       try {{ await speichere(typ); }} finally {{ e.target.disabled = false; }}
     }});
     id('kopieren', typ).addEventListener('click', () => kopiere(typ));
-    id('zurueck', typ).addEventListener('click', async () => {{
-      const meldung = id('meldung', typ);
-      const daten = await sende('/vorschlag/zuruecksetzen', {{
-        group_id: GRUPPE, texttyp: typ, nummer: gewaehlt[typ],
-      }});
-      if (!daten.ok) {{
-        meldung.className = 'meldung schlecht-text';
-        meldung.textContent = daten.meldung || 'Ging nicht.';
-        return;
-      }}
-      const fassung = finde(typ, gewaehlt[typ]);
-      fassung.text = daten.text;
-      fassung.angezeigt = daten.angezeigt;
-      fassung.stand = daten.stand;
-      feld.value = daten.text;
-      feld.dir = arabisch(daten.text) ? 'rtl' : 'ltr';
-      meldung.className = 'meldung gut-text';
-      meldung.textContent = 'Der Text aus der Vorlage steht wieder da.';
-      zeichneStand(typ);
-      zeigeSchmutz(typ);
-    }});
 
     const gut = id('gut', typ);
     if (gut && !gut.disabled) gut.addEventListener('click', () => melde(typ, true));

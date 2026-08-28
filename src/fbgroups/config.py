@@ -47,6 +47,22 @@ class Audience:
     # ergaebe in einer Stadtvorlage "Syrer in Deutschland in Bonn".
     label_ar: str = ""
     label_kurz_de: str = ""
+    # Wohin die Reise geht - fuer {ziel} in Beitragsvorlagen ("سوريا").
+    # Steht an der Zielgruppe und nicht an der Kampagne: Wer syrische Gruppen
+    # bewirbt, meint Syrien; wer irakische bewirbt, den Irak. Fehlt der Wert,
+    # springt "ziel_allgemein" aus textvorlagen.yaml ein ("الوطن") - eine
+    # Zielgruppe wie "arabs" hat kein einzelnes Land.
+    ziel_ar: str = ""
+    ziel_de: str = ""
+
+    def ziel(self, sprache: str) -> str:
+        """Das Reiseziel in dieser Sprache - leer, wenn keines hinterlegt ist.
+
+        Leer statt Rueckfall auf das Label: "من بون إلى السوريين" waere kein
+        Ziel, sondern ein Satzfehler. Den Rueckfall kennt ``vorlagen``, und er
+        steht in der Konfiguration.
+        """
+        return (self.ziel_ar if sprache == "ar" else self.ziel_de).strip()
 
     def anrede(self, sprache: str) -> str:
         """Die Anrede in dieser Sprache, mit Rueckfall auf das lange Label.
@@ -174,6 +190,8 @@ def load_config(root: Path | None = None) -> AppConfig:
             code=str(data.get("code", "")),
             label_ar=str(data.get("label_ar", "")),
             label_kurz_de=str(data.get("label_kurz_de", "")),
+            ziel_ar=str(data.get("ziel_ar", "")),
+            ziel_de=str(data.get("ziel_de", "")),
         )
         for aid, data in raw_audiences.items()
     }

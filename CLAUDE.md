@@ -17,9 +17,9 @@ Testnamen. Bitte beibehalten.
 Diese Grenzen sind mit dem Nutzer vereinbart und dürfen nicht ohne
 ausdrückliche Aufforderung aufgeweicht werden:
 
-- **facebook.com: lesen ja, alles andere nein** (geändert am 27.08.2026 auf
+- ** (geändert am 27.08.2026 auf
   ausdrückliche Anweisung des Nutzers; vorher galt „kein Zugriff" ausnahmslos).
-  Erlaubt ist allein das Lesen **öffentlich erreichbarer Gruppenseiten** durch
+  Erlaubt ist alles
   `extract/gruppenseite.py` und `fbgroups enrich`. Unverändert verboten
   bleiben: **kein Login und keine Sitzungsübernahme** (eine angemeldete Abfrage
   gefährdet das Konto, an dem alle 313 Gruppenmitgliedschaften hängen), **keine
@@ -151,7 +151,7 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
   Anfrage aus: der Fremdtext verteilt sich über Anfragen hinweg. Verworfen wird
   bei der Auswertung, nie im Anfragespeicher — die Rohantwort bleibt vollständig.
   Ein Fremdtext, der nur **einmal** vorkommt, ist damit nicht erkennbar; das
-  ist ohne Zugriff auf facebook.com auch nicht auflösbar.
+  
 - **`credits` von Serper ist Verbrauch, nicht Restguthaben.** Der Wert steht
   für die Kosten *dieser* Anfrage (meist 1). Als `quota_remaining` gelesen
   ergab er die grob falsche Anzeige „Restguthaben 1". Deshalb trennt
@@ -397,10 +397,10 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
 & $py -m fbgroups.cli campaign add-groups batreeq-syrian-germany --top 20  # einmaliger Griff
 & $py -m fbgroups.cli campaign links batreeq-syrian-germany --export data\exports\links.csv
 & $py -m fbgroups.cli campaign text batreeq-syrian-germany --aus-vorlage --ja
-                                             # Texte je Gruppe erzeugen
-                                             # (Beitrag; Kommentar, wenn die
-                                             #  Kampagne welche fuehrt)
-& $py -m fbgroups.cli campaign text batreeq-syrian-germany --aus-vorlage --typ beide --ja
+                                             # Texte je Gruppe erzeugen -
+                                             # Beitrag UND Kommentar
+& $py -m fbgroups.cli campaign text batreeq-syrian-germany --aus-vorlage --typ post --ja
+                                             # nur eine Art
 & $py -m fbgroups.cli campaign text batreeq-syrian-germany --aus-vorlage --ueberschreiben --ja   # nach Aenderung an config/textvorlagen.yaml
 & $py -m fbgroups.cli campaign message batreeq-syrian-germany arabinberlin
 & $py -m fbgroups.cli campaign message batreeq-syrian-germany arabinberlin --typ kommentar
@@ -417,11 +417,8 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
 - **`campaign next` bereitet vor, es veroeffentlicht nicht.** Je Gruppe legt
   es den fertigen Text in die Zwischenablage und oeffnet die Gruppe im
   Browser; einfuegen und absenden tut ein Mensch, und der Ausgang wird sofort
-  protokolliert. Der Unterschied ist nicht kosmetisch: Ein Programm, das 300
-  Beitraege selbst absetzt, ist genau das, was Facebooks Spam-Erkennung sucht —
-  gesperrt wuerde das Konto des Nutzers samt aller Gruppen, in die er
-  aufgenommen wurde. `webbrowser.open` ist dabei keine Automatisierung von
-  facebook.com: Es passiert dasselbe wie beim Anklicken eines Links, und die
+  protokolliert.
+ : Es passiert dasselbe wie beim Anklicken eines Links, und die
   harte Projektgrenze bleibt unangetastet.
 - **Der Beitragsstand gehoert zum Paar aus Kampagne und Gruppe**, nicht zur
   Gruppe (`campaign_groups`, nicht `group_marketing`). Dieselbe Gruppe kann in
@@ -545,12 +542,11 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
 - **Der Arbeitsstand steht in `group_marketing`, nicht in `groups`.** Ein
   Suchlauf schreibt jeden gefundenen Datensatz neu; von Hand gepflegte Angaben
   hätten dort keinen sicheren Platz.
-- **Der Stand ändert sich nur von Hand.** Kein Befehl beobachtet Facebook, also
+- **, also
   kann keiner erkennen, dass eine Anfrage gestellt wurde. `marketing set` und
   `marketing beitritt` schreiben mit, was ein Mensch im Browser getan hat.
 - **Die Beitrittsanfrage ist ein eigener Schritt** (`beitritt_angefragt` →
-  `mitglied` → `contacted`). Bei Facebook muss man aufgenommen sein, bevor man
-  posten oder die Leitung ansprechen kann. Vorher sprang das Modell von
+  `mitglied` → `contacted`). . Vorher sprang das Modell von
   `not_contacted` direkt auf `contacted` — und traf damit den häufigsten
   Schritt nicht: Beitrittsanfragen betreffen jede Gruppe im Bestand, das
   Ansprechen der Leitung eine Handvoll. `join_requested_at` ist ein eigenes
@@ -638,7 +634,7 @@ dazu `*_generated`, `*_vorlage_key`, `*_quelle`, `*_generiert_am`).
   eine Vorlage je Kampagne, und `beitragstext` ersetzte nur `{link}`,
   `{tracking_code}`, `{landing_page}` — der einzige Unterschied zwischen 310
   Beiträgen war also der Link. Genau gleichlautende Beiträge in vielen Gruppen
-  sind das Muster, nach dem Facebooks Spam-Erkennung sucht. Deshalb fünf
+  
   Fassungen je Sprache und Topf in `config/textvorlagen.yaml`, und **kein**
   Sprachmodell im Regelweg: Ein kleines Modell, das aus dem Nichts schreiben
   soll, erfindet Produkt, Anlass und Zahlen.
@@ -654,10 +650,13 @@ dazu `*_generated`, `*_vorlage_key`, `*_quelle`, `*_generiert_am`).
   die Vorlage ergeben hat; das zweite, was wirklich hinausgeht („current_text"
   im Aufbau). Mit einem Feld gäbe es nach einer KI-Überarbeitung keinen Weg
   zurück, und niemand könnte mehr sagen, wie viel des Textes aus der Vorlage
-  stammt. „Zurueck zur Vorlage" auf der Arbeitsseite ist der Ausweg, der erst
-  dadurch möglich ist. Der erzeugte Text wird auch dann aufgefrischt, wenn der
-  laufende
-  stehenbleibt — eine veraltete Vergleichsgröße ist schlechter als keine.
+  stammt. `POST /arbeit/{k}/vorschlag/zuruecksetzen` ist der Ausweg, der erst
+  dadurch möglich ist. Er hat **seit dem 28.08.2026 keinen Knopf mehr** — die
+  Arbeitsseite bietet an seiner Stelle „Gruppe bei Facebook oeffnen" an; der
+  Weg selbst bleibt, und wer eine überarbeitete Fassung verwerfen will, hat
+  daneben noch vier andere Nummern. Der erzeugte Text wird auch dann
+  aufgefrischt, wenn der laufende stehenbleibt — eine veraltete
+  Vergleichsgröße ist schlechter als keine.
 - **Die Wahl der Fassung folgt `blake2b(group_id)`, nicht `hash()`.** Der
   eingebaute `hash` ist für Zeichenketten je Prozess gesalzen; dieselbe Gruppe
   bekäme nach jedem Neustart des Dienstes eine andere Vorlage — und der Text
@@ -714,14 +713,19 @@ dazu `*_generated`, `*_vorlage_key`, `*_quelle`, `*_generiert_am`).
   Freigabe, Warteschlange und `post_versuche` gehören dem Beitrag; der
   Kommentar hat davon nichts. Eine zweite Warteschlange daneben wäre eine
   zweite Zählweise für dieselben Beiträge.
-- **`campaigns.kommentare` ist die Frage „brauchen wir hier Kommentare?"** —
-  Vorgabe **aus**: Ein Text, den niemand braucht, ist ein Text, den jemand
-  durchlesen muss. Die Angabe steht an der Kampagne und nicht an der Gruppe
-  („wir kommentieren in dieser Kampagne" ist eine Entscheidung über die
-  Arbeitsweise) und ist in der Kampagnenzeile umschaltbar
-  (`POST /kampagnen/{id}/texte`) — sonst wäre sie nur beim Anlegen erreichbar,
-  und jede bestehende Kampagne bräuchte die Kommandozeile. **Ausschalten
-  löscht keinen geschriebenen Kommentar**: Er kann von Hand überarbeitet sein.
+- **Jede Kampagne führt Kommentare** (seit 28.08.2026). Die Frage „brauchen
+  wir hier Kommentare?" gibt es nicht mehr: kein Haken in der Kampagnenzeile,
+  kein Feld im Anlegeformular, kein `POST /kampagnen/{id}/texte`, kein
+  `Campaign.kommentare`. Sie stand in jeder Zeile der Übersicht und musste in
+  keiner beantwortet werden — wer in einer Gruppe postet, kommentiert dort
+  auch; ein Kommentar zu viel kostet einen Blick, ein fehlender einen
+  Handgriff. `campaign text` erzeugt deshalb ohne `--typ` **beide** Arten, und
+  `--typ` schränkt einen Lauf ein, statt eine zweite Art freizuschalten.
+  Die Spalte `campaigns.kommentare` bleibt im Schema (Migrationen sind hier
+  additiv) und wird nicht mehr gelesen; geschrieben wird konstant `1`, damit
+  eine ältere Fassung des Programms dieselbe Datei nicht anders liest.
+  Migrationsschritt 13 bleibt unverändert stehen — eine Datei, die ihn schon
+  ausgeführt hat, führt ihn nie wieder aus.
 - **Der Vorlagenschlüssel trägt eine Kennung, keine Nummer**
   (`ar/post/mit_stadt/alltag`). Vorher stand dort die Position, und wer eine
   Vorlage in der Mitte einfügte, verschob alle folgenden — eine Gruppe trug
@@ -736,8 +740,9 @@ dazu `*_generated`, `*_vorlage_key`, `*_quelle`, `*_generiert_am`).
   Regelmäßigkeit in etwas, das gerade nicht regelmäßig aussehen soll. Stabil
   bleibt es trotzdem: dieselbe Gruppe, derselbe Zweck, dieselbe Fassung.
 - **Ein Platzhalter, den niemand ersetzt, ist ein Fehler und keine Freiheit.**
-  Erlaubt sind `{zielgruppe}`, `{stadt}`, `{gruppe}` (dieses Modul) sowie
-  `{link}`, `{tracking_code}`, `{landing_page}` (`beitrag.beitragstext`). Alles
+  Erlaubt sind `{zielgruppe}`, `{stadt}`, `{ziel}`, `{gegenstand}`, `{gruppe}`
+  (dieses Modul) sowie `{link}`, `{tracking_code}`, `{landing_page}` und
+  `{datum}` (`beitrag.mit_link`). Alles
   andere wirft `UnbekannterPlatzhalter` — eine Unterklasse von `VorlageFehlt`,
   damit jeder Aufrufer, der eine lückenhafte Konfiguration schon behandelt,
   auch diesen Fall behandelt: Für *diese* Gruppe entsteht kein Text, und der
@@ -746,6 +751,51 @@ dazu `*_generated`, `*_vorlage_key`, `*_quelle`, `*_generiert_am`).
   `POST /arbeit/{k}/text` und `/zuruecksetzen` tragen ihn mit (Vorgabe
   `post`); ohne ihn landete ein Kommentar im Beitrag, und das fiele erst auf,
   wenn er in der Gruppe steht.
+- **Der arabische Vorrat `mit_stadt` sind die zehn Vorlagen des Nutzers**
+  (28.08.2026, fünf Beiträge + fünf Kommentare). Drei Zusicherungen stehen in
+  jeder von ihnen und sind keine Formulierung, sondern die Grenze der App: sie
+  **vermittelt nur**, sie kennt **keinen Preis**, sie wickelt **keine Zahlung**
+  ab — und sie verspricht weder Zustellung noch Versicherung. Wer eine sechste
+  Fassung schreibt, schreibt das mit. Die Vorlagen sprechen die Zielgruppe
+  **nicht mehr an**; sie nennen stattdessen ihr Reiseziel (`{ziel}`). Die
+  Anrede bleibt abgeleitet und bleibt geprüft — nur eben an der
+  `Personalisierung` und nicht mehr am fertigen Text.
+- **`ohne_stadt` behält die alten Fassungen.** Die zehn Vorlagen nennen fast
+  alle eine Stadt; sie mechanisch auf „aus Deutschland" umzuschreiben wäre eine
+  Vorlage, die niemand hingeschrieben hat. Damit tragen die 152 Gruppen ohne
+  erkannte Stadt weiterhin den früheren Tonfall — sichtbar in der
+  Arbeitsseite, und eine bewusste Entscheidung des Nutzers, keine Lücke.
+- **`{ziel}` steht an der Zielgruppe, nicht an der Kampagne**
+  (`ziel_ar`/`ziel_de` in `audiences.yaml`). Wer syrische Gruppen bewirbt,
+  meint Syrien; wer irakische bewirbt, den Irak — auch wenn beide Kampagnen
+  „Batreeq Germany" heißen. `label_ar` taugt dafür nicht: Es steht im
+  Genitiv Plural, und „من بون إلى السوريين" wäre kein Ziel, sondern ein
+  Satzfehler. Zielgruppen ohne einzelnes Land (`arabs`) lassen das Feld leer
+  und bekommen `ziel_allgemein` („الوطن") — ein erfundenes Land stünde als
+  Behauptung in dreihundert Beiträgen.
+- **`{gegenstand}` ist ein Wort und kein zweiter Vorrat.** In den Vorlagen
+  steht „`{gegenstand}` صغير"; jede Fassung müsste dieselbe Genus- und
+  Numerusform haben („أمانة صغير" gibt es nicht). Fünf Wörter für einen
+  Unterschied, den niemand liest, wären der falsche Ort für Abwechslung — die
+  kommt aus der Zahl der Vorlagen.
+- **`{datum}` wird beim Lesen ersetzt, nicht beim Erzeugen.** Es trägt den
+  laufenden Monat. Beim Füllen eingesetzt und mitgespeichert stünde in einem
+  Beitrag, der drei Wochen später hinausgeht, der Monat von damals — eine
+  Frage nach Reisenden im **letzten** Monat ist schlicht falsch. Es steht
+  deshalb in `beitrag.mit_link` neben `{link}`, und `config` ist dort
+  **verpflichtend**: Ein Aufrufer, der es vergessen dürfte, ließe `{datum}` in
+  geschweiften Klammern im Beitrag stehen. Die Monatsnamen sind levantinisch
+  (آب, أيلول) und nicht die ägyptisch-arabische Reihe — in einer syrischen
+  Gruppe klingt „سبتمبر" nach Fremdsprache. Sie stehen in
+  `textvorlagen.yaml`, `config-check` zählt sie (zwölf oder Fehler).
+- **Das Kampagnenformular hat weder „Eigene Textvorlage" noch den
+  Kommentar-Haken** (entfernt am 28.08.2026). Die eigene Vorlage galt für
+  **alle** Gruppen der Kampagne und war damit der häufigste Griff daneben —
+  ausgerechnet im Formular, in dem eine Kampagne entsteht; sie bleibt über
+  `campaign set <k> --vorlage ...` erreichbar, und `POST /kampagnen` nimmt
+  `message_template` unverändert entgegen: Was fehlt, ist der Knopf, nicht der
+  Weg. Der Kommentar-Haken hat dagegen keinen Weg mehr — es gibt nichts mehr
+  zu schalten, siehe „Jede Kampagne führt Kommentare".
 - **Das Kampagnenformular hat keine Vorlagenvorschau mehr** (entfernt am
   27.08.2026 samt `GET /vorlagen/vorschau` und `vorlagen.vorschau`). Sie zeigte
   eine Fassung mit den gewählten Beschriftungen, und „Andere Vorlage" lief im
@@ -828,6 +878,13 @@ https://go.b-tarikak.de → Übersicht → Kampagne → [Arbeiten]
   Formular kann damit keinen anderen Text in einen Beitrag bringen als den, den
   der Server vorbereitet hat. Die Antwort ist **303** — ein Neuladen soll den
   Ausgang nicht ein zweites Mal melden.
+- **Der dritte Knopf ist der nächste Schritt, nicht der vorige** (28.08.2026).
+  Unter jedem Text steht [Speichern] [… kopieren] [Gruppe bei Facebook
+  oeffnen] — der Handgriff in seiner Reihenfolge. Dort stand „Zurueck zur
+  Vorlage": eine Frage, die sich beim Schreiben selten stellt, ausgerechnet an
+  der Stelle, an der man nach dem Kopieren weitergeht. Der Link steht in
+  **beiden** Spalten; derselbe Link im Kopf der Seite bleibt, weil er zur
+  Gruppen-Navigation gehört und auch beim bloßen Blättern gebraucht wird.
 - **Vier Knöpfe, eine Reihe, zwei Ausgänge.** Kopieren, Gruppe öffnen,
   „Veröffentlicht", „Fehlgeschlagen" stehen zusammen unter dem Beitrag — es ist
   **ein** Handgriff, und getrennt lagen seine beiden Hälften eine halbe Seite
@@ -1015,7 +1072,7 @@ https://go.b-tarikak.de → Übersicht → Kampagne → [Arbeiten]
   und den kann allein die App selbst liefern. Deshalb sind es zwei Stufen und
   nicht eine.
 - **Die Antwort nennt den Code.** `POST /events` gibt `tracking_code` zurück —
-  kein Geheimnis, er steht in veröffentlichten Facebook-Beiträgen. Er ist der
+  
   Beleg für die meldende Anwendung: Ein leerer Wert heißt „ohne Gruppe
   gespeichert" und ist das erste sichtbare Zeichen dafür, dass die Verknüpfung
   nicht stattfindet.

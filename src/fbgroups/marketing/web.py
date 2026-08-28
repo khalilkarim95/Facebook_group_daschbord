@@ -139,25 +139,10 @@ class KampagneNeu(BaseModel):
     language: str = Field(default="", max_length=16)
     message_template: str = Field(default="", max_length=2000)
     landing_page: str = Field(default="", max_length=300)
-    # Braucht die Kampagne neben dem Beitrag auch Kommentartexte? Vorgabe aus:
-    # Ein Text, den niemand braucht, ist ein Text, den jemand durchliest.
-    kommentare: bool = False
 
 
 class KampagneStatusMeldung(BaseModel):
     status: CampaignStatus
-
-
-class TextartenMeldung(BaseModel):
-    """Welche Textarten diese Kampagne fuehrt.
-
-    Nur der Kommentar ist eine Frage: Ohne Beitrag gaebe es nichts
-    einzureihen, nichts freizugeben und nichts zu melden - der Ablauf haengt
-    an ihm. Der Kommentar ist der Zusatz, und ein Zusatz, den niemand
-    braucht, ist ein Text, den jemand durchlesen muss.
-    """
-
-    kommentare: bool
 
 
 class VorbereitenMeldung(BaseModel):
@@ -661,9 +646,7 @@ def _vorbereiten(
             kommentare += entstanden.get(Texttyp.KOMMENTAR, 0)
             beruehrte += 1
 
-        teile = [f"{gefuellt} Beitragsfassungen"]
-        if campaign.kommentare:
-            teile.append(f"{kommentare} Kommentarfassungen")
+        teile = [f"{gefuellt} Beitragsfassungen", f"{kommentare} Kommentarfassungen"]
         teile.append(f"in {beruehrte} Gruppen")
         if gruende:
             teile.append("; ".join(gruende[:3]))
@@ -947,7 +930,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 return RedirectResponse(f"/arbeit/{campaign_id}", status_code=303)
 
             stand = hole_gruppenarbeit(
-                store, campaign, gruppen,
+                store, campaign, gruppen, cfg,
                 nummer=gruppe, group_id=group_id, reihe=reihe,
             )
             if stand is None:
@@ -960,7 +943,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             # anrichtet, sind fuenf Zeilen in einer Tabelle. Eine Knopfreihe
             # zu drueckten, bevor ueberhaupt ein Text dasteht, waere kein
             # Entschluss, sondern eine Wegstrecke.
-            if not stand.posts or (campaign.kommentare and not stand.kommentare):
+            if not stand.posts or not stand.kommentare:
                 gruppe_datensatz = gruppen.get(stand.link.group_id)
                 if gruppe_datensatz is not None:
                     from fbgroups.marketing.vorlagen import VorlageFehlt
@@ -974,7 +957,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                         pass
                     else:
                         stand = hole_gruppenarbeit(
-                            store, campaign, gruppen,
+                            store, campaign, gruppen, cfg,
                             nummer=stand.nummer, reihe=reihe,
                         )
                         if stand is None:  # pragma: no cover - Reihe unveraendert
@@ -1053,7 +1036,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 "ok": True,
                 "nummer": vorschlag.nummer,
                 "text": vorschlag.text,
-                "angezeigt": mit_link(campaign, link, vorschlag.text),
+                "angezeigt": mit_link(campaign, link, vorschlag.text, config=cfg),
                 "stand": vorschlag.status.value,
             })
 
@@ -1092,7 +1075,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 "ok": True,
                 "nummer": vorschlag.nummer,
                 "text": vorschlag.text,
-                "angezeigt": mit_link(campaign, link, vorschlag.text),
+                "angezeigt": mit_link(campaign, link, vorschlag.text, config=cfg),
                 "stand": vorschlag.status.value,
             })
 
@@ -1274,7 +1257,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     language=meldung.language,
                     message_template=meldung.message_template,
                     landing_page=meldung.landing_page,
-                    kommentare=meldung.kommentare,
                     target_audiences=list(meldung.audiences),
                     target_cities=list(meldung.cities),
                 )
@@ -1304,36 +1286,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             store.save_campaign(campaign)
             store.audit("kampagne_status", campaign_id, meldung.status.value)
         return JSONResponse({"campaign_id": campaign_id, "status": meldung.status.value})
-
-    @app.post("/kampagnen/{campaign_id}/texte")
-    def kampagne_textarten(  # noqa: ANN202
-        campaign_id: str, meldung: TextartenMeldung, request: Request
-    ):
-        """Schaltet die Kommentartexte einer Kampagne an oder aus.
-
-        **Es entsteht dabei nichts und es verschwindet nichts.** Die Texte
-        kommen beim naechsten "Texte erzeugen", und ein bereits geschriebener
-        Kommentar bleibt stehen, auch wenn der Haken faellt: Er koennte von
-        Hand ueberarbeitet sein, und ein Schalter, der beilaeufig Texte
-        loescht, ist ein Schalter mit unumkehrbarer Wirkung.
-
-        Der Weg steht neben ``/status`` und nicht in ``/auswahl``: Die
-        Auswahlregel sagt, **welche Gruppen** die Kampagne erfasst; dies sagt,
-        **was fuer Texte** sie braucht. Beides in ein Formular zu legen hiesse,
-        zwei Fragen zu einer zu machen.
-        """
-        _nur_lokal(request)
-        with _store() as store:
-            campaign = store.load_campaign(campaign_id)
-            if campaign is None:
-                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
-            campaign.kommentare = meldung.kommentare
-            campaign.updated_at = datetime.now(UTC)
-            store.save_campaign(campaign)
-            store.audit(
-                "kampagne_textarten", campaign_id, f"kommentare={meldung.kommentare}"
-            )
-        return JSONResponse({"campaign_id": campaign_id, "kommentare": campaign.kommentare})
 
     @app.post("/kampagnen/{campaign_id}/vorbereiten")
     def kampagne_vorbereiten(  # noqa: ANN202

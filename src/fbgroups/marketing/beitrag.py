@@ -18,7 +18,9 @@ import subprocess
 import sys
 import webbrowser
 
+from fbgroups.config import AppConfig
 from fbgroups.marketing.models import Campaign, CampaignGroup, Texttyp
+from fbgroups.marketing.vorlagen import monat_jetzt, sprache_der_kampagne
 
 # Je Plattform das Programm, das von der Standardeingabe in die Zwischenablage
 # schreibt. Wayland vor X11: Auf einer Wayland-Sitzung ist ``xclip`` oft
@@ -38,6 +40,8 @@ def beitragstext(
     campaign: Campaign,
     link: CampaignGroup,
     texttyp: Texttyp = Texttyp.POST,
+    *,
+    config: AppConfig,
 ) -> str:
     """Setzt den gespeicherten Text mit dem Link **dieser** Gruppe zusammen.
 
@@ -75,11 +79,17 @@ def beitragstext(
         text = link.kommentar_text
     else:
         text = link.post_text or campaign.message_template or ""
-    return mit_link(campaign, link, text)
+    return mit_link(campaign, link, text, config=config)
 
 
-def mit_link(campaign: Campaign, link: CampaignGroup, text: str) -> str:
-    """Setzt die drei Platzhalter in einen **beliebigen** Text dieser Gruppe.
+def mit_link(
+    campaign: Campaign,
+    link: CampaignGroup,
+    text: str,
+    *,
+    config: AppConfig,
+) -> str:
+    """Setzt die spaeten Platzhalter in einen **beliebigen** Text dieser Gruppe.
 
     Herausgeloest aus ``beitragstext``, seit eine Gruppe nicht mehr einen Text
     hat, sondern fuenf: Die Fassungen liegen in ``campaign_group_texte`` und
@@ -91,11 +101,21 @@ def mit_link(campaign: Campaign, link: CampaignGroup, text: str) -> str:
 
     ``beitragstext`` ist damit nur noch die Frage "welches Feld?"; die
     Ersetzung selbst steht hier, an einer Stelle.
+
+    **``{datum}`` steht hier und nicht in ``vorlagen.fuelle``.** Es traegt den
+    laufenden Monat, und der aendert sich - eingesetzt und mitgespeichert
+    stuende in einem Beitrag, der drei Wochen nach dem Erzeugen hinausgeht,
+    der Monat von damals; eine Frage nach Reisenden im letzten Monat ist
+    schlicht falsch. Deshalb ist das ``config`` verpflichtend und nicht
+    optional: Ein Aufrufer, der es vergessen darf, laesst ``{datum}`` in
+    geschweiften Klammern im Beitrag stehen, und das faellt erst in der Gruppe
+    auf.
     """
     return (
         text.replace("{link}", link.tracking_url)
         .replace("{tracking_code}", link.tracking_code)
         .replace("{landing_page}", campaign.landing_page)
+        .replace("{datum}", monat_jetzt(config, sprache_der_kampagne(campaign, config)))
     )
 
 
