@@ -196,6 +196,14 @@ class Campaign(BaseModel):
     # nebenbei eine Kampagne veraendern. Anders als bei der Suche kostet das
     # Einschalten aber nichts - es wird nichts abgerufen und nichts bezahlt.
     auto_assign: bool = False
+    # Erzeugt diese Kampagne neben dem Beitrag auch einen Kommentartext?
+    #
+    # Vorgabe aus, und das ist keine Geringschaetzung des Kommentars: Ein
+    # Text, den niemand braucht, ist ein Text, den jemand durchlesen muss.
+    # Die Frage gehoert an die Kampagne und nicht an die Gruppe - "wir
+    # kommentieren in dieser Kampagne" ist eine Entscheidung ueber die
+    # Arbeitsweise, keine ueber eine einzelne Gruppe.
+    kommentare: bool = False
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
@@ -414,7 +422,11 @@ class JobStatus(StrEnum):
     """
 
     DRAFT = "draft"                    # Job angelegt, noch kein Text
-    AI_GENERATED = "ai_generated"      # Claude hat einen Text erzeugt
+    # Bestandsdaten: Bis zum Ausbau der KI-Schicht setzte ein Sprachmodell
+    # diesen Stand. Er wird nicht mehr vergeben, bleibt aber lesbar - sonst
+    # waeren Zuordnungen von damals nicht mehr ladbar, und die
+    # Uebergangstabelle wuesste nicht, wie sie von dort weiterkommt.
+    AI_GENERATED = "ai_generated"
     PENDING_REVIEW = "pending_review"  # wartet auf einen Menschen
     APPROVED = "approved"              # freigegeben, aber noch nicht eingereiht
     QUEUED = "queued"                  # in der Warteschlange
@@ -442,6 +454,29 @@ POST_STATUS_ZU_JOB: dict[JobStatus, PostStatus] = {
 }
 
 
+class Texttyp(StrEnum):
+    """Wofuer ein Text gedacht ist - eigener Beitrag oder Kommentar.
+
+    Zwei Einsatzzwecke mit verschiedenen sprachlichen Anforderungen. Ein Post
+    eroeffnet: Er darf begruessen, erklaeren und mit einem Aufruf enden. Ein
+    Kommentar steht unter einem fremden Beitrag, der seinen Anlass schon
+    mitbringt - er reagiert kurz und hilfreich, und derselbe Text als
+    Kommentar gelesen waere eingeworfene Werbung.
+
+    Sie teilen sich deshalb **keine** Vorlage, keinen Prompt und kein Feld am
+    Datensatz. Was sie teilen, ist das Paar aus Kampagne und Gruppe: Beide
+    Texte gehoeren zu *dieser* Gruppe in *dieser* Kampagne.
+
+    Der Beitrag traegt weiterhin allein den Arbeitsablauf (``JobStatus``,
+    Warteschlange, Versuche). Ein Kommentar wird kopiert und eingefuegt, er
+    wird nicht eingereiht - eine zweite Warteschlange daneben waere eine
+    zweite Zaehlweise fuer dieselben Beitraege.
+    """
+
+    POST = "post"
+    KOMMENTAR = "kommentar"
+
+
 class TextQuelle(StrEnum):
     """Woher der Beitragstext stammt.
 
@@ -451,9 +486,46 @@ class TextQuelle(StrEnum):
     Ergebnisse ist der Unterschied aber der ganze Punkt.
     """
 
-    VORLAGE = "vorlage"    # aus campaign.message_template
-    KI = "ki"              # von Claude, unveraendert
+    VORLAGE = "vorlage"    # aus config/textvorlagen.yaml oder campaign.message_template
     HAND = "hand"          # von Hand geschrieben oder ueberarbeitet
+    # Bestandsdaten: Bis zum Ausbau der KI-Schicht schrieb ein Sprachmodell
+    # Textfassungen, und die Spalte traegt fuer diese Zuordnungen weiterhin
+    # "ki". Der Wert wird nicht mehr vergeben - entfernen liesse ihn aber
+    # nicht lesen, und ein Datensatz von damals waere nicht mehr ladbar.
+    KI = "ki"
+
+
+#: Wie viele Fassungen je Gruppe und Einsatzzweck bereitstehen.
+#:
+#: Fuenf, weil der Vorrat in ``config/textvorlagen.yaml`` fuenf Fassungen je
+#: Sprache, Zweck und Topf haelt: Die Zahl ist also keine willkuerliche
+#: Obergrenze, sondern die Groesse des Topfes. Steht dort mehr oder weniger,
+#: entstehen entsprechend mehr oder weniger Vorschlaege - diese Zahl ist die
+#: Schranke, nicht die Vorgabe.
+MAX_VORSCHLAEGE = 5
+
+
+class VorschlagStatus(StrEnum):
+    """Was aus **einer** Fassung geworden ist - je Vorschlag, nicht je Gruppe.
+
+    Der Unterschied zu ``PostStatus`` ist der ganze Punkt der
+    Vorschlagstabelle: ``PostStatus`` beantwortet "hat diese Gruppe ihren
+    Beitrag bekommen?", ``VorschlagStatus`` beantwortet "was ist mit *dieser*
+    Fassung geschehen?". Eine Gruppe kann Fassung 1 veroeffentlicht haben,
+    Fassung 2 als fehlgeschlagen fuehren und Fassung 3 noch als Entwurf -
+    ohne das waere jede der fuenf Fassungen nur eine Vorschau.
+
+    ``GESPEICHERT`` steht zwischen Entwurf und Ausgang: Der Text wurde
+    angefasst, ist aber noch nirgends hingegangen. Ohne diesen Wert liesse
+    sich "aus der Vorlage gefallen" nicht von "durchgelesen und behalten"
+    unterscheiden, und beim Blaettern durch fuenf Fassungen ist genau das die
+    Frage.
+    """
+
+    ENTWURF = "entwurf"
+    GESPEICHERT = "gespeichert"
+    VEROEFFENTLICHT = "veroeffentlicht"
+    FEHLGESCHLAGEN = "fehlgeschlagen"
 
 
 class QueueZustand(StrEnum):
@@ -470,26 +542,6 @@ class QueueZustand(StrEnum):
     LAUFEND = "laufend"
     PAUSIERT = "pausiert"
     GESTOPPT = "gestoppt"
-
-
-class PostEntwurf(BaseModel):
-    """Eine erzeugte Textfassung fuer eine Gruppe.
-
-    Mehrere je Gruppe: Der Nutzer soll waehlen koennen, statt den ersten
-    Vorschlag nehmen zu muessen. Die gewaehlte Fassung wird in
-    ``CampaignGroup.post_text`` kopiert - der Entwurf bleibt daneben stehen,
-    damit sichtbar ist, wogegen entschieden wurde.
-    """
-
-    entwurf_id: int | None = None
-    campaign_id: str
-    group_id: str
-    variante: int = 1
-    text: str = ""
-    quelle: TextQuelle = TextQuelle.KI
-    modell: str = ""               # z. B. "claude-sonnet-5"
-    erzeugt_am: datetime = Field(default_factory=_utcnow)
-    gewaehlt: bool = False
 
 
 class PostVersuch(BaseModel):
@@ -555,8 +607,102 @@ class CampaignGroup(BaseModel):
     # genau dieser werden - nicht einer, der sich beim naechsten Aufruf neu
     # zusammensetzt.
     job_status: JobStatus = JobStatus.DRAFT
+    # Der Text, der wirklich hinausgeht - das "current_text" des Aufbaus.
+    # Beginnt als Abschrift von ``generated_text`` und veraendert sich danach
+    # nur durch einen Menschen oder einen uebernommenen KI-Vorschlag.
     post_text: str = ""
+    # Was die deterministische Herstellung aus Vorlage und Gruppendaten
+    # ergeben hat - unveraendert, auch wenn ``post_text`` laengst ueberarbeitet
+    # ist. Zwei Felder statt einem, weil es zwei verschiedene Fragen sind:
+    # "was hat die Maschine gebaut?" und "was steht jetzt da?". Ohne das erste
+    # gaebe es nach einer KI-Ueberarbeitung keinen Weg zurueck, und niemand
+    # koennte mehr sagen, wie viel von dem Text aus der Vorlage stammt.
+    generated_text: str = ""
+    # Welche Vorlage es war, z. B. "ar/mit_stadt/3". Gespeichert und nicht neu
+    # berechnet: Nur so bekommt dieselbe Gruppe beim naechsten Fuellen wieder
+    # dieselbe Fassung - etwa nachdem eine Stadt nachgetragen wurde. Wird die
+    # Vorlagenliste umsortiert, zeigt der Schluessel woanders hin; das ist der
+    # Preis dafuer, ihn lesbar zu halten, und steht in textvorlagen.yaml.
+    vorlage_key: str = ""
     text_quelle: TextQuelle = TextQuelle.VORLAGE
     generiert_am: datetime | None = None
     freigegeben_am: datetime | None = None
     freigegeben_von: str = ""
+    # -- Der Kommentar: dieselben drei Fragen, eigene Antworten -------------
+    # Vier Spalten neben den Beitragsfeldern statt einer zweiten Tabelle: Der
+    # Kommentar gehoert zum **selben** Paar aus Kampagne und Gruppe, hat
+    # dieselbe Lebensdauer und verschwindet mit derselben Zuordnung. Eine
+    # eigene Tabelle haette denselben Schluessel und dieselbe Lebensdauer -
+    # eine Kopie mit dem Risiko, auseinanderzulaufen (dieselbe Ueberlegung
+    # wie bei den Job-Feldern, die auch hier stehen und nicht daneben).
+    #
+    # Kein ``job_status`` fuer den Kommentar und keine ``kommentar_versuche``:
+    # Der Beitrag traegt den Ablauf, der Kommentar wird kopiert.
+    kommentar_text: str = ""
+    kommentar_generated: str = ""
+    kommentar_vorlage_key: str = ""
+    kommentar_quelle: TextQuelle = TextQuelle.VORLAGE
+    kommentar_generiert_am: datetime | None = None
+
+    def text_fuer(self, texttyp: Texttyp) -> str:
+        """Der laufende Text dieses Einsatzzwecks."""
+        return self.kommentar_text if texttyp is Texttyp.KOMMENTAR else self.post_text
+
+    def vorlage_fuer(self, texttyp: Texttyp) -> str:
+        """Der Vorlagenschluessel dieses Einsatzzwecks."""
+        return (
+            self.kommentar_vorlage_key
+            if texttyp is Texttyp.KOMMENTAR
+            else self.vorlage_key
+        )
+
+class Textvorschlag(BaseModel):
+    """Eine von mehreren Fassungen fuer *eine* Gruppe und *einen* Zweck.
+
+    Bis hierher trug das Paar aus Kampagne und Gruppe genau **einen**
+    Beitragstext und **einen** Kommentartext. Das war die stillschweigende
+    Behauptung, die Wahl der Vorlage sei bereits getroffen - dabei ist sie das
+    einzige, was ein Mensch beim Durchsehen wirklich entscheidet. Wer eine
+    andere Fassung wollte, musste die vorhandene ueberschreiben, und die
+    verworfene war weg.
+
+    Der Schluessel ist deshalb vierteilig: Kampagne, Gruppe, Zweck, Nummer.
+    Die Nummer ist eine **Position im Vorrat** und keine Rangfolge - Fassung 1
+    ist nicht besser als Fassung 4, sie steht nur vorn. Welche Fassung auf
+    Platz 1 liegt, entscheidet ``vorlagen.reihenfolge_fuer`` aus der Kennung
+    der Gruppe; deshalb bekommt Platz 1 genau den Text, den die Gruppe auch
+    vorher bekommen haette.
+
+    ``generated_text`` steht wie am Paar neben ``text``: das erste ist, was
+    die Vorlage ergeben hat, das zweite, was wirklich hinausgeht. Ohne beides
+    gaebe es nach einer Ueberarbeitung keinen Weg zurueck.
+    """
+
+    campaign_id: str
+    group_id: str
+    texttyp: Texttyp = Texttyp.POST
+    nummer: int = 1
+    # Der Text, der wirklich hinausgeht - mit ``{link}`` darin. Aufgeloest
+    # wird der Platzhalter erst in ``beitrag.beitragstext``, wie bisher.
+    text: str = ""
+    generated_text: str = ""
+    vorlage_key: str = ""
+    quelle: TextQuelle = TextQuelle.VORLAGE
+    status: VorschlagStatus = VorschlagStatus.ENTWURF
+    generiert_am: datetime | None = None
+    # Nur beim **ersten** Erfolg gesetzt - dieselbe Regel wie ``posted_at``
+    # am Paar: Die Klicks gehen auf den Beitrag zurueck, der zuerst stand.
+    veroeffentlicht_am: datetime | None = None
+    # Jeder gemeldete Ausgang zaehlt mit, auch der Erfolg. Beantwortet "wie
+    # oft angefasst?", nicht "wie oft schiefgegangen?".
+    versuche: int = 0
+    fehler: str = ""
+
+    @property
+    def hat_text(self) -> bool:
+        return bool(self.text.strip())
+
+    @property
+    def erledigt(self) -> bool:
+        """Ist diese Fassung hinausgegangen?"""
+        return self.status is VorschlagStatus.VEROEFFENTLICHT

@@ -65,7 +65,7 @@ def bestand(tmp_path: Path) -> Path:
                 # Ausdruecklich der Landingpage-Weg: Diese Tests pruefen ihn,
                 # und sie sollen das sagen statt von der Projektvorgabe
                 # (marketing.ziel) abzuhaengen. Dieselbe Ueberlegung wie bei
-                # ``ohne_ollama``: Was der Test braucht, gehoert in den Test.
+                # Was der Test braucht, gehoert in den Test.
                 ziel="landing",
             )
         )

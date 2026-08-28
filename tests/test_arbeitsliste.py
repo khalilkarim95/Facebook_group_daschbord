@@ -458,9 +458,10 @@ def test_uebersicht_zeigt_den_beitragsstand_je_gruppe(bestand: Path, config) -> 
     assert zeile["beitrag_status"] == "offen"
     assert len(zeile["beitraege"]) == 1
     assert zeile["beitraege"][0]["code"] == "FB-SYR-BER-001"
-    # Der fertige Text steht im Dokument - der Kopierknopf braucht keinen
-    # zweiten Aufruf.
-    assert "FB-SYR-BER-001" in zeile["beitraege"][0]["text"]
+    # Schmal mit Absicht: Der fertige Beitragstext stand hier einmal mit, fuer
+    # einen Kopierknopf in der Zelle. Bei 310 Gruppen sind das 310 Texte im
+    # Dokument fuer einen Knopf, den es nicht mehr gibt.
+    assert "text" not in zeile["beitraege"][0]
 
 
 def test_gruppe_ohne_zuordnung_faellt_aus_dem_beitragsfilter(

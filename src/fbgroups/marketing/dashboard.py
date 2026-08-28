@@ -37,7 +37,6 @@ from typing import Any
 
 from fbgroups.config import AppConfig
 from fbgroups.marketing.analytics import funnel, kennzahlen
-from fbgroups.marketing.beitrag import beitragstext
 from fbgroups.marketing.models import CampaignStatus, MarketingStatus
 from fbgroups.marketing.resonanz import resonanz_je_gruppe
 from fbgroups.marketing.selection import Auswahl, auswahl_der_kampagne, passt
@@ -174,6 +173,24 @@ def _gruppe_als_zeile(
         "score": group.score,
         "score_max": group.score_max,
         "grund": group.score_reason,
+        # Wie belastbar die Grundlage ist - NEBEN dem Score, nie darin.
+        # Ein maessiger Score aus belegten Zahlen und ein guter aus duennen
+        # Hinweisen sind zwei Aussagen; verrechnet waeren beide unlesbar.
+        "konfidenz": group.data_confidence,
+        # Die Rohzahlen hinter den Punkten. Sie stehen hier, damit die Zeile
+        # ihre Bewertung belegen kann statt sie zu behaupten - "22/25" ist
+        # eine Note, "42.300 Mitglieder (facebook)" ist der Grund dafuer.
+        "mitglieder": group.member_count,
+        "mitglieder_quelle": (
+            group.member_count_source.value if group.member_count_source else None
+        ),
+        "posts_pro_tag": group.posts_per_day,
+        "aktivitaet_quelle": (
+            group.activity_source.value if group.activity_source else None
+        ),
+        "letzter_beitrag": (
+            group.last_post_at.isoformat() if group.last_post_at else None
+        ),
         "stadt": group.city or "",
         "zielgruppen": zielgruppen,
         "kategorie": kategorie,
@@ -186,11 +203,10 @@ def _gruppe_als_zeile(
         "bearbeiten": bearbeiten,
         "ausschlussgrund": ausschlussgrund,
         "codes": codes,
-        # Je Zuordnung ein Eintrag: Kampagne, Code, fertiger Text, Stand des
-        # Beitrags. Der Text entsteht in beitragstext() - derselben Stelle, die
-        # auch 'campaign message' und 'campaign next' benutzen. Zwei Fassungen
-        # koennten abweichen, und der Unterschied fiele erst auf, wenn ein
-        # Beitrag mit dem falschen Code in einer Gruppe steht.
+        # Je Zuordnung ein Eintrag: Kampagne, Code, Stand des Beitrags. Der
+        # fertige Text stand hier einmal mit - fuer einen Kopierknopf in der
+        # Zelle. Er ist weg; wer den Text braucht, arbeitet unter
+        # /arbeit/{kampagne}, und dort steht er samt Merkmalen der Gruppe.
         "beitraege": beitraege or [],
         # Die Kampagnennamen als eine Zeichenkette - allein zum Sortieren und
         # Suchen. Die Zellen selbst zeichnen aus ``beitraege``; ein zweites
@@ -240,7 +256,9 @@ def _gruppe_als_zeile(
         # waechst mit jedem Lauf weiter und misst damit das Alter des
         # Datensatzes statt der Auffindbarkeit der Gruppe.
         "anfragen": anfragen,
-        "mitglieder": group.member_count_hint,
+        # "mitglieder" steht weiter oben bei den Belegen des Scores - dort, wo
+        # auch die Herkunft der Zahl steht. Zweimal dasselbe Feld waere zwei
+        # Wahrheiten ueber dieselbe Zahl.
         "beschreibung": group.description_snippet or "",
         # Die Trichterzahlen dieser Gruppe. Sie stehen in derselben Zeile wie
         # Score und Stand, damit sich die Frage "welche Gruppe bringt
@@ -290,18 +308,16 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             codes_je_gruppe.setdefault(link.group_id, []).append(link.tracking_code)
             beitraege_je_gruppe.setdefault(link.group_id, []).append(
                 {
+                    # Schmal mit Absicht: Was hier steht, steht 310mal im
+                    # Dokument. Der fertige Beitragstext stand einmal darin,
+                    # damit ein Knopf in dieser Zelle ihn ohne zweiten Aufruf
+                    # kopieren konnte - den Knopf gibt es nicht mehr,
+                    # gearbeitet wird unter /arbeit/{{kampagne}}.
                     "kampagne": campaign_id,
                     "kampagne_name": campaign.name if campaign else campaign_id,
                     "code": link.tracking_code,
-                    "url": link.tracking_url,
                     "status": link.post_status.value,
                     "fehler": link.post_error,
-                    "versuche": link.post_attempts,
-                    # Der fertige Text zum Kopieren. Er steht im Dokument,
-                    # damit der Knopf ohne zweiten Aufruf auskommt - bei 300
-                    # Gruppen waeren das sonst 300 Anfragen an den Dienst,
-                    # nur um dreimal etwas zu kopieren.
-                    "text": beitragstext(campaign, link) if campaign else "",
                 }
             )
 
@@ -397,6 +413,11 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
                     "passend": sum(1 for g in groups if passt(g, regel)),
                     "bestand": len(groups),
                 },
+                # Fuehrt diese Kampagne auch Kommentartexte? Sichtbar in der
+                # Zeile und dort umschaltbar: Ohne das waere die Angabe nur
+                # beim Anlegen erreichbar, und jede bestehende Kampagne
+                # brauchte die Kommandozeile.
+                "kommentare": c.kommentare,
                 "gruppen": len(links.get(c.campaign_id, [])),
                 # Wie weit die Kampagne beim Veroeffentlichen ist - in
                 # derselben Zeile wie ihre Trichterzahlen. Ohne Beitrag gibt es
@@ -420,12 +441,6 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
         "kampagnen": kampagnen,
         "auswahl": auswahl,
         "trichter": trichter,
-        # Stand der KI. Billig und ungefaehrlich: Bei Ollama wird nur
-        # nachgesehen, welche Modelle dort liegen (2 s Zeitgrenze), bei
-        # Anthropic ueberhaupt nichts abgerufen. Es wird NIE etwas erzeugt -
-        # eine Seite, die bei jedem Aufruf ein Modell anwirft, waere bei
-        # Ollama langsam und bei Anthropic teuer.
-        "ki": _ki_stand(config),
         "kennzahlen": {
             "gesamt": len(zeilen),
             "bewertet": len(bewertet),
@@ -450,39 +465,6 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
 
 def _kachel(wert: str, label: str) -> str:
     return f'<div class="kachel"><b>{html.escape(wert)}</b><span>{html.escape(label)}</span></div>'
-
-def _ki_stand(config: AppConfig) -> dict[str, Any]:
-    """Der KI-Stand fuer die Anzeige - faellt nie aus.
-
-    Der Import steht in der Funktion: ``marketing.ki`` zieht ``httpx`` und die
-    Anbieter nach, und die Uebersicht soll auch dann bauen, wenn an der
-    KI-Schicht gerade etwas fehlt. Sie ist ein Aufsatz, keine Voraussetzung.
-    """
-    try:
-        from fbgroups.marketing.ki import gewaehlter_anbieter
-        from fbgroups.marketing.ki import status as ki_status
-
-        stand = ki_status(config)
-        return {
-            "anbieter": gewaehlter_anbieter(config),
-            "erreichbar": stand.erreichbar,
-            "modell": stand.modell,
-            "adresse": stand.adresse,
-            "meldung": stand.meldung,
-            "modell_vorhanden": stand.modell_vorhanden,
-            "modelle": stand.verfuegbare_modelle,
-        }
-    except Exception as exc:  # noqa: BLE001 - die Seite darf an nichts sterben
-        return {
-            "anbieter": "unbekannt",
-            "erreichbar": False,
-            "modell": "",
-            "adresse": "",
-            "meldung": f"KI-Stand nicht ermittelbar: {type(exc).__name__}: {exc}",
-            "modell_vorhanden": False,
-            "modelle": [],
-        }
-
 
 def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
     """Baut die vollstaendige Seite.
@@ -545,41 +527,6 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
             "Der Besucher sieht ja eine Seite.</div>"
         )
 
-    ki = daten.get("ki", {})
-    if ki.get("erreichbar") and ki.get("modell_vorhanden"):
-        ki_ampel, ki_text = "🟢", "Verbunden"
-    elif ki.get("erreichbar"):
-        ki_ampel, ki_text = "🟡", "Verbunden, Modell fehlt"
-    else:
-        ki_ampel, ki_text = "🔴", "Nicht erreichbar"
-
-    ki_hinweis = (
-        f'<div class="ki-hinweis">{html.escape(ki.get("meldung", ""))}</div>'
-        if ki.get("meldung")
-        else ""
-    )
-    # Der Testknopf erzeugt wirklich etwas und gehoert deshalb zu den
-    # schreibenden Wegen: Von aussen (nur_lesen) wird er ausgeblendet, und der
-    # Weg selbst prueft ohnehin selbst - siehe web._nur_lokal.
-    ki_knopf = (
-        ""
-        if nur_lesen
-        else '<button id="ki-test" class="knopf">Ollama testen</button>'
-        '<span id="ki-test-ergebnis" class="ki-ergebnis"></span>'
-    )
-    ki_block = (
-        '<div class="ki-karte">'
-        f'<div class="ki-kopf">{ki_ampel} <b>KI</b> '
-        f'<span class="res-leise">{html.escape(ki.get("anbieter", ""))}'
-        + (" (lokal)" if ki.get("anbieter") == "ollama" else "")
-        + "</span></div>"
-        f'<div class="ki-zeile">Status: {html.escape(ki_text)}</div>'
-        f'<div class="ki-zeile">Modell: <code>{html.escape(ki.get("modell") or "-")}</code></div>'
-        f'<div class="ki-zeile">URL: <code>{html.escape(ki.get("adresse") or "-")}</code></div>'
-        f"{ki_hinweis}{ki_knopf}"
-        "</div>"
-    )
-
     def status_auswahl(aktuell: str) -> str:
         """Die vier Kampagnenzustaende, der aktuelle vorgewaehlt."""
         return "".join(
@@ -596,7 +543,15 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
         f" · {html.escape(c['regel']['kurz'])}"
         f"{' · nimmt neue Funde automatisch auf' if c['regel']['auto_assign'] else ''}"
         f"</span>"
-        f"<span class='k-kennung'><code>{html.escape(c['id'])}</code></span></td>"
+        f"<span class='k-kennung'><code>{html.escape(c['id'])}</code></span>"
+        # Beitrag immer, Kommentar auf Wunsch. Der Haken steht bei der
+        # Kampagne und nicht bei der Gruppe: "wir kommentieren hier" ist eine
+        # Entscheidung ueber die Arbeitsweise, keine ueber eine Gruppe.
+        f"<label class='k-texte' title='Erzeugt zusaetzlich einen kurzen "
+        f"Kommentartext je Gruppe - eigene Vorlagen, eigener Kopierknopf.'>"
+        f"<input type='checkbox' class='k-kommentare' "
+        f"data-id=\"{html.escape(c['id'])}\"{' checked' if c['kommentare'] else ''}>"
+        f" Kommentare</label></td>"
         f"<td><select class='k-status' data-id=\"{html.escape(c['id'])}\" "
         f"data-vorher=\"{html.escape(c['status'])}\">"
         f"{status_auswahl(c['status'])}"
@@ -693,20 +648,21 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   h1 {{ font-size: 20px; margin: 0 0 4px; }}
   .hinweis {{ color: var(--leise); font-size: 13px; margin: 0 0 20px; }}
   .kacheln {{ display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }}
-  .ki-karte {{ border: 1px solid var(--linie); border-radius: 8px; padding: 12px 14px;
-               margin-bottom: 18px; background: var(--flaeche); max-width: 560px; }}
-  .ki-kopf {{ font-size: 15px; margin-bottom: 6px; }}
-  .ki-zeile {{ font-size: 13px; color: var(--text-leise); }}
-  .ki-hinweis {{ font-size: 12.5px; white-space: pre-wrap; margin: 8px 0;
-                 padding: 8px 10px; border-radius: 6px; background: var(--sunk, #f4f4f2);
-                 border-left: 3px solid var(--warn, #8a5a10); }}
-  .ki-ergebnis {{ font-size: 13px; margin-left: 10px; }}
   .kachel {{
     background: var(--karte); border: 1px solid var(--rand); border-radius: 10px;
     padding: 12px 18px; min-width: 108px;
   }}
   .kachel b {{ display: block; font-size: 22px; }}
   .kachel span {{ color: var(--leise); font-size: 12px; }}
+  .blaettern {{
+    display:flex; gap:.75rem; align-items:center; justify-content:center;
+    margin:.75rem 0 1.5rem; color:#8b929c; font-size:.85rem;
+  }}
+  .blaettern button {{ min-width:2.5rem; }}
+  .blaettern button[disabled] {{ opacity:.35; cursor:default; }}
+  .blaettern b {{ color:#e6e8eb; }}
+  .s-groesse {{ display:flex; gap:.4rem; align-items:center; }}
+  .s-groesse select {{ padding:.3rem .5rem; }}
   .filter {{
     display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
     background: var(--karte); border: 1px solid var(--rand);
@@ -733,6 +689,28 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   tbody tr:last-child td {{ border-bottom: 0; }}
   tbody tr:hover {{ background: color-mix(in srgb, var(--akzent) 7%, transparent); }}
   td.zahl, th.zahl {{ text-align: end; font-variant-numeric: tabular-nums; }}
+  /* Die Score-Zelle: Zahl, Hoechstwert, fuenf Balken.
+     Die Balken stehen fuer die fuenf Bestandteile in fester Reihenfolge -
+     dieselbe Farbe bedeutet in jeder Zeile denselben Bestandteil, sonst
+     waere die Spalte beim Ueberfliegen wertlos. */
+  .scorezelle {{ white-space: nowrap; line-height: 1.15; }}
+  .von {{ font-size: 10px; color: var(--leise); margin-left: 2px; }}
+  .balken {{ display: flex; gap: 2px; margin-top: 3px; justify-content: flex-end; }}
+  .balken i {{
+    display: block; width: 9px; height: 4px; border-radius: 1px;
+    background: var(--rand); position: relative; overflow: hidden;
+  }}
+  /* Der gefuellte Anteil als zweite Ebene - so bleibt die Gesamtbreite
+     sichtbar. Ein Balken, der nur so lang ist wie sein Wert, sagt nicht,
+     wovon er ein Teil ist. */
+  .balken i::after {{
+    content: ""; position: absolute; inset: 0 auto 0 0; width: var(--anteil);
+  }}
+  .b-members::after         {{ background: #60a5fa; }}
+  .b-activity::after        {{ background: #f97316; }}
+  .b-location::after        {{ background: #34d399; }}
+  .b-category::after        {{ background: #a78bfa; }}
+  .b-target_audience::after {{ background: #fbbf24; }}
   .punkte {{ font-weight: 700; font-variant-numeric: tabular-nums; }}
   .punkte.hoch {{ color: var(--gut); }}
   .punkte.mittel {{ color: var(--mittel); }}
@@ -858,6 +836,8 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   }}
   .knopfzelle {{ display: flex; gap: 6px; }}
   .k-regel {{ cursor: pointer; padding: 6px 12px; border-radius: 6px; }}
+  .k-texte {{ display: block; font-size: 12px; color: var(--mittel); margin-top: 2px; }}
+  .k-texte input {{ vertical-align: -1px; margin-right: 3px; }}
   /* Der Weg zur Arbeitsseite - hervorgehoben, weil er der Einstieg in die
      eigentliche Arbeit ist und nicht eine Einstellung daneben. */
   .k-arbeit {{ padding: 6px 12px; border-radius: 6px; text-decoration: none;
@@ -882,29 +862,18 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   .b-veroeffentlicht {{ background: var(--b-gut-bg);    color: var(--b-gut-fg); }}
   .b-fehlgeschlagen  {{ background: var(--b-fehler-bg); color: var(--b-fehler-fg); }}
   .b-uebersprungen   {{ background: var(--b-aus-bg);    color: var(--b-aus-fg); }}
-  .b-knopf {{
-    cursor: pointer; border: 1px solid var(--rand); background: var(--karte);
-    border-radius: 5px; padding: 2px 7px; font-size: 12px; line-height: 1.5;
-  }}
-  .b-knopf:hover {{ background: var(--bg); }}
   .b-fehler {{ font-size: 11px; color: var(--b-fehler-fg); }}
   .b-leer {{ color: var(--leise); font-size: 12px; }}
   /* Gemessene Resonanz */
   .res {{ font-size: 12px; line-height: 1.45; white-space: nowrap; }}
   .res b {{ font-size: 13px; }}
-  .res-leise {{ color: var(--leise); }}
-  .punkte-liste {{
-    margin: 4px 0 0; padding: 0; list-style: none;
-    font-size: 11px; color: var(--leise);
-  }}
-  .punkte-liste li {{ display: flex; gap: 6px; justify-content: space-between; }}
-  .punkte-liste .wert {{ font-variant-numeric: tabular-nums; }}
   /* Nur-Lesen: alles weg, was einen schreibenden Weg ruft. */
+  .sammel-teiler {{ color: var(--rand); padding: 0 .2rem; }}
   body.nur-lesen .sammel,
   body.nur-lesen th.auswahl, body.nur-lesen td.auswahl,
   body.nur-lesen .knopfzelle, body.nur-lesen .k-status,
   body.nur-lesen .neu-kampagne,
-  body.nur-lesen .b-fertig, body.nur-lesen .b-fehlschlag {{ display: none; }}
+  body.nur-lesen .k-texte {{ display: none; }}
 </style>
 </head>
 <body{koerper_klasse}>
@@ -915,7 +884,6 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
 </p>
 
 {warnung}
-{ki_block}
 <div class="kacheln">{kacheln}</div>
 
 <div class="filter">
@@ -932,6 +900,25 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
     <option value="uebersprungen">übersprungen</option>
   </select>
   <input type="search" id="f-suche" placeholder="Name durchsuchen – auch arabisch …">
+  <select id="f-mitglieder" title="Nach belegter Mitgliederzahl filtern">
+    <option value="">Jede Größe</option>
+    <option value="ja">Mitgliederzahl belegt</option>
+    <option value="nein">Mitgliederzahl unbekannt</option>
+    <option value="10000">ab 10.000</option>
+    <option value="1000">ab 1.000</option>
+  </select>
+  <select id="f-aktivitaet" title="Nach erhobener Aktivität filtern">
+    <option value="">Jede Aktivität</option>
+    <option value="ja">Aktivität gemessen</option>
+    <option value="nein">Aktivität unbekannt</option>
+    <option value="hoch">hohe Aktivität</option>
+  </select>
+  <select id="f-konfidenz" title="Wie belastbar die Grundlage des Scores ist">
+    <option value="">Jede Datenqualität</option>
+    <option value="0.7">ab 70 %</option>
+    <option value="0.4">ab 40 %</option>
+    <option value="niedrig">unter 40 %</option>
+  </select>
   <label class="schalter"><input type="checkbox" id="f-bewertet" checked> nur bewertete</label>
   <label class="schalter"><input type="checkbox" id="f-bearbeitet" checked> nur bearbeitete</label>
   <span class="marke" id="treffer"></span>
@@ -943,6 +930,11 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   <button id="sammel-aus">Ausschließen</button>
   <button id="sammel-ein">Wieder aufnehmen</button>
   <span class="hinweis">Der Tracking-Code bleibt in jedem Fall gültig.</span>
+  <span class="sammel-teiler">·</span>
+  <select id="sammel-kampagne" title="Die gewählten Gruppen dieser Kampagne zuordnen">
+    <option value="">Kampagne wählen …</option>
+  </select>
+  <button id="sammel-zuordnen">Zuordnen</button>
 </div>
 
 <div class="tabelle-rahmen">
@@ -963,15 +955,6 @@ veroeffentlichten Beitraegen.">Kampagne</th>
         title="Der Beitrag dieser Kampagne in dieser Gruppe. Der Text trägt den
 Tracking-Link genau dieser Gruppe – er entsteht aus der Zuordnung, nicht aus
 einer Liste im Programm.">Beitrag</th>
-    <th class="zahl" data-sort="anfragen"
-        title="Von wie vielen verschiedenen Suchanfragen diese Gruppe gefunden
-wurde. Höchstens 16 (9 Stadtmuster + 7 bundesweite) – für jede Stadt gleich,
-also untereinander vergleichbar.">Anfragen</th>
-    <th data-sort="resonanz_quote"
-        title="Gemessene Resonanz: was der Beitrag in dieser Gruppe gebracht hat.
-Mitgliederzahl und Beitragszahlen der Gruppe stehen nur auf facebook.com – die
-Meta Groups API wurde am 22.04.2024 abgeschaltet. Diese Zahlen erheben wir
-selbst und sie beantworten dieselbe Frage genauer.">Resonanz</th>
     <th class="zahl" data-sort="click">Klicks</th>
     <th class="zahl" data-sort="registration">Registr.</th>
     <th class="zahl" data-sort="download"
@@ -987,6 +970,21 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
   </tr></thead>
   <tbody id="zeilen"></tbody>
 </table>
+</div>
+
+<div class="blaettern" id="blaettern" hidden>
+  <button type="button" id="s-zurueck">&larr;</button>
+  <span id="s-stand"></span>
+  <button type="button" id="s-weiter">&rarr;</button>
+  <label class="s-groesse">Zeilen
+    <select id="s-pro-seite">
+      <option value="10">10</option>
+      <option value="25" selected>25</option>
+      <option value="50">50</option>
+      <option value="100">100</option>
+      <option value="0">alle</option>
+    </select>
+  </label>
 </div>
 
 <section class="kampagnen-block">
@@ -1070,8 +1068,31 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
     <label>Landingpage
       <input type="text" id="k-landing" placeholder="https://b-tarikak.de/">
     </label>
-    <label class="breit">Textvorlage <span class="zart">– {{link}} wird ersetzt</span>
-      <textarea id="k-vorlage" rows="2" placeholder="مرحبا! {{link}}"></textarea>
+    <label class="breit">Eigene Textvorlage
+      <span class="zart">– leer lassen ist der Normalfall</span>
+      <textarea id="k-vorlage" rows="2"
+        placeholder="leer = fünf Fassungen aus config/textvorlagen.yaml"></textarea>
+      <span class="zart">
+        Ein Text hier gilt für <strong>alle</strong> Gruppen der Kampagne –
+        dann klingen alle Beiträge gleich, und genau danach sucht Facebooks
+        Spam-Erkennung. Leer gelassen wählt jede Gruppe eine von fünf Fassungen.
+        Platzhalter: {{zielgruppe}}, {{stadt}}, {{link}}.
+      </span>
+    </label>
+    <label class="breit">
+      <span>Textarten
+        <span class="zart">– der Beitrag entsteht immer</span>
+      </span>
+      <span class="knopfreihe">
+        <label class="zart" style="flex-direction: row; gap: 6px;">
+          <input type="checkbox" id="k-kommentare"> auch Kommentartexte
+        </label>
+      </span>
+      <span class="zart">
+        Ein Kommentar steht unter einem fremden Beitrag: kurz, hilfreich,
+        ohne Werbeeinstieg. Er bekommt eigene Vorlagen – ein gekürzter
+        Beitrag als Kommentar liest sich wie eingeworfene Werbung.
+      </span>
     </label>
     <div class="breit knopfreihe">
       <button id="k-anlegen">Anlegen</button>
@@ -1110,6 +1131,89 @@ const DATEN = {nutzlast};
 const NUR_LESEN = {nur_lesen_js};
 const zeilen = DATEN.gruppen;
 let sortSpalte = "score", sortAb = true;
+
+// --- Blaettern ------------------------------------------------------------
+//
+// Bei 314 Zeilen war die Tabelle laenger als jeder Bildschirm: Wer die
+// Kampagnenliste darunter erreichen wollte, scrollte an dreihundert Zeilen
+// vorbei. Gefiltert und sortiert wird weiterhin ueber den **ganzen** Bestand -
+// geblaettert wird erst danach. Andersherum zeigte Seite 1 die ersten
+// fuenfundzwanzig Zeilen der Datei statt die fuenfundzwanzig besten.
+//
+// ``proSeite = 0`` heisst "alle" und ist bewusst moeglich: Wer sucht, will
+// manchmal jede Zeile auf einmal sehen.
+let seite = 1, proSeite = 25;
+
+// --- Wo war ich? ---------------------------------------------------------
+//
+// Jede Aenderung an einer Gruppe laedt die Seite neu, und danach stand man
+// wieder ganz oben mit zurueckgesetzten Filtern. Bei 314 Zeilen heisst das:
+// Stadt neu waehlen, Haken neu setzen, die Zeile wiederfinden - nach jedem
+// einzelnen Klick. Gefiltert wird im Browser, also weiss nur der Browser,
+// wo man war; sessionStorage haelt es ueber das Neuladen hinweg.
+//
+// Bewusst sessionStorage und nicht localStorage: Der Stand gehoert zu dieser
+// Sitzung. Wer das Fenster morgen neu oeffnet, will die Uebersicht sehen und
+// nicht den Filter von gestern.
+const MERKER = "fbgroups-uebersicht";
+const MERK_FELDER = ["f-stadt", "f-zielgruppe", "f-kategorie", "f-marketing",
+                     "f-beitrag", "f-suche", "f-mitglieder", "f-aktivitaet",
+                     "f-konfidenz"];
+const MERK_SCHALTER = ["f-bewertet", "f-bearbeitet"];
+
+function standSichern() {{
+  try {{
+    const stand = {{werte: {{}}, schalter: {{}}, sortSpalte, sortAb,
+                   seite, proSeite, y: window.scrollY}};
+    MERK_FELDER.forEach((id) => {{
+      const el = document.getElementById(id);
+      if (el) stand.werte[id] = el.value;
+    }});
+    MERK_SCHALTER.forEach((id) => {{
+      const el = document.getElementById(id);
+      if (el) stand.schalter[id] = el.checked;
+    }});
+    sessionStorage.setItem(MERKER, JSON.stringify(stand));
+  }} catch (_) {{
+    // Privates Fenster, gesperrter Speicher: dann eben ohne. Ein Merker ist
+    // eine Bequemlichkeit und darf die Seite nicht mitreissen.
+  }}
+}}
+
+function standHolen() {{
+  try {{
+    const roh = sessionStorage.getItem(MERKER);
+    if (!roh) return 0;
+    const stand = JSON.parse(roh);
+    MERK_FELDER.forEach((id) => {{
+      const el = document.getElementById(id);
+      if (el && stand.werte && stand.werte[id] !== undefined) el.value = stand.werte[id];
+    }});
+    MERK_SCHALTER.forEach((id) => {{
+      const el = document.getElementById(id);
+      if (el && stand.schalter && stand.schalter[id] !== undefined) {{
+        el.checked = stand.schalter[id];
+      }}
+    }});
+    if (stand.sortSpalte) {{ sortSpalte = stand.sortSpalte; sortAb = !!stand.sortAb; }}
+    // Die Seite gehoert dazu: Wer auf Seite 7 eine Gruppe zuordnet, will
+    // danach Seite 7 sehen und nicht wieder Seite 1.
+    if (stand.proSeite !== undefined) {{
+      proSeite = Number(stand.proSeite);
+      const feld = document.getElementById("s-pro-seite");
+      if (feld) feld.value = String(proSeite);
+    }}
+    if (stand.seite) seite = Number(stand.seite);
+    return stand.y || 0;
+  }} catch (_) {{
+    return 0;
+  }}
+}}
+
+// Auch beim gewoehnlichen Neuladen (F5) und beim Wechsel auf die
+// Arbeitsseite: Wer ueber "Arbeiten" weggeht und zurueckkommt, soll seine
+// Auswahl wiederfinden.
+window.addEventListener("beforeunload", standSichern);
 // Die Auswahl ueberlebt das Neuzeichnen: Wer 40 Zeilen angehakt hat und dann
 // den Filter aendert, soll sie nicht verlieren.
 const gewaehlt = new Set();
@@ -1127,6 +1231,7 @@ fuelleAuswahl("f-stadt", zeilen.map((z) => z.stadt));
 fuelleAuswahl("f-zielgruppe", zeilen.flatMap((z) => z.zielgruppen));
 fuelleAuswahl("f-kategorie", zeilen.map((z) => z.kategorie));
 fuelleAuswahl("f-marketing", zeilen.map((z) => z.marketing_label));
+fuelleSammelKampagnen();
 
 function gefiltert() {{
   const stadt = document.getElementById("f-stadt").value;
@@ -1137,6 +1242,9 @@ function gefiltert() {{
   const nurBewertet = document.getElementById("f-bewertet").checked;
   const nurBearbeitet = document.getElementById("f-bearbeitet").checked;
   const beitrag = document.getElementById("f-beitrag").value;
+  const mitglieder = document.getElementById("f-mitglieder").value;
+  const aktivitaet = document.getElementById("f-aktivitaet").value;
+  const konfidenz = document.getElementById("f-konfidenz").value;
 
   // "zu-tun" fasst zusammen, wonach man taeglich sucht: was noch aussteht.
   // Uebersprungene gehoeren nicht dazu - dort hat ein Mensch entschieden.
@@ -1146,9 +1254,36 @@ function gefiltert() {{
       ? z.beitrag_status === "offen" || z.beitrag_status === "fehlgeschlagen"
       : z.beitrag_status === beitrag);
 
+  // Die drei Filter der Reichweite. "unbekannt" ist bei allen dreien eine
+  // eigene Wahl und kein Randfall: Wer die Mitgliederzahlen nachpflegen
+  // will, braucht genau die Liste der Gruppen ohne Zahl - und die ist mit
+  // 313 von 313 Eintraegen der haeufigste Fall, nicht der seltenste.
+  const passtMitglieder = (z) => {{
+    if (!mitglieder) return true;
+    if (mitglieder === "ja") return z.mitglieder !== null;
+    if (mitglieder === "nein") return z.mitglieder === null;
+    return z.mitglieder !== null && z.mitglieder >= Number(mitglieder);
+  }};
+  // "Gemessen" heisst: irgendeine Quelle hat etwas geliefert - die
+  // Beitragsliste, die eigene Resonanz oder ein datierter Suchtreffer.
+  // Welche es war, steht im Tooltip; zum Filtern zaehlt nur, ob ueberhaupt.
+  const passtAktivitaet = (z) => {{
+    if (!aktivitaet) return true;
+    const gemessen = z.aktivitaet_quelle !== null || z.posts_pro_tag !== null;
+    if (aktivitaet === "ja") return gemessen;
+    if (aktivitaet === "nein") return !gemessen;
+    return (z.punkte || {{}}).activity >= 18;   // von 25
+  }};
+  const passtKonfidenz = (z) =>
+    !konfidenz ||
+    (konfidenz === "niedrig" ? z.konfidenz < 0.4 : z.konfidenz >= Number(konfidenz));
+
   return zeilen.filter((z) =>
     (!nurBearbeitet || z.bearbeiten) &&
     passtBeitrag(z) &&
+    passtMitglieder(z) &&
+    passtAktivitaet(z) &&
+    passtKonfidenz(z) &&
     (!stadt || z.stadt === stadt) &&
     (!ziel || z.zielgruppen.includes(ziel)) &&
     (!kat || z.kategorie === kat) &&
@@ -1161,11 +1296,7 @@ function gefiltert() {{
 
 function sortiert(liste) {{
   return [...liste].sort((a, b) => {{
-    // Die Resonanzquote liegt eine Ebene tiefer; ohne Beitrag ist sie null
-    // und landet damit hinten - wie jeder andere unbekannte Wert auch.
-    const hol = (z) => sortSpalte === "resonanz_quote"
-      ? (z.resonanz ? z.resonanz.quote : null) : z[sortSpalte];
-    let x = hol(a), y = hol(b);
+    let x = a[sortSpalte], y = b[sortSpalte];
     if (Array.isArray(x)) {{ x = x.join(); y = y.join(); }}
     // Nicht bewertbare Datensaetze stehen immer hinten - sie sind kein
     // schlechtes Ergebnis, sondern ein offener Punkt.
@@ -1177,12 +1308,20 @@ function sortiert(liste) {{
 }}
 
 function zeichne() {{
-  const liste = sortiert(gefiltert());
+  const alle = sortiert(gefiltert());
   document.getElementById("treffer").textContent =
-    liste.length + " von " + zeilen.length;
+    alle.length + " von " + zeilen.length;
 
-  document.getElementById("zeilen").innerHTML = liste.length === 0
-    ? "<tr><td colspan='14' class='leer'>Keine Gruppe passt zu diesem Filter.</td></tr>"
+  const seiten = proSeite > 0 ? Math.max(1, Math.ceil(alle.length / proSeite)) : 1;
+  if (seite > seiten) seite = seiten;
+  if (seite < 1) seite = 1;
+  const liste = proSeite > 0
+    ? alle.slice((seite - 1) * proSeite, seite * proSeite)
+    : alle;
+  zeichneBlaetterleiste(alle.length, seiten);
+
+  document.getElementById("zeilen").innerHTML = alle.length === 0
+    ? "<tr><td colspan='15' class='leer'>Keine Gruppe passt zu diesem Filter.</td></tr>"
     : liste.map((z) => {{
         const klasse = z.score === null ? "keine" : z.score >= 90 ? "hoch"
                      : z.score >= 70 ? "mittel" : "";
@@ -1195,9 +1334,10 @@ function zeichne() {{
             <input type="checkbox" class="waehlen" data-id="${{esc(z.id)}}"
                    ${{gewaehlt.has(z.id) ? "checked" : ""}}>
           </td>
-          <td class="zahl">
-            <span class="punkte ${{klasse}}" title="${{esc(punkteText(z))}}"
-                  >${{zahl(z.score)}}</span>
+          <td class="zahl scorezelle" title="${{esc(punkteText(z))}}">
+            <span class="punkte ${{klasse}}">${{zahl(z.score)}}</span>
+            <span class="von">/ ${{zahl(z.score_max) || "–"}}</span>
+            ${{scoreBalken(z)}}
           </td>
           <td class="name" dir="auto">
             <a href="${{esc(z.url)}}" target="_blank"
@@ -1215,8 +1355,6 @@ function zeichne() {{
                   + esc(s.label) + "</option>").join("")
               + `</select>`}}</td>
           <td>${{beitragZelle(z)}}</td>
-          <td class="zahl">${{z.anfragen}}</td>
-          <td>${{resonanzZelle(z)}}</td>
           <td class="zahl">${{z.click}}</td>
           <td class="zahl">${{z.registration}}</td>
           <td class="zahl">${{z.download}}</td>
@@ -1227,46 +1365,52 @@ function zeichne() {{
       }}).join("");
 }}
 
+function zeichneBlaetterleiste(gesamt, seiten) {{
+  const leiste = document.getElementById("blaettern");
+  if (!leiste) return;
+  // Passt alles auf eine Seite, gehoert dort auch keine Leiste hin - sie
+  // waere ein Bedienelement ohne Wirkung.
+  leiste.hidden = proSeite > 0 && gesamt <= proSeite;
+  const von = gesamt === 0 ? 0 : (seite - 1) * (proSeite || gesamt) + 1;
+  const bis = proSeite > 0 ? Math.min(gesamt, seite * proSeite) : gesamt;
+  document.getElementById("s-stand").innerHTML =
+    "Zeile <b>" + von + "–" + bis + "</b> von " + gesamt
+    + " &middot; Seite <b>" + seite + "</b> von " + seiten;
+  document.getElementById("s-zurueck").disabled = seite <= 1;
+  document.getElementById("s-weiter").disabled = seite >= seiten;
+}}
+
+document.getElementById("s-zurueck").addEventListener("click", () => {{
+  seite -= 1; zeichne(); window.scrollTo({{top: 0, behavior: "smooth"}});
+}});
+document.getElementById("s-weiter").addEventListener("click", () => {{
+  seite += 1; zeichne(); window.scrollTo({{top: 0, behavior: "smooth"}});
+}});
+document.getElementById("s-pro-seite").addEventListener("change", (e) => {{
+  proSeite = Number(e.target.value);
+  seite = 1;
+  zeichne();
+}});
+
 // --- Gemessene Resonanz ------------------------------------------------
 
 // Klartext fuer die Score-Bestandteile. Dieselben Namen wie scoring._LABELS -
 // eine zweite Liste liefe beim naechsten neuen Bestandteil auseinander, und
 // die Zeile zeigte dann etwas anderes als der Export.
-const PUNKT_LABEL = {{
-  audience_match: "Zielgruppe",
-  city_match: "Stadt",
-  category_match: "Kategorie",
-  member_count: "Mitglieder",
-  name_quality: "Name",
-  resonanz_engagement: "Resonanz",
-  resonanz_reichweite: "Reichweite",
-  resonanz_aktualitaet: "Aktualität",
-}};
-
-function seit(iso) {{
-  if (!iso) return null;
-  const tage = (Date.now() - new Date(iso).getTime()) / 86400000;
-  if (tage < 1 / 24) return "gerade eben";
-  if (tage < 1) return `vor ${{Math.round(tage * 24)}} Std.`;
-  if (tage < 60) return `vor ${{Math.round(tage)}} Tagen`;
-  return `vor ${{Math.round(tage / 30)}} Monaten`;
-}}
-
-function resonanzZelle(z) {{
-  const r = z.resonanz;
-  if (!r) {{
-    // Kein veroeffentlichter Beitrag: Null Klicks sagen hier nichts ueber die
-    // Gruppe aus, sondern nur ueber uns. Deshalb "–" und nicht "0 %".
-    return '<span class="b-leer">noch nicht gemessen</span>';
-  }}
-  const regung = seit(r.letzte_regung);
-  return `<div class="res">
-    <b>${{r.quote === null ? "–" : r.quote.toLocaleString("de-DE") + " %"}}</b>
-    <span class="res-leise">${{r.registrierungen}}/${{r.klicks}}</span>
-    <div class="res-leise">${{r.beitraege}} Beitr. ·
-      ${{regung ? "letzte Regung " + regung : "keine Regung"}}</div>
-  </div>`;
-}}
+// Die fuenf Bestandteile mit Zeichen, Beschriftung und Hoechstpunktzahl.
+// Die Hoechstwerte stehen hier und nicht im Programm: "22" allein ist keine
+// Auskunft, "22/25" ist eine.
+const BESTANDTEILE = [
+  ["members",         "👥", "Mitglieder", 25],
+  ["activity",        "🔥", "Aktivität",  25],
+  ["location",        "📍", "Stadt",      15],
+  ["category",        "🏷", "Kategorie",  20],
+  ["target_audience", "🎯", "Zielgruppe", 15],
+  ["name_quality",    "✍",  "Name",        0],
+];
+const PUNKT_LABEL = Object.fromEntries(BESTANDTEILE.map(([n, , l]) => [n, l]));
+const PUNKT_MAX   = Object.fromEntries(BESTANDTEILE.map(([n, , , m]) => [n, m]));
+const PUNKT_ICON  = Object.fromEntries(BESTANDTEILE.map(([n, i]) => [n, i]));
 
 function kampagnenZelle(z) {{
   // Zwei verschiedene Aussagen, und sie duerfen nicht gleich aussehen:
@@ -1300,21 +1444,61 @@ function kampagnenZelle(z) {{
     + ` title="Passt zur Auswahlregel - klicken vergibt den Tracking-Code">`
     + `+ ${{esc(k.name)}}</button>`).join("");
 
-  // Und die uebrigen Kampagnen, deren Regel nicht passt - der Einzelfall,
-  // fuer den es diese Spalte ueberhaupt gibt.
+  // Das Auswahlfeld nennt JEDE Kampagne, in der die Gruppe noch nicht steht -
+  // auch die vorgeschlagenen.
+  //
+  // Vorher blieben die Vorschlaege ausgespart, weil daneben schon ein Knopf
+  // fuer sie stand. Das Feld verschwand damit genau dann, wenn es nur eine
+  // Kampagne gibt und die Gruppe ihr bereits zugeordnet ist: Die Spalte zeigte
+  // nur noch eine Marke, und die Frage "wohin gehoert diese Gruppe?" hatte in
+  // der Spalte, die es dafuer gibt, keine Antwortmoeglichkeit mehr. Der Knopf
+  // ist die Abkuerzung, das Feld die vollstaendige Liste - dass eine Kampagne
+  // in beiden steht, ist kein Widerspruch.
+  //
+  // Entfernt wird hier nie: Zuordnen vergibt einen Tracking-Code, und der
+  // steht spaeter in veroeffentlichten Beitraegen. Deshalb nennt das Feld nur
+  // Kampagnen, die noch dazukommen KOENNEN, und heisst "+".
   const drin = new Set((z.beitraege || []).map((b) => b.kampagne));
-  const vorgeschlagen = new Set(passend.map((k) => k.id));
-  const rest = (DATEN.kampagnen || []).filter(
-    (k) => !drin.has(k.id) && !vorgeschlagen.has(k.id));
+  const waehlbar = (DATEN.kampagnen || []).filter((k) => !drin.has(k.id));
 
-  const auswahl = rest.length
-    ? '<select class="k-zuordnen" data-gruppe="' + esc(z.id) + '">'
-      + '<option value="">andere …</option>'
-      + rest.map((k) => `<option value="${{esc(k.id)}}">${{esc(k.name)}}</option>`).join("")
+  const auswahl = waehlbar.length
+    ? '<select class="k-zuordnen" data-gruppe="' + esc(z.id) + '"'
+      + ' title="Gruppe einer Kampagne zuordnen - vergibt einen Tracking-Code">'
+      + '<option value="">+ Kampagne …</option>'
+      + waehlbar.map((k) => `<option value="${{esc(k.id)}}">${{esc(k.name)}}</option>`).join("")
       + '</select>'
     : "";
 
   return (marken + vorschlaege + auswahl) || '<span class="zart">–</span>';
+}}
+
+function scoreBalken(z) {{
+  // Fuenf schmale Balken statt fuenf Zahlen: Bei 25 sichtbaren Zeilen sind
+  // 125 Zahlen unlesbar, 125 Balkenlaengen nicht. Die Zahlen selbst stehen
+  // im Tooltip - die Frage "warum 84?" stellt man einmal je Gruppe, nicht
+  // beim Ueberfliegen.
+  //
+  // Ein Bestandteil OHNE Grundlage bekommt keinen leeren Balken, sondern gar
+  // keinen: Ein leerer Balken liest sich wie "geprueft und null", und genau
+  // diese Verwechslung soll die Anzeige nicht erzeugen.
+  if (z.score === null) return "";
+  const teile = BESTANDTEILE.filter(([name, , , max]) =>
+    max > 0 && (z.punkte || {{}})[name] !== undefined && istBeurteilt(z, name));
+  if (!teile.length) return "";
+  return '<span class="balken">' + teile.map(([name, , label, max]) => {{
+    const wert = (z.punkte || {{}})[name] || 0;
+    const anteil = Math.round((wert / max) * 100);
+    return `<i class="b-${{name}}" style="--anteil:${{anteil}}%"
+              title="${{label}} ${{zahl(wert)}}/${{max}}"></i>`;
+  }}).join("") + "</span>";
+}}
+
+function istBeurteilt(z, name) {{
+  // "Bewertet mit 0" und "nicht bewertbar" sind zwei Zustaende, und die
+  // Aufschluesselung kennt nur Zahlen. Unterscheiden laesst es sich an der
+  // Begruendung: Was dort als "unbekannt" steht, hatte keine Grundlage.
+  const label = PUNKT_LABEL[name] || name;
+  return !(z.grund || "").includes(label + " unbekannt");
 }}
 
 function punkteText(z) {{
@@ -1328,10 +1512,28 @@ function punkteText(z) {{
   // Nur die Bestandteile, die tatsaechlich Punkte gebracht haben. Ein
   // abgeschalteter oder unbekannter Bestandteil steht nicht mit "0" da - das
   // liesse sich als "geprueft und wertlos" missverstehen.
-  const teile = Object.entries(z.punkte || {{}}).filter(([, wert]) => wert > 0);
-  const zeilen = teile.map(([name, wert]) =>
-    `${{PUNKT_LABEL[name] || name}}: ${{zahl(wert)}}`);
-  if (z.grund) zeilen.push(z.grund);
+  const zeilen = BESTANDTEILE
+    .filter(([name, , , max]) => max > 0 && istBeurteilt(z, name))
+    .map(([name, icon, label, max]) =>
+      `${{icon}} ${{label}}: ${{zahl((z.punkte || {{}})[name] || 0)}} / ${{max}}`);
+
+  // Die Belege darunter: Wer "Mitglieder 22/25" liest, will als naechstes
+  // wissen, aus welcher Zahl das entstanden ist und woher sie stammt.
+  const belege = [];
+  if (z.mitglieder !== null && z.mitglieder !== undefined) {{
+    belege.push(`👥 ${{z.mitglieder.toLocaleString("de-DE")}} Mitglieder`
+      + (z.mitglieder_quelle ? ` (${{z.mitglieder_quelle}})` : ""));
+  }}
+  if (z.posts_pro_tag !== null && z.posts_pro_tag !== undefined) {{
+    belege.push(`🔥 ca. ${{zahl(z.posts_pro_tag)}} Beiträge/Tag`
+      + (z.aktivitaet_quelle ? ` (${{z.aktivitaet_quelle}})` : ""));
+  }} else if (z.aktivitaet_quelle) {{
+    belege.push(`🔥 Aktivität aus ${{z.aktivitaet_quelle}}`);
+  }}
+  if (z.konfidenz) belege.push(`Datenqualität ${{Math.round(z.konfidenz * 100)}} %`);
+
+  if (belege.length) zeilen.push("", ...belege);
+  if (z.grund) zeilen.push("", z.grund);
   return zeilen.join("\\n");
 }}
 
@@ -1347,79 +1549,26 @@ const BEITRAG_LABEL = {{
   uebersprungen: "übersprungen",
 }};
 
+// Die Spalte zeigt den Stand und sonst nichts. Sie hatte einmal einen Knopf
+// "Text", der den fertigen Beitrag in die Zwischenablage legte - und damit
+// denselben Ablauf ein zweites Mal anbot, nur schmaler und ohne die Merkmale
+// der Gruppe. Zwei Wege zum selben Beitrag heissen zwei Zaehlweisen;
+// gearbeitet wird unter /arbeit/{{kampagne}}.
 function beitragZelle(z) {{
   if (!z.beitraege.length) {{
     return '<span class="b-leer">kein Tracking-Link</span>';
   }}
-  return '<div class="beitrag">' + z.beitraege.map((b, i) => {{
-    const erledigt = b.status === "veroeffentlicht";
+  return '<div class="beitrag">' + z.beitraege.map((b) => {{
     const fehler = b.fehler
       ? `<span class="b-fehler" title="${{esc(b.fehler)}}">${{esc(b.fehler)}}</span>` : "";
-    return `<div class="b-zeile" data-gruppe="${{esc(z.id)}}"
-                 data-kampagne="${{esc(b.kampagne)}}" data-i="${{i}}">
-      <span class="b-marke b-${{b.status}}" title="${{esc(b.kampagne_name)}}">
+    const wem = esc(b.kampagne_name) + " – " + esc(b.code);
+    return `<div class="b-zeile">
+      <span class="b-marke b-${{b.status}}" title="${{wem}}">
         ${{BEITRAG_LABEL[b.status] || b.status}}</span>
-      <button class="b-knopf b-kopieren" title="Text mit ${{esc(b.code)}} kopieren">Text</button>
-      <button class="b-knopf b-oeffnen" title="Gruppe im Browser öffnen">Gruppe</button>
-      ${{erledigt ? "" : '<button class="b-knopf b-fertig" title="Beitrag steht">✓</button>'}}
-      ${{erledigt ? "" : '<button class="b-knopf b-fehlschlag" title="Ging nicht">✕</button>'}}
       ${{fehler}}
     </div>`;
   }}).join("") + '</div>';
 }}
-
-// Ein Klick auf einen der vier Knoepfe. Delegiert, weil die Zeilen bei jedem
-// Filterwechsel neu entstehen - einzeln gebundene Handler waeren nach dem
-// ersten Tastendruck im Suchfeld verloren.
-document.getElementById("zeilen").addEventListener("click", async (ereignis) => {{
-  const knopf = ereignis.target.closest(".b-knopf");
-  if (!knopf) return;
-  const zeile = knopf.closest(".b-zeile");
-  const gruppe = DATEN.gruppen.find((g) => g.id === zeile.dataset.gruppe);
-  if (!gruppe) return;
-  const beitrag = gruppe.beitraege[Number(zeile.dataset.i)];
-
-  if (knopf.classList.contains("b-kopieren")) {{
-    try {{
-      await navigator.clipboard.writeText(beitrag.text);
-      knopf.textContent = "kopiert";
-      setTimeout(() => {{ knopf.textContent = "Text"; }}, 1200);
-    }} catch (err) {{
-      // Ohne sicheren Kontext verweigert der Browser die Zwischenablage.
-      // Dann bleibt der Text sichtbar statt zu verschwinden.
-      window.prompt("Text kopieren:", beitrag.text);
-    }}
-    return;
-  }}
-
-  if (knopf.classList.contains("b-oeffnen")) {{
-    window.open(gruppe.url, "_blank", "noopener");
-    return;
-  }}
-
-  const fehlschlag = knopf.classList.contains("b-fehlschlag");
-  let grund = "";
-  if (fehlschlag) {{
-    grund = window.prompt("Warum ging es nicht?", beitrag.fehler || "") || "";
-  }}
-  const antwort = await fetch("/beitrag", {{
-    method: "POST",
-    headers: {{ "Content-Type": "application/json" }},
-    body: JSON.stringify({{
-      campaign_id: beitrag.kampagne,
-      group_id: gruppe.id,
-      status: fehlschlag ? "fehlgeschlagen" : "veroeffentlicht",
-      grund: grund,
-    }}),
-  }});
-  if (!antwort.ok) {{ alert("Nicht gespeichert (" + antwort.status + ")."); return; }}
-  const ergebnis = await antwort.json();
-  beitrag.status = ergebnis.status;
-  beitrag.fehler = ergebnis.fehler;
-  beitrag.versuche = ergebnis.versuche;
-  gruppe.beitrag_status = ergebnis.gesamtstand;
-  zeichne();
-}});
 
 // --- Kampagnen ---------------------------------------------------------
 // Anlegen und Zuordnen sind getrennt: Ein Tracking-Code ist endgueltig, er
@@ -1445,25 +1594,6 @@ function gewaehlteWerte(id) {{
   return [...document.getElementById(id).selectedOptions].map((o) => o.value);
 }}
 
-// Der Testknopf erzeugt wirklich einen Satz - deshalb nur auf Klick und nie
-// beim Laden der Seite. Bei einem lokalen Modell dauert das je nach Karte ein
-// paar Sekunden; ohne Rueckmeldung sieht das aus, als waere nichts passiert.
-document.getElementById("ki-test")?.addEventListener("click", async (e) => {{
-  const knopf = e.target;
-  const ziel = document.getElementById("ki-test-ergebnis");
-  knopf.disabled = true;
-  ziel.textContent = "läuft …";
-  try {{
-    const antwort = await fetch("/ki/test", {{ method: "POST" }});
-    const daten = await antwort.json();
-    ziel.textContent = daten.ok ? "✅ " + daten.text : "❌ " + daten.text;
-  }} catch (fehler) {{
-    ziel.textContent = "❌ " + fehler;
-  }} finally {{
-    knopf.disabled = false;
-  }}
-}});
-
 document.getElementById("k-anlegen")?.addEventListener("click", async (e) => {{
   const knopf = e.target;
   const name = document.getElementById("k-name").value.trim();
@@ -1482,11 +1612,13 @@ document.getElementById("k-anlegen")?.addEventListener("click", async (e) => {{
         language: document.getElementById("k-sprache").value.trim(),
         landing_page: document.getElementById("k-landing").value.trim(),
         message_template: document.getElementById("k-vorlage").value,
+        kommentare: document.getElementById("k-kommentare").checked,
       }}),
     }});
     const ergebnis = await antwort.json();
     if (!antwort.ok) throw new Error(ergebnis.detail || "HTTP " + antwort.status);
     alert("Angelegt: " + ergebnis.campaign_id + " (Entwurf, noch ohne Codes).");
+    standSichern();
     location.reload();
   }} catch (fehler) {{
     alert("Konnte die Kampagne nicht anlegen: " + fehler.message);
@@ -1610,6 +1742,32 @@ document.addEventListener("click", (ereignis) => {{
   block.scrollIntoView({{behavior: "smooth", block: "nearest"}});
 }});
 
+// Kommentartexte an oder aus. Es entsteht dabei nichts - die Texte kommen
+// beim naechsten "Texte erzeugen"; ein vorhandener Kommentar bleibt stehen,
+// auch wenn der Haken faellt.
+document.addEventListener("change", async (ereignis) => {{
+  const feld = ereignis.target;
+  if (!feld.classList.contains("k-kommentare")) return;
+  const an = feld.checked;
+  feld.disabled = true;
+  try {{
+    const antwort = await fetch(
+      "/kampagnen/" + encodeURIComponent(feld.dataset.id) + "/texte",
+      {{
+        method: "POST",
+        headers: {{"Content-Type": "application/json"}},
+        body: JSON.stringify({{kommentare: an}}),
+      }},
+    );
+    if (!antwort.ok) throw new Error("HTTP " + antwort.status);
+  }} catch (fehler) {{
+    feld.checked = !an;
+    alert("Konnte die Textarten nicht aendern: " + fehler.message);
+  }} finally {{
+    feld.disabled = false;
+  }}
+}});
+
 document.addEventListener("change", async (ereignis) => {{
   const feld = ereignis.target;
   if (!feld.classList.contains("k-status")) return;
@@ -1660,6 +1818,7 @@ document.addEventListener("click", async (ereignis) => {{
       body: JSON.stringify({{dry_run: false}}),
     }})).json();
     alert(echt.neu + " Zuordnungen angelegt.");
+    standSichern();
     location.reload();
   }} catch (fehler) {{
     alert("Zuordnen fehlgeschlagen: " + fehler.message);
@@ -1686,7 +1845,7 @@ document.addEventListener("click", async (ereignis) => {{
 
     let frage = 'Kampagne "' + (knopf.dataset.name || id) + '" loeschen?\\n\\n'
       + vorschau.zuordnungen + " Zuordnungen samt Tracking-Codes\\n"
-      + vorschau.entwuerfe + " Entwuerfe, " + vorschau.versuche + " Versuche\\n"
+      + vorschau.versuche + " Versuche\\n"
       + vorschau.ereignisse_bleiben + " Ereignisse bleiben erhalten\\n";
     if (vorschau.veroeffentlichte_codes) {{
       // Der einzige Teil, der sich nicht wiederherstellen laesst: Diese Codes
@@ -1704,6 +1863,7 @@ document.addEventListener("click", async (ereignis) => {{
       headers: {{"Content-Type": "application/json"}},
       body: JSON.stringify({{bestaetigt: true}}),
     }});
+    standSichern();
     location.reload();
   }} catch (fehler) {{
     alert("Loeschen fehlgeschlagen: " + fehler.message);
@@ -1751,6 +1911,7 @@ async function zuordnen(gruppe, kampagne, name, element) {{
       alert(daten.detail || ("Fehler " + antwort.status));
       return;
     }}
+    standSichern();
     location.reload();
   }} catch (fehler) {{
     alert("Zuordnen fehlgeschlagen: " + fehler.message);
@@ -1816,6 +1977,72 @@ async function bearbeitenSetzen(wert) {{
   }}
 }}
 
+// Die Kampagnenliste der Sammelleiste - einmal beim Start gefuellt.
+//
+// Sie zeigt **alle** Kampagnen, anders als das Feld in der Kampagnenspalte:
+// Dort geht es um eine Gruppe, und was schon zugeordnet ist, waere dort ein
+// Angebot ohne Wirkung. Hier stehen viele Gruppen mit verschiedenen Staenden
+// hinter der Auswahl - der Server ueberspringt die bereits zugeordneten und
+// sagt hinterher, wie viele es waren.
+function fuelleSammelKampagnen() {{
+  const feld = document.getElementById("sammel-kampagne");
+  feld.innerHTML = '<option value="">Kampagne wählen …</option>'
+    + (DATEN.kampagnen || [])
+        .map((k) => `<option value="${{esc(k.id)}}">${{esc(k.name)}}</option>`)
+        .join("");
+}}
+
+async function sammelZuordnen() {{
+  const feld = document.getElementById("sammel-kampagne");
+  const kampagne = feld.value;
+  const ids = [...gewaehlt];
+  if (!ids.length) return;
+  if (!kampagne) {{
+    alert("Erst eine Kampagne wählen.");
+    feld.focus();
+    return;
+  }}
+  const name = feld.options[feld.selectedIndex].textContent;
+
+  // Gefragt wird mit der **Zahl**, nicht nur mit dem Namen: Ein Tracking-Code
+  // wird nie zurueckgenommen, und wie viele Codes gleich entstehen, ist die
+  // Angabe, die man vorher gegenlesen will.
+  if (!confirm(ids.length + (ids.length === 1 ? " Gruppe" : " Gruppen")
+      + ' der Kampagne "' + name + '" zuordnen?\\n\\n'
+      + "Jede bekommt einen eigenen Tracking-Code. Ein vergebener Code wird "
+      + "nie zurückgenommen. Bereits zugeordnete bleiben unverändert.")) return;
+
+  const knoepfe = document.querySelectorAll("#sammel button");
+  knoepfe.forEach((k) => k.disabled = true);
+  try {{
+    const antwort = await fetch(
+      "/kampagnen/" + encodeURIComponent(kampagne) + "/gruppen", {{
+        method: "POST",
+        headers: {{"Content-Type": "application/json"}},
+        body: JSON.stringify({{group_ids: ids}}),
+      }});
+    const daten = await antwort.json();
+    if (!antwort.ok) {{
+      alert(daten.detail || ("Fehler " + antwort.status));
+      return;
+    }}
+    // Was uebersprungen wurde, gehoert in die Meldung: "12 gewählt, 3 neu"
+    // ohne den Rest liest sich wie ein halber Fehlschlag.
+    let text = daten.neu + (daten.neu === 1 ? " Gruppe" : " Gruppen") + " zugeordnet.";
+    if (daten.schon_zugeordnet) text += " " + daten.schon_zugeordnet + " waren es schon.";
+    if ((daten.unbekannt || []).length) text += " Unbekannt: " + daten.unbekannt.join(", ");
+    alert(text);
+    standSichern();
+    location.reload();
+  }} catch (fehler) {{
+    alert("Zuordnen fehlgeschlagen: " + fehler.message);
+  }} finally {{
+    knoepfe.forEach((k) => k.disabled = false);
+  }}
+}}
+
+document.getElementById("sammel-zuordnen").addEventListener("click", sammelZuordnen);
+
 document.getElementById("sammel-aus")
   .addEventListener("click", () => bearbeitenSetzen(false));
 document.getElementById("sammel-ein")
@@ -1855,9 +2082,12 @@ document.getElementById("zeilen").addEventListener("change", async (ereignis) =>
   }}
 }});
 
+// Ein neuer Filter faengt auf Seite 1 an: Seite 7 eines anderen Ergebnisses
+// ist keine sinnvolle Fortsetzung.
+const filterGeaendert = () => {{ seite = 1; zeichne(); }};
 document.querySelectorAll(".filter select, .filter input")
-  .forEach((el) => el.addEventListener("input", zeichne));
-document.getElementById("f-beitrag").addEventListener("change", zeichne);
+  .forEach((el) => el.addEventListener("input", filterGeaendert));
+document.getElementById("f-beitrag").addEventListener("change", filterGeaendert);
 document.querySelectorAll("th[data-sort]").forEach((th) =>
   th.addEventListener("click", () => {{
     const spalte = th.dataset.sort;
@@ -1866,7 +2096,14 @@ document.querySelectorAll("th[data-sort]").forEach((th) =>
     zeichne();
   }}));
 
+// Erst die Auswahlfelder fuellen (weiter oben), dann den gemerkten Stand
+// setzen, dann zeichnen - in dieser Reihenfolge, sonst steht der gemerkte
+// Wert in einem Feld, das seine Optionen noch nicht hat.
+const merkY = standHolen();
 zeichne();
+// Nach dem Zeichnen: vorher ist die Tabelle leer und die Seite zu kurz zum
+// Scrollen. requestAnimationFrame wartet auf das fertige Layout.
+if (merkY) requestAnimationFrame(() => window.scrollTo(0, merkY));
 </script>
 </body>
 </html>"""

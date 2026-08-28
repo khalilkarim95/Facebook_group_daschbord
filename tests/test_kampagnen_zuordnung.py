@@ -449,7 +449,7 @@ def _alte_datenbank(pfad: Path) -> None:
         CREATE TABLE groups (
             group_id TEXT PRIMARY KEY, url_canonical TEXT NOT NULL,
             url_variants TEXT NOT NULL DEFAULT '[]', name TEXT NOT NULL DEFAULT '',
-            description_snippet TEXT, member_count_hint INTEGER,
+            description_snippet TEXT, member_count INTEGER,
             privacy_hint TEXT NOT NULL DEFAULT 'unknown', language_hint TEXT,
             audience_tags TEXT NOT NULL DEFAULT '[]',
             audience_confidence REAL NOT NULL DEFAULT 0, city TEXT, bundesland TEXT,

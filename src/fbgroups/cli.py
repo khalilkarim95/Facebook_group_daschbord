@@ -16,9 +16,10 @@
 from __future__ import annotations
 
 import csv
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -26,10 +27,11 @@ from rich.table import Table
 
 from fbgroups.config import AppConfig, load_config
 from fbgroups.export import export_csv, export_excel
-from fbgroups.marketing.cli import campaign_app, ki_app, marketing_app
+from fbgroups.marketing.cli import campaign_app, marketing_app
 from fbgroups.marketing.selection import synchronisiere
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.marketing.tracking import app_base_url
+from fbgroups.models import Group, PrivacyHint, ValidationStatus
 from fbgroups.pipeline import classify_group, process_search_results, run_seed_import
 from fbgroups.providers.base import ProviderState
 from fbgroups.providers.factory import (
@@ -59,11 +61,15 @@ app = typer.Typer(
 )
 console = Console()
 
+
+def _mit_zeitzone(zeitpunkt: datetime) -> datetime:
+    """Zeitpunkt mit Zeitzone - ein Vergleich ohne wirft sonst TypeError."""
+    return zeitpunkt if zeitpunkt.tzinfo else zeitpunkt.replace(tzinfo=UTC)
+
 # Die Marketing-Erweiterung haengt sich als eigene Unterbefehle an. Bestehende
 # Befehle bleiben unveraendert; wer sie nicht nutzt, merkt nichts davon.
 app.add_typer(campaign_app, name="campaign")
 app.add_typer(marketing_app, name="marketing")
-app.add_typer(ki_app, name="ki")
 
 
 def _config() -> AppConfig:
@@ -274,7 +280,7 @@ def pruefliste_command(
         groups = sort_by_rank(store.load_groups())
 
     if offen:
-        groups = [g for g in groups if g.member_count_hint is None]
+        groups = [g for g in groups if g.member_count is None]
     if top > 0:
         groups = groups[:top]
 
@@ -294,7 +300,7 @@ def pruefliste_command(
                 [
                     group.url_canonical,
                     group.name,
-                    group.member_count_hint if group.member_count_hint is not None else "",
+                    group.member_count if group.member_count is not None else "",
                     "",
                     group.notes,
                 ]
@@ -371,6 +377,156 @@ def rescore_command(
             )
 
     _print_groups(bewertet[:10])
+
+
+@app.command("enrich")
+def enrich_command(
+    limit: int = typer.Option(
+        None, "--limit", help="Hoechstens N Gruppenseiten abrufen."
+    ),
+    alle: bool = typer.Option(
+        False, "--alle", help="Ohne --limit laufen (bis enrich.max_pro_lauf)."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Nur zeigen, welche Gruppen an der Reihe waeren."
+    ),
+    erneut: bool = typer.Option(
+        False, "--erneut", help="Auch Gruppen abrufen, deren Befund noch frisch ist."
+    ),
+) -> None:
+    """Liest Mitgliederzahl und Aktivitaet von den oeffentlichen Gruppenseiten.
+
+    **Dieser Befehl ruft facebook.com auf.** Bis zum 27.08.2026 war das
+    ausgeschlossen; der Nutzer hat die Grenze an diesem Tag ausdruecklich fuer
+    das Lesen oeffentlicher Seiten geoeffnet. Ohne Login, ohne Cookies, ohne
+    Umgehung von Sperren - wer blockt, bekommt None und keinen Trick.
+
+    Der Lauf startet nie beilaeufig: ohne --limit oder --alle passiert nichts.
+    Dieselbe Vorsicht wie bei "fbgroups search", aber aus einem anderen Grund -
+    dort geht es um Guthaben, hier um das Konto des Nutzers.
+    """
+    from fbgroups.extract.aktivitaet import faktor_aus_posts_pro_tag
+    from fbgroups.extract.gruppenseite import Blockiert, Gruppenseiten
+    from fbgroups.models import ActivitySource, MemberCountSource
+
+    config = _config()
+
+    if not dry_run and limit is None and not alle:
+        console.print(
+            Panel(
+                "Es wurde nichts abgerufen.\n\n"
+                "Ein Abruf von facebook.com startet absichtlich nicht ohne "
+                "Mengenangabe.\n\n"
+                "  [bold]fbgroups enrich --dry-run[/bold]   zeigt, wer an der Reihe waere\n"
+                "  [bold]fbgroups enrich --limit 5[/bold]   hoechstens 5 Gruppenseiten\n"
+                "  [bold]fbgroups enrich --alle[/bold]      bis zur Obergrenze aus "
+                "config/settings.yaml",
+                title="Abbruch",
+                border_style="yellow",
+            )
+        )
+        raise typer.Exit(code=2)
+
+    obergrenze = int(config.get("enrich", "max_pro_lauf", default=100) or 100)
+    hoechstalter = float(config.get("enrich", "hoechstalter_tage", default=30) or 30)
+    wieviele = min(limit if limit is not None else obergrenze, obergrenze)
+
+    with SqliteStore(config.path("sqlite_path")) as store:
+        groups = store.load_groups()
+
+    # Die besten Gruppen zuerst: Wer abbricht, soll die wertvollsten Zahlen
+    # erhoben haben - dieselbe Ueberlegung wie bei der Arbeitsliste.
+    frist = datetime.now(UTC) - timedelta(days=hoechstalter)
+    offen = [
+        g for g in sort_by_rank(groups)
+        if g.validation_status is ValidationStatus.VALID
+        and (
+            erneut
+            or g.member_count_checked_at is None
+            or _mit_zeitzone(g.member_count_checked_at) < frist
+        )
+    ]
+
+    console.print(
+        f"{len(groups)} Gruppen im Bestand, {len(offen)} ohne frischen Befund, "
+        f"{min(wieviele, len(offen))} in diesem Lauf."
+    )
+    if dry_run:
+        for g in offen[:wieviele]:
+            steht = "?" if g.member_count is None else str(g.member_count)
+            console.print(f"  {g.group_id:>18}  {g.name[:42]:<42}  Mitglieder: {steht}")
+        console.print("[dim]--dry-run: es wurde nichts abgerufen.[/dim]")
+        return
+
+    cache = config.path("data_dir") / "gruppenseiten.sqlite"
+    geaendert: list[Group] = []
+    abgerufen = gefunden_zahl = gefunden_aktiv = nicht_erreichbar = 0
+
+    with Gruppenseiten(cache, config) as seiten, httpx.Client(
+        timeout=20.0, follow_redirects=True
+    ) as client:
+        for group in offen[:wieviele]:
+            try:
+                befund = seiten.hole(group.group_id, client)
+            except Blockiert as exc:
+                console.print(f"[yellow]{exc}[/yellow]")
+                break
+
+            abgerufen += 1
+            jetzt = datetime.now(UTC)
+            group.member_count_checked_at = jetzt
+            group.activity_checked_at = jetzt
+            group.last_checked_at = jetzt
+
+            if not befund.erreichbar:
+                nicht_erreichbar += 1
+                geaendert.append(group)
+                continue
+
+            # Nur uebernehmen, was tatsaechlich dastand. Eine Zahl, die der
+            # Abruf nicht gefunden hat, loescht keine vorhandene: Ein
+            # Anmeldefenster ist kein Beleg dafuer, dass die Gruppe geschrumpft
+            # ist.
+            if befund.member_count is not None:
+                group.member_count = befund.member_count
+                group.member_count_source = MemberCountSource.FACEBOOK
+                gefunden_zahl += 1
+            if befund.privacy is not PrivacyHint.UNKNOWN:
+                group.privacy_hint = befund.privacy
+
+            # Beitraege je Tag aus den gefundenen Zeitpunkten: nur, wenn
+            # mindestens zwei vorliegen - aus einem einzelnen laesst sich
+            # keine Rate ableiten, und eine geratene waere schlimmer als keine.
+            if len(befund.beitrag_daten) >= 2:
+                spanne = (max(befund.beitrag_daten) - min(befund.beitrag_daten)).total_seconds()
+                tage = max(spanne / 86400.0, 1.0 / 24)
+                group.posts_per_day = round(len(befund.beitrag_daten) / tage, 2)
+                group.activity_factor = faktor_aus_posts_pro_tag(group.posts_per_day, config)
+                group.activity_confidence = 1.0
+                group.activity_source = ActivitySource.FACEBOOK
+                gefunden_aktiv += 1
+            if befund.juengster_beitrag is not None:
+                group.last_post_at = befund.juengster_beitrag
+
+            geaendert.append(group)
+
+    if geaendert:
+        with SqliteStore(config.path("sqlite_path")) as store:
+            store.upsert_groups(geaendert)
+
+    console.print(
+        f"[green]{abgerufen} Seiten abgerufen[/green] - "
+        f"{gefunden_zahl} Mitgliederzahlen, {gefunden_aktiv} Aktivitaetsmasse, "
+        f"{nicht_erreichbar} nicht erreichbar (Anmeldefenster oder Sperre)."
+    )
+    if abgerufen and not gefunden_zahl:
+        console.print(
+            "[yellow]Keine einzige Mitgliederzahl gefunden.[/yellow] Facebook liefert "
+            "einem nicht angemeldeten Abruf meist eine Anmeldeseite - das ist der "
+            "Normalfall und kein Fehler des Programms. Die Zahlen bleiben leer statt "
+            "geraten; von Hand pflegen geht ueber 'fbgroups pruefliste'."
+        )
+    console.print("[dim]Danach: fbgroups rescore[/dim]")
 
 
 @app.command("report")
@@ -836,36 +992,76 @@ def config_check_command() -> None:
     table.add_row("Geplante Anfragen", str(len(build_queries(config, 1))))
     console.print(table)
 
-    # Zwei Bloecke mit verschiedener Aufgabe: Die Passung beurteilt, ob die
-    # Gruppe zu uns gehoert (Zielgruppe, Stadt, Kategorie, Name, Groesse), die
-    # Resonanz, was sie tatsaechlich gebracht hat. Nur der erste Block soll
-    # 100 ergeben - beide zusammen zu pruefen hiesse, das Einschalten der
-    # Resonanz als Fehler zu melden.
-    weights = config.get("scoring", "weights", default={}) or {}
-    passung = {k: float(v) for k, v in weights.items() if not k.startswith("resonanz_")}
-    resonanz = {k: float(v) for k, v in weights.items() if k.startswith("resonanz_")}
+    # Die Gewichte werden gegen die Registry geprueft, nicht gegen eine Liste
+    # im Programm: Ein Name, den es nicht gibt, ist ein Tippfehler und keine
+    # Erweiterung - er wuerde sonst still ignoriert, und der Bestandteil,
+    # den er meinte, liefe mit seiner Vorgabe weiter.
+    from fbgroups.scoring import BESTANDTEILE
+    from fbgroups.scoring import gewichte as geltende_gewichte
 
-    total = sum(passung.values())
+    eingetragen = config.get("scoring", "weights", default={}) or {}
+    unbekannt = sorted(set(eingetragen) - set(BESTANDTEILE))
+    if unbekannt:
+        console.print(
+            f"[yellow]Warnung: unbekannte Bestandteile in scoring.weights: "
+            f"{', '.join(unbekannt)}. Bekannt sind: "
+            f"{', '.join(BESTANDTEILE)}.[/yellow]"
+        )
+
+    aktiv = geltende_gewichte(config)
+    total = sum(aktiv.values())
     if abs(total - 100.0) > 0.01:
         console.print(
-            f"[yellow]Warnung: Summe der Passungs-Gewichte ist {total}, erwartet 100.[/yellow]"
+            f"[yellow]Warnung: Summe der Score-Gewichte ist {total:g}, erwartet 100.[/yellow]"
         )
     else:
-        console.print("[green]Passungs-Gewichte ergeben 100.[/green]")
+        console.print("[green]Score-Gewichte ergeben 100.[/green]")
 
-    aktiv = sum(resonanz.values())
-    if aktiv > 0:
-        teile = ", ".join(
-            f"{name.removeprefix('resonanz_')} {gewicht:g}"
-            for name, gewicht in resonanz.items()
-            if gewicht > 0
-        )
+    # Reichweite und Betrieb sollen zusammen die Haelfte tragen. Das ist die
+    # fachliche Vorgabe, und sie faellt beim Verschieben eines einzelnen
+    # Gewichts leicht unter den Tisch - deshalb steht sie hier als Pruefung
+    # und nicht nur als Kommentar in settings.yaml.
+    haelfte = aktiv.get("members", 0.0) + aktiv.get("activity", 0.0)
+    if abs(haelfte - 50.0) > 0.01:
         console.print(
-            f"[green]Gemessene Resonanz eingeschaltet:[/green] "
-            f"{aktiv:g} zusaetzliche Punkte ({teile})."
+            f"[yellow]Hinweis: Mitglieder + Aktivitaet ergeben {haelfte:g} statt 50 "
+            f"Punkte. Der Score entsteht damit ueberwiegend aus der Passung.[/yellow]"
         )
+
+    teile = ", ".join(
+        f"{BESTANDTEILE[name].label} {gewicht:g}" for name, gewicht in aktiv.items()
+    )
+    console.print(f"[dim]Bestandteile: {teile}.[/dim]")
+    abgeschaltet = sorted(set(BESTANDTEILE) - set(aktiv))
+    if abgeschaltet:
+        console.print(
+            f"[dim]Abgeschaltet (Gewicht 0): "
+            f"{', '.join(BESTANDTEILE[n].label for n in abgeschaltet)}.[/dim]"
+        )
+
+    # Die Beitragsvorlagen. Geprueft wird, was sich still auswirkt: eine
+    # Vorlage ohne {link} ergaebe einen Beitrag, dessen Gruppe nie einen Klick
+    # gutgeschrieben bekommt - und das faellt erst auf, wenn er in der Gruppe
+    # steht. Ein fehlender Vorrat ist dagegen kein Fehler: Eine Kampagne darf
+    # ihre eigene Vorlage mitbringen.
+    from fbgroups.marketing import vorlagen
+
+    beanstandungen = vorlagen.pruefe(config)
+    # Drei Ebenen: Sprache, Einsatzzweck (Beitrag/Kommentar), Topf. Der Zweck
+    # kam mit den Kommentaren dazu - ohne ihn zaehlte die Summe die Toepfe
+    # statt der Fassungen und meldete "2 Fassungen" fuer zwanzig.
+    anzahl = sum(
+        len(liste)
+        for zwecke in (config.textvorlagen.get("vorlagen") or {}).values()
+        for toepfe in (zwecke or {}).values()
+        for liste in (toepfe or {}).values()
+    )
+    if beanstandungen:
+        console.print(f"[yellow]Beitragsvorlagen ({anzahl}) mit Beanstandung:[/yellow]")
+        for beanstandung in beanstandungen[:8]:
+            console.print(f"  - {beanstandung}")
     else:
-        console.print("[dim]Gemessene Resonanz abgeschaltet (alle Gewichte 0).[/dim]")
+        console.print(f"[green]Beitragsvorlagen in Ordnung:[/green] {anzahl} Fassungen.")
 
     seeds_dir = config.path("seeds_dir")
     seed_files = sorted(p.name for p in seeds_dir.glob("*") if p.suffix.lower() in {".csv", ".txt"})
@@ -901,8 +1097,8 @@ def _print_groups(groups: list, title: str = "Gruppen") -> None:
             (group.name or f"[dim]{group.group_id}[/dim]")[:44],
             ", ".join(group.audience_tags) or "[dim]unknown[/dim]",
             group.city or "[dim]unknown[/dim]",
-            f"{group.member_count_hint:,}".replace(",", ".")
-            if group.member_count_hint is not None
+            f"{group.member_count:,}".replace(",", ".")
+            if group.member_count is not None
             else "[dim]unknown[/dim]",
         )
     console.print(table)

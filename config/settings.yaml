@@ -70,88 +70,18 @@ marketing:
       normal: 0.40
       # alles darunter: niedrig
 
-    # Wartezeit zwischen zwei Beitraegen, in Sekunden. Zufaellig aus dem
-    # Bereich gezogen: Ein exakt gleichmaessiger Takt ist kein menschliches
-    # Verhalten. Das ist keine Verschleierung - es ist die ehrliche Untergrenze
-    # dessen, was ein Mensch braucht, um einen Beitrag zu schreiben.
-    pause_sekunden_min: 180
-    pause_sekunden_max: 420
-
-    # Hoechstens so viele Beitraege je Lauf und je Tag. Die Tagesgrenze ist
-    # die wichtigere: 310 Beitraege an einem Tag sind aus jeder Entfernung als
-    # Automat erkennbar, gleich wie lange dazwischen gewartet wird.
-    max_pro_lauf: 10
-    max_pro_tag: 20
-
-    # Wann der taegliche Lauf beginnt. Der Arbeiter schlaeft **nicht** bis
-    # dahin: Ein Prozess, der vierzehn Stunden wartet, ueberlebt keinen
-    # Neustart und keine Anmeldung. Gestartet wird er von der Aufgaben-
-    # planung des Systems; dieser Wert ist die Zeit, die dort einzutragen ist,
-    # und `campaign worker --dry-run` gibt den fertigen Befehl aus.
-    startzeit: "08:00"
-
     # Wie oft ein fehlgeschlagener Beitrag erneut versucht werden darf, bevor
     # ein Mensch hinsehen muss.
     max_versuche: 3
 
-    # Sprache und Produkt gehen in den Prompt ein. Sie stehen hier und nicht
-    # im Programm: Eine zweite Kampagne auf Deutsch ist eine fachliche
-    # Entscheidung, keine Codeaenderung.
+    # Die Sprache waehlt den Vorlagentopf (config/textvorlagen.yaml). Sie
+    # steht hier und nicht im Programm: Eine zweite Kampagne auf Deutsch ist
+    # eine fachliche Entscheidung, keine Codeaenderung. Eine Kampagne kann
+    # eine eigene Sprache tragen; dieser Wert ist die Vorgabe.
     sprache: arabisch
     produkt: >-
       B-Tarikak (بطريقك) - App, ueber die Reisende und Menschen, die etwas
       mitgeben moechten, zueinander finden.
-
-    ki:
-      # Welcher Anbieter. 'ollama' laeuft auf dem eigenen Rechner, kostet
-      # nichts je Anfrage, und die Angaben ueber die Gruppen verlassen den
-      # Rechner nicht - deshalb ist es die Voreinstellung und nicht die
-      # Ausweichloesung. 'anthropic' schreibt besseres Arabisch und kostet
-      # Geld je Anfrage; es ist eine Entscheidung, kein Zustand.
-      #
-      # Die Umgebungsvariable AI_PROVIDER hat Vorrang - wie APP_BASE_URL.
-      # Es wird nie stillschweigend gewechselt: Ein Ausweichen auf Anthropic,
-      # wenn Ollama gerade nicht laeuft, verwandelte einen abgeschalteten
-      # Rechner in eine Rechnung.
-      anbieter: ollama
-
-      # Wie viele Fassungen je Gruppe. Mehr als eine ist kein Luxus: Bekaeme
-      # jede Gruppe den ersten Vorschlag, klaengen 310 Beitraege gleich - und
-      # das ist genau das Muster, nach dem Facebooks Spam-Erkennung sucht.
-      varianten: 3
-
-      ollama:
-        # OLLAMA_BASE_URL und OLLAMA_MODEL aus der Umgebung haben Vorrang.
-        base_url: http://localhost:11434
-        # Empfehlung fuer eine Karte mit 4 GB Speicher: Ein 4B-Modell passt
-        # vollstaendig hinein und antwortet in Sekunden. Ein 8B-Modell muesste
-        # sich den Hauptspeicher teilen und braeuchte ungefaehr die zehnfache
-        # Zeit je Beitrag - bei besserem Arabisch. Beides ist hier ein
-        # Zeilenwechsel, keine Codeaenderung.
-        modell: qwen3.5:4b
-        # Wie lange auf eine Fassung gewartet wird.
-        #
-        # Der Wert oben setzt voraus, was der Kommentar sagt: dass das Modell
-        # auf der Karte liegt. Tut es das nicht, rechnet es auf der CPU und
-        # braucht ein Vielfaches - `fbgroups ki status` meldet diesen Fall
-        # ausdruecklich, statt ihn als "verbunden" durchgehen zu lassen.
-        #
-        # Die Grenze zu heben macht die Erzeugung nicht schneller, nur
-        # geduldiger. Der brauchbarere Weg bei CPU-Betrieb ist ein kleineres
-        # Modell (`ollama pull qwen2.5:1.5b`) oder Ollama auf die Karte zu
-        # bringen.
-        timeout_sekunden: 180
-
-      anthropic:
-        # Nur wirksam bei anbieter: anthropic. Ohne Schluessel und ohne das
-        # Paket bleibt der gesamte Rest des Systems voll benutzbar.
-        modell: claude-opus-5
-        max_tokens: 8000
-
-    # Ab wann ein 'processing' als verwaist gilt (Arbeiter abgestuerzt).
-    # Nichts wird dann automatisch wiederholt - es wird nur gemeldet: Ob in
-    # der Gruppe schon ein Beitrag steht, weiss allein ein Mensch, der nachsieht.
-    verwaist_nach_minuten: 30
 
 dedupe:
   # Unscharfer Namensabgleich: ab diesem Wert (0-100) gilt ein Paar als
@@ -168,61 +98,116 @@ classification:
   # Ab welcher Konfidenz eine Stadt uebernommen wird.
   city_min_confidence: 0.5
 
+# Abruf der oeffentlich erreichbaren Gruppenseite auf facebook.com
+# (fbgroups enrich). Bis zum 27.08.2026 war jeder Zugriff auf facebook.com
+# ausgeschlossen; der Nutzer hat die Grenze an diesem Tag ausdruecklich fuer
+# das LESEN oeffentlicher Gruppenseiten geoeffnet, weil Mitgliederzahl und
+# Aktivitaet zusammen die Haelfte des Scores tragen und nirgends sonst zu
+# bekommen sind - in 147 gespeicherten Serper-Antworten kommt keine einzige
+# Mitgliederzahl vor.
+#
+# Was weiterhin ausgeschlossen bleibt: Login, Sitzungsuebernahme, Umgehung
+# von Sperren, Personendaten. Siehe extract/gruppenseite.py.
+enrich:
+  # Sekunden zwischen zwei Abrufen. Bewusst gross: Der Lauf soll langsam und
+  # erkennbar sein, nicht schnell und unauffaellig. Bei 313 Gruppen sind 6
+  # Sekunden gut eine halbe Stunde - das ist der Preis dafuer, dass niemand
+  # den Abruf fuer einen Angriff haelt.
+  mindestabstand_sekunden: 6.0
+
+  # Hoechstens so viele Abrufe je Lauf, wenn --alle gesetzt ist. Eine harte
+  # Obergrenze wie max_queries_per_run bei der Suche: Wer sich vertippt, soll
+  # nicht den ganzen Bestand abrufen.
+  max_pro_lauf: 100
+
+  # Nach so vielen Tagen gilt ein Befund als veraltet und wird erneut geholt.
+  # Eine Mitgliederzahl von vor einem Jahr ist keine Mitgliederzahl von heute;
+  # jeden Tag neu zu fragen waere aber genau der Betrieb, den eine Sperre
+  # ausloest.
+  hoechstalter_tage: 30
+
 scoring:
   # Summe der Gewichte = 100. Der Score ist die Summe der tatsaechlich
   # belegten Punkte - er wird NICHT hochgerechnet. Was bei der jeweiligen
-  # Datenlage hoechstens erreichbar war, steht in der Spalte "Score max.".
+  # Datenlage hoechstens erreichbar war, steht in "Score max.".
+  #
+  # Die Namen sind die Bestandteile aus scoring.BESTANDTEILE. Ein neuer
+  # Bestandteil braucht dort eine Funktion mit @bestandteil(...) und hier eine
+  # Zeile - sonst nichts. Ein Gewicht von 0 schaltet einen Bestandteil
+  # vollstaendig ab: Er zaehlt keine Punkte und erscheint auch nicht als
+  # "unbekannt" in der Begruendung, weil er gar nicht erst erwartet wird.
   weights:
-    # Die Mitgliederzahl ist ABGESCHALTET (Gewicht 0), weil sie sich nicht
-    # automatisch beschaffen laesst: Der Suchdienst liefert sie nicht (in 273
-    # gespeicherten Treffern kein einziges Mal), und facebook.com wird nicht
-    # aufgerufen. Bei Gewicht 45 fehlte sie damit ausnahmslos jeder Gruppe -
-    # die Folge war eine Decke von 55 Punkten, die keine Gruppe von einer
-    # anderen unterschied. Die Rangfolge entsteht seither aus den Angaben, die
-    # tatsaechlich vorliegen; die 45 Punkte sind auf sie verteilt.
-    #
-    # Wer die Zahl doch von Hand pflegt ("fbgroups pruefliste"), setzt hier
-    # wieder ein Gewicht > 0 und ruft "fbgroups rescore" auf. Ein Gewicht von 0
-    # nimmt einen Bestandteil vollstaendig aus der Bewertung - er taucht dann
-    # auch nicht als "unbekannt" in der Begruendung auf.
-    member_count: 0
-    audience_match: 45
-    city_match: 27
-    category_match: 16
-    # Beurteilt nur noch die Form des Namens (vollstaendig, kurz, kein
-    # Beitragstitel). Zielgruppe und Stadt haben eigene Gewichte und werden
-    # hier nicht erneut vergeben - diese Doppelzaehlung war der Grund, weshalb
-    # 27 Gruppen gemeinsam auf dem Hoechstwert standen.
-    name_quality: 12
+    # -- Reichweite und Betrieb: zusammen die Haelfte ---------------------
+    # Das ist die fachliche Vorgabe und keine Feinheit. Eine Gruppe, die
+    # thematisch perfekt passt und in der nichts geschieht, ist kein guter
+    # Platz fuer einen Beitrag - und umgekehrt bringt die groesste Gruppe
+    # nichts, wenn sie tot ist. Deshalb zwei getrennte Bestandteile mit
+    # gleichem Gewicht: Sie duerfen einander nicht ersetzen.
+    members: 25
+    activity: 25
 
-    # -- Gemessene Resonanz --------------------------------------------
-    # Was die Gruppe tatsaechlich gebracht hat. Die Zahlen stammen aus den
-    # eigenen Tracking-Ereignissen (Klick -> Registrierung) und sind das
-    # einzige Aktivitaetsmass, das dieses Projekt ohne facebook.com erheben
-    # kann: Mitgliederzahl, Beitraege je Woche und aktive Poster stehen
-    # ausschliesslich dort. Die Meta Groups API, die sie geliefert haette,
-    # wurde am 22.04.2024 vollstaendig abgeschaltet.
-    #
-    # Sie beantworten die eigentliche Frage ohnehin genauer: nicht "wie viel
-    # wird dort geredet?", sondern "wie viele Menschen kommen von dort zu
-    # uns?". Eine Gruppe mit 500 Mitgliedern und 40 Registrierungen ist mehr
-    # wert als eine mit 5.000 und zwei.
-    #
-    # Die vier oberen Bestandteile (100 Punkte) beurteilen die PASSUNG - ob
-    # die Gruppe zu uns gehoert. Diese drei (75 Punkte) beurteilen die
-    # WIRKUNG. Zusammen 175; der Score wird bewusst nicht auf 100 normiert
-    # (siehe scoring.py, Regel 3). Eine Gruppe ohne veroeffentlichten Beitrag
-    # erreicht damit hoechstens 100 - und "100 von 100" steht zu Recht hinter
-    # "130 von 175".
-    #
-    # Auf 0 setzen schaltet den Bestandteil vollstaendig ab; die Bewertung ist
-    # dann exakt die bisherige.
-    resonanz_engagement: 50    # Registrierungen je Klick - das Entscheidende
-    resonanz_reichweite: 15    # Klicks je veroeffentlichtem Beitrag
-    resonanz_aktualitaet: 10   # wie frisch die letzte Regung ist
+    # -- Passung: die andere Haelfte --------------------------------------
+    # Das Thema wiegt schwerer als der Ort, weil eine thematisch passende
+    # Gruppe in der Nachbarstadt mehr bringt als eine ortsgenaue, in der es
+    # um etwas anderes geht.
+    category: 20
+    location: 15
+    target_audience: 15
 
-  # Schwellen der Resonanz. Sie stehen hier und nicht im Code: Eine geaenderte
-  # Zielquote ist eine fachliche Entscheidung.
+    # -- Abgeschaltet (bleibt erhalten) -----------------------------------
+    # Die Form des Namens (vollstaendig, kurz, kein Beitragstitel) sagt etwas
+    # ueber UNSERE DATEN und nichts ueber die Gruppe. Sie gehoert deshalb in
+    # data_confidence und nicht in den Score. Der Bestandteil bleibt stehen,
+    # damit das Wiedereinschalten eine Zahlenaenderung ist - hier - und keine
+    # Codeaenderung.
+    name_quality: 0
+
+  # Punkte (0-1 Anteil) je Mitglieder-Groessenklasse. Erste passende Regel
+  # gewinnt, absteigend ausgewertet.
+  #
+  # BEWUSST NICHT LINEAR. Eine Gruppe mit 100.000 Mitgliedern ist nicht
+  # zehnmal so wertvoll wie eine mit 10.000: Oberhalb einiger tausend
+  # entscheidet nicht mehr die Groesse, sondern ob dort etwas geschieht -
+  # dafuer gibt es "activity". Die Stufen wachsen deshalb ungefaehr
+  # logarithmisch; jede Verdopplung bringt etwa gleich viel dazu.
+  member_count_buckets:
+    - { min: 50000, factor: 1.00 }   # 25,0 Punkte
+    - { min: 25000, factor: 0.88 }   # 22,0
+    - { min: 10000, factor: 0.76 }   # 19,0
+    - { min: 5000,  factor: 0.64 }   # 16,0
+    - { min: 2500,  factor: 0.52 }   # 13,0
+    - { min: 1000,  factor: 0.40 }   # 10,0
+    - { min: 500,   factor: 0.28 }   #  7,0
+    - { min: 100,   factor: 0.16 }   #  4,0
+    - { min: 0,     factor: 0.04 }   #  1,0
+  #
+  # Hinweis: Es gibt bewusst KEINEN Ersatzwert fuer eine unbekannte
+  # Mitgliederzahl. Ein solcher Wert erzeugte fuer jede Gruppe ohne Metadaten
+  # denselben Score. Ist die Zahl unbekannt, entfaellt der Bestandteil: die
+  # Gruppe erhaelt dafuer keine Punkte, und "Score max." sinkt entsprechend.
+  # Frueher wurde stattdessen auf 100 hochgerechnet - damit erreichte eine
+  # Gruppe, von der nur der Name bekannt war, denselben Hoechstwert wie eine
+  # belegte Grossgruppe. 27 Gruppen standen auf exakt 100.
+
+  # Anteil der 15 Ortspunkte je Genauigkeitsstufe. Eine erkannte Stadt gibt
+  # den vollen Anteil (mal ihrer Konfidenz), alles Groebere anteilig. Die
+  # unterste Stufe ist NICHT null: "Deutschland allgemein" ist eine
+  # schwaechere Passung als "Bonn", aber immer noch eine. Erst wenn gar
+  # nichts erkennbar ist, gilt der Bestandteil als unbekannt.
+  location_stufen:
+    bundesland: 0.45     # ~6,8 von 15 Punkten
+    land: 0.20           # ~3,0 von 15 Punkten
+
+  # Jede erkannte Nebenkategorie hebt die Hauptkategorie an: Eine Gruppe, die
+  # drei gesuchte Themen bedient, ist mehr wert als eine, die eines bedient.
+  # Gedeckelt, weil zehn Themen zu streifen nicht dasselbe ist wie eines zu
+  # treffen - ohne Deckel gewaenne die Gruppe mit dem laengsten Namen.
+  kategorie_nebenbonus: 0.08
+  kategorie_nebenbonus_max: 0.24
+
+  # Schwellen der gemessenen Resonanz - einer der Quellen von "activity".
+  # Sie stehen hier und nicht im Code: Eine geaenderte Zielquote ist eine
+  # fachliche Entscheidung.
   resonanz:
     # Eine Registrierungsquote, die als "voll" gilt. NICHT 1,0: 15 % sind
     # hervorragend. Wer auf 100 % normiert, gibt selbst der besten Gruppe ein
@@ -239,27 +224,37 @@ scoring:
     # gemessen. Wer vor zwei Stunden gepostet hat, hat noch keine Klicks -
     # eine Null waere hier eine Behauptung ueber die Zukunft.
     schonfrist_tage: 3
+    # Wie die drei Teilmasse zu EINEM Aktivitaetsfaktor verrechnet werden.
+    # Sie werden auf ihre Summe normiert, damit ein Tippfehler die Obergrenze
+    # nicht sprengt. Die Registrierungsquote wiegt am schwersten: Klicks sind
+    # Neugier, Registrierungen sind das Ergebnis.
+    anteile:
+      engagement: 0.60
+      reichweite: 0.25
+      aktualitaet: 0.15
 
-  # Punkte (0-1 Anteil) je Mitglieder-Groessenklasse. Erste passende Regel
-  # gewinnt. Wirkungslos, solange "member_count: 0" gilt - die Klassen bleiben
-  # stehen, damit ein Wiedereinschalten eine reine Zahlenaenderung ist.
-  member_count_buckets:
-    - { min: 50000, factor: 1.00 }
-    - { min: 20000, factor: 0.85 }
-    - { min: 10000, factor: 0.70 }
-    - { min: 5000,  factor: 0.55 }
-    - { min: 1000,  factor: 0.40 }
-    - { min: 200,   factor: 0.20 }
-    - { min: 0,     factor: 0.05 }
-  #
-  # Hinweis: Es gibt bewusst KEINEN Ersatzwert fuer eine unbekannte
-  # Mitgliederzahl. Ein solcher Wert erzeugte fuer jede Gruppe ohne Metadaten
-  # denselben Score. Ist die Zahl unbekannt, entfaellt der Bestandteil: die
-  # Gruppe erhaelt dafuer keine Punkte, und "Score max." sinkt entsprechend.
-  # Frueher wurde stattdessen auf 100 hochgerechnet - damit erreichte eine
-  # Gruppe, von der nur der Name bekannt war, denselben Hoechstwert wie eine
-  # belegte Grossgruppe.
-  #
-  # Das gilt unveraendert fuer jeden eingeschalteten Bestandteil. Abgeschaltet
-  # (Gewicht 0) ist etwas anderes als unbekannt: der Bestandteil wird gar nicht
-  # erst erwartet, deshalb senkt sein Fehlen "Score max." auch nicht.
+  # Wie die Aktivitaet aus den Datumsangaben der Suchtreffer geschaetzt wird
+  # (Quelle "search_dates"). Das ist die schwaechste der drei Quellen und
+  # traegt deshalb eine niedrige Konfidenz: Ein indexierter Beitrag von vor
+  # zwei Wochen belegt, dass die Gruppe lebt - eine Beitragszahl je Tag ist
+  # daraus NICHT abzuleiten. Bewertet wird allein die Frische des juengsten
+  # gefundenen Beitrags.
+  aktivitaet_aus_treffern:
+    # Juenger als das: voller Faktor. Aelter als "tot_ab_tagen": 0.
+    frisch_bis_tagen: 7
+    tot_ab_tagen: 180
+    # Mindestzahl datierter Treffer, damit ueberhaupt geschaetzt wird. Ein
+    # einzelner indexierter Beitrag ist ein Zufallsfund.
+    mindest_treffer: 1
+
+  # Wie die Aktivitaet aus der Beitragsliste der Gruppenseite bewertet wird
+  # (Quelle "facebook"). Beitraege je Tag, abgestuft wie die Mitgliederzahl.
+  aktivitaet_buckets:
+    - { min: 20,  factor: 1.00 }   # aussergewoehnlich viel Betrieb
+    - { min: 10,  factor: 0.90 }
+    - { min: 5,   factor: 0.75 }
+    - { min: 2,   factor: 0.58 }
+    - { min: 1,   factor: 0.45 }
+    - { min: 0.5, factor: 0.30 }
+    - { min: 0.1, factor: 0.15 }
+    - { min: 0,   factor: 0.02 }   # praktisch keine Aktivitaet

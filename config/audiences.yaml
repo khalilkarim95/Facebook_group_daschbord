@@ -4,10 +4,21 @@
 # terms.ar                   -> Teilstring-Abgleich, da im Arabischen Artikel und
 #                               Praepositionen direkt am Wort haengen
 #                               ("سوريين" ist in "السوريين" enthalten)
+#
+# Drei Beschriftungen, drei Verwendungen - sie sind nicht austauschbar:
+#   label_de       lang, fuer Auswahlfelder ("Syrer in Deutschland")
+#   label_kurz_de  fuer {zielgruppe} in deutschen Beitragsvorlagen. Das lange
+#                  Label traegt "in Deutschland" schon in sich und ergaebe
+#                  "Syrer in Deutschland in Bonn".
+#   label_ar       fuer {zielgruppe} in arabischen Vorlagen. Nicht aus
+#                  terms.ar ableitbar: das sind Suchbegriffe fuer den
+#                  Abgleich, keine Anrede.
 
 audiences:
   syrians:
     label_de: Syrer in Deutschland
+    label_ar: السوريين
+    label_kurz_de: Syrer
     priority: 1
     phase: 1
     terms:
@@ -17,6 +28,8 @@ audiences:
 
   arabs:
     label_de: Araber in Deutschland
+    label_ar: العرب
+    label_kurz_de: Araber
     priority: 1
     phase: 1
     terms:
@@ -27,6 +40,8 @@ audiences:
   # --- Phase 2: aktiviert durch phase: 1 ---
   lebanese:
     label_de: Libanesen in Deutschland
+    label_ar: اللبنانيين
+    label_kurz_de: Libanesen
     priority: 2
     phase: 2
     terms:
@@ -36,6 +51,8 @@ audiences:
 
   iraqis:
     label_de: Iraker in Deutschland
+    label_ar: العراقيين
+    label_kurz_de: Iraker
     priority: 2
     phase: 2
     terms:
@@ -45,6 +62,8 @@ audiences:
 
   palestinians:
     label_de: Palaestinenser in Deutschland
+    label_ar: الفلسطينيين
+    label_kurz_de: Palästinenser
     priority: 2
     phase: 2
     terms:
@@ -54,6 +73,8 @@ audiences:
 
   jordanians:
     label_de: Jordanier in Deutschland
+    label_ar: الأردنيين
+    label_kurz_de: Jordanier
     priority: 3
     phase: 2
     terms:
@@ -63,6 +84,8 @@ audiences:
 
   egyptians:
     label_de: Aegypter in Deutschland
+    label_ar: المصريين
+    label_kurz_de: Ägypter
     priority: 2
     phase: 2
     terms:
@@ -72,6 +95,8 @@ audiences:
 
   moroccans:
     label_de: Marokkaner in Deutschland
+    label_ar: المغاربة
+    label_kurz_de: Marokkaner
     priority: 3
     phase: 2
     terms:
@@ -81,6 +106,8 @@ audiences:
 
   algerians:
     label_de: Algerier in Deutschland
+    label_ar: الجزائريين
+    label_kurz_de: Algerier
     priority: 3
     phase: 2
     terms:
@@ -90,6 +117,8 @@ audiences:
 
   tunisians:
     label_de: Tunesier in Deutschland
+    label_ar: التونسيين
+    label_kurz_de: Tunesier
     priority: 3
     phase: 2
     terms:
@@ -99,6 +128,8 @@ audiences:
 
   yemenis:
     label_de: Jemeniten in Deutschland
+    label_ar: اليمنيين
+    label_kurz_de: Jemeniten
     priority: 3
     phase: 2
     terms:
@@ -108,6 +139,8 @@ audiences:
 
   libyans:
     label_de: Libyer in Deutschland
+    label_ar: الليبيين
+    label_kurz_de: Libyer
     priority: 3
     phase: 2
     terms:
@@ -117,6 +150,8 @@ audiences:
 
   sudanese:
     label_de: Sudanesen in Deutschland
+    label_ar: السودانيين
+    label_kurz_de: Sudanesen
     priority: 3
     phase: 2
     terms:

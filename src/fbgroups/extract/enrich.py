@@ -16,8 +16,16 @@ from collections import defaultdict
 from dataclasses import replace
 from urllib.parse import unquote, urlsplit
 
+from fbgroups.extract.aktivitaet import parse_relative_datum
 from fbgroups.importers.manual_seed import parse_member_count
-from fbgroups.models import Group, PrivacyHint, Provenance, SourceType
+from fbgroups.models import (
+    ActivitySource,
+    Group,
+    MemberCountSource,
+    PrivacyHint,
+    Provenance,
+    SourceType,
+)
 from fbgroups.providers.base import SearchHit
 from fbgroups.urls import ParsedGroupUrl, parse_group_url
 from fbgroups.validation import validate_group
@@ -173,6 +181,13 @@ def hit_to_group(hit: SearchHit, query_id: str, provider: str) -> Group | None:
 
     aus_beitrag = points_to_post(hit.url)
     combined = "" if aus_beitrag else f"{hit.title or ''} {hit.snippet or ''}"
+    mitglieder = parse_member_count_from_text(combined)
+
+    # Das Datum eines Treffers gilt AUCH bei einem Beitrags-Link - anders als
+    # Titel und Beschreibungstext. Es sagt nichts ueber den Beitragsinhalt,
+    # sondern nur: In dieser Gruppe ist damals etwas entstanden. Gerade die
+    # Beitrags-Treffer tragen es am haeufigsten.
+    geschrieben_am = parse_relative_datum(str(hit.raw.get("date") or ""))
 
     group = Group(
         group_id=parsed.group_id,
@@ -181,7 +196,13 @@ def hit_to_group(hit: SearchHit, query_id: str, provider: str) -> Group | None:
         name="" if aus_beitrag else clean_group_name(hit.title),
         description_snippet=None if aus_beitrag else ((hit.snippet or "").strip() or None),
         notes=post_note(hit.title) if aus_beitrag else "",
-        member_count_hint=parse_member_count_from_text(combined),
+        member_count=mitglieder,
+        # Die Zahl kommt mit ihrer Herkunft oder gar nicht: Dieselbe Zahl aus
+        # einem Snippet ist weniger wert als eine von der Gruppenseite, und
+        # ohne die Angabe liesse sich das spaeter nicht mehr unterscheiden.
+        member_count_source=MemberCountSource.SEARCH if mitglieder else None,
+        last_post_at=geschrieben_am,
+        activity_source=ActivitySource.SEARCH_DATES if geschrieben_am else None,
         privacy_hint=parse_privacy_hint(combined),
         sources=[
             Provenance(

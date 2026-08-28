@@ -14,9 +14,6 @@ Browser - einfuegen und abschicken muss beides ein Mensch.
 from __future__ import annotations
 
 import csv
-import subprocess
-import sys
-from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -26,6 +23,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from fbgroups.config import AppConfig, load_config
+from fbgroups.marketing import vorlagen
 from fbgroups.marketing.analytics import (
     code_bericht,
     funnel,
@@ -34,18 +32,6 @@ from fbgroups.marketing.analytics import (
     top_groups,
 )
 from fbgroups.marketing.beitrag import beitragstext, in_zwischenablage, oeffne_im_browser
-from fbgroups.marketing.ki import (
-    ANBIETER,
-    PLATZHALTER,
-    KINichtVerfuegbar,
-    UngueltigerVorschlag,
-    auftrag_aus_gruppe,
-    baue_modell,
-    erzeuge_entwuerfe,
-    gewaehlter_anbieter,
-)
-from fbgroups.marketing.ki import status as ki_status
-from fbgroups.marketing.ki import teste as ki_teste
 from fbgroups.marketing.models import (
     MARKETING_FORTSCHRITT,
     Campaign,
@@ -61,7 +47,7 @@ from fbgroups.marketing.models import (
     QueueZustand,
     ReferralStatus,
     RewardStatus,
-    TextQuelle,
+    Texttyp,
 )
 from fbgroups.marketing.queue import UngueltigerUebergang
 from fbgroups.marketing.referral import code_fuer_benutzer, setze_status
@@ -85,13 +71,6 @@ from fbgroups.marketing.tracking import (
     slug,
     tracking_url,
 )
-from fbgroups.marketing.veroeffentlicher import (
-    UnbekannterVeroeffentlicher,
-    Veroeffentlicher,
-    baue_veroeffentlicher,
-    verfuegbare,
-)
-from fbgroups.marketing.worker import arbeite, lade_grenzen
 from fbgroups.models import Group
 from fbgroups.scoring import sort_by_rank
 from fbgroups.storage import SqliteStore
@@ -776,11 +755,18 @@ def campaign_refresh_urls(campaign_id: str = typer.Argument(...)) -> None:
 def campaign_message(
     campaign_id: str = typer.Argument(...),
     group_id: str = typer.Argument(..., help="Gruppe, fuer die der Text gelten soll."),
+    typ: str = typer.Option(
+        "", "--typ", help="post | kommentar (Vorgabe: beide, soweit vorhanden)."
+    ),
 ) -> None:
-    """Gibt die Textvorlage mit eingesetztem Tracking-Link aus.
+    """Gibt den fertigen Text mit eingesetztem Tracking-Link aus.
 
     Zum Kopieren. Dieses Programm postet nichts und schickt nichts - das
     Einfuegen und Absenden bleibt Handarbeit, und das ist Absicht.
+
+    Ohne ``--typ`` erscheinen Beitrag **und** Kommentar, sofern es beide gibt:
+    Wer in einer Gruppe steht, braucht meist beides, und zweimal denselben
+    Befehl mit verschiedenen Schaltern zu tippen ist kein Gewinn.
     """
     config = _config()
     with MarketingStore(config.path("sqlite_path")) as store:
@@ -791,18 +777,40 @@ def campaign_message(
         console.print(f"[red]{group_id} ist dieser Kampagne nicht zugeordnet.[/red]")
         raise typer.Exit(code=1)
 
+    gewuenscht = (typ or "").strip().lower()
+    if gewuenscht and gewuenscht not in tuple(t.value for t in Texttyp):
+        console.print(f"[red]Unbekannter Texttyp:[/red] {typ}")
+        raise typer.Exit(code=2)
+
     # Derselbe Textbauer wie queue, next und die Uebersicht - eine zweite
     # Fassung koennte abweichen, und der Unterschied fiele erst auf, wenn
     # ein Beitrag mit dem falschen Code veroeffentlicht ist.
-    text = beitragstext(campaign, link)
-
-    console.print(
-        Panel(
-            text or "[dim](keine Vorlage hinterlegt)[/dim]",
-            title=f"{campaign.name} - {link.tracking_code}",
-            subtitle="von Hand einfuegen und absenden",
+    gezeigt = 0
+    for texttyp in Texttyp:
+        if gewuenscht and texttyp.value != gewuenscht:
+            continue
+        text = beitragstext(campaign, link, texttyp)
+        # Ohne ausdruecklichen Wunsch nur zeigen, was es gibt: Eine leere
+        # Kommentarkachel unter jedem Beitrag waere eine Meldung ueber eine
+        # Kampagne, die gar keine Kommentare fuehrt.
+        if not text and not gewuenscht:
+            continue
+        gezeigt += 1
+        console.print(
+            Panel(
+                text or "[dim](kein Text hinterlegt)[/dim]",
+                # Kein "[post]": Rich liest eckige Klammern als Auszeichnung
+                # und verschluckt sie stillschweigend.
+                title=f"{texttyp.value.upper()} - {link.tracking_code}",
+                subtitle="von Hand einfuegen und absenden",
+            )
         )
-    )
+
+    if not gezeigt:
+        console.print(
+            "[yellow]Fuer diese Gruppe steht noch kein Text bereit.[/yellow] "
+            f"Erzeugen mit:  fbgroups campaign text {campaign_id} --aus-vorlage --ja"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -981,8 +989,8 @@ def campaign_retry(
 
     Wer ``max_versuche`` (Vorgabe 3) erreicht hat, bleibt ebenfalls stehen und
     wird am Ende genannt: "erlaubt keine Links" geht beim vierten Mal nicht
-    anders aus als beim ersten, kostet aber jedes Mal einen Platz im
-    Tageslimit. ``--alle`` uebergeht die Grenze.
+    anders aus als beim ersten, kostet aber jedes Mal einen Handgriff.
+    ``--alle`` uebergeht die Grenze.
     """
     config = _config()
     grenze = 0 if alle else int(
@@ -1051,184 +1059,6 @@ def _wechsle(
         return None
 
 
-@campaign_app.command("draft")
-def campaign_draft(
-    campaign_id: str = typer.Argument(...),
-    gruppe: str = typer.Option("", "--gruppe", help="Nur diese eine Gruppe."),
-    top: int = typer.Option(0, "--top", help="Die besten N ohne Text (0 = alle)."),
-    varianten: int = typer.Option(0, "--varianten", help="Fassungen je Gruppe."),
-    neu: bool = typer.Option(
-        False,
-        "--neu",
-        help="Auch dort erzeugen, wo schon ein Text steht - die Freigabe faellt dabei weg.",
-    ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Nur zeigen, was erzeugt wuerde - kein Aufruf, keine Kosten."
-    ),
-) -> None:
-    """Laesst Claude Beitragsvorschlaege schreiben - je Gruppe mehrere Fassungen.
-
-    Erzeugt **Entwuerfe**, sonst nichts. Nichts wird dabei freigegeben,
-    eingereiht oder veroeffentlicht; jeder Vorschlag wartet auf einen Menschen.
-
-    Der Tracking-Code wird dem Modell nie gezeigt: Es schreibt den Platzhalter
-    ``{link}``, und erst beim Zusammensetzen des Beitrags kommt der Code
-    **dieser** Gruppe hinein. Was das Modell nie sieht, kann es nicht
-    verfaelschen.
-
-    ``--dry-run`` zeigt die Auswahl, ohne einen Aufruf zu machen - jeder Aufruf
-    kostet, und bei 310 Gruppen ist das eine Zahl, die man vorher kennen will.
-    """
-    config = _config()
-    anzahl_varianten = varianten or int(
-        config.get("marketing", "posting", "ki", "varianten", default=3)
-    )
-    anbieter = gewaehlter_anbieter(config)
-
-    gruppen_store, store = _stores(config)
-    try:
-        campaign = _kampagne_oder_ende(store, campaign_id)
-        gruppen = _gruppen_nach_id(gruppen_store)
-        links = store.jobs_mit_status(campaign_id)
-    finally:
-        gruppen_store.close()
-
-    try:
-        if gruppe:
-            offen = [link for link in links if link.group_id == gruppe]
-            if not offen:
-                console.print(f"[red]{gruppe}[/red] gehoert nicht zu {campaign_id}.")
-                raise typer.Exit(code=1)
-        else:
-            if neu:
-                # Auch die mit Text - aber nie ein veroeffentlichter Beitrag
-                # und nie einer, der gerade in Arbeit ist. Der erste steht in
-                # einer Gruppe und laesst sich nicht mehr zurueckholen; beim
-                # zweiten haette jemand den Text vor sich, waehrend er sich
-                # unter der Hand aendert.
-                offen = [
-                    link
-                    for link in links
-                    if link.job_status not in (JobStatus.PUBLISHED, JobStatus.PROCESSING)
-                ]
-            else:
-                # Nur die ohne Text: Ein zweiter Lauf soll nicht 310 Aufrufe
-                # wiederholen, fuer die es laengst Entwuerfe gibt.
-                offen = [
-                    link
-                    for link in links
-                    if not link.post_text and link.job_status is JobStatus.DRAFT
-                ]
-            geordnet = nach_prioritaet(
-                [gruppen[link.group_id] for link in offen if link.group_id in gruppen], config
-            )
-            reihenfolge = {g.group_id: i for i, g in enumerate(geordnet)}
-            offen.sort(key=lambda link: reihenfolge.get(link.group_id, len(reihenfolge)))
-            if top:
-                offen = offen[:top]
-
-        if not offen:
-            console.print(
-                "[green]Nichts zu erzeugen[/green] - alle haben schon einen Text.\n"
-                f"[dim]Trotzdem neu schreiben lassen:  "
-                f"fbgroups campaign draft {campaign_id} --neu[/dim]"
-            )
-            return
-
-        if dry_run:
-            table = Table(title=f"Wuerde erzeugen ({len(offen)} Gruppen)")
-            table.add_column("Gruppe")
-            table.add_column("Prioritaet")
-            table.add_column("Score", justify="right")
-            for link in offen:
-                g = gruppen.get(link.group_id)
-                table.add_row(
-                    (g.name if g else link.group_id)[:40],
-                    prioritaet(g, config) if g else "[dim]unbekannt[/dim]",
-                    _score_text(g),
-                )
-            console.print(table)
-            stand = ki_status(config)
-            console.print(
-                f"[dim]{len(offen)} Gruppen x {anzahl_varianten} Fassungen ueber "
-                f"'{anbieter}' ({stand.modell or 'kein Modell eingestellt'}). "
-                f"Ohne --dry-run wird das wirklich erzeugt.[/dim]"
-            )
-            if anbieter == "ollama" and not stand.erreichbar:
-                console.print(
-                    "[yellow]Ollama antwortet gerade nicht[/yellow] - "
-                    "der echte Lauf wuerde scheitern. Pruefen mit: fbgroups ki status"
-                )
-            return
-
-        try:
-            modell = baue_modell(config)
-        except KINichtVerfuegbar as exc:
-            console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(code=2) from exc
-
-        erzeugt = verworfen_gesamt = 0
-        for link in offen:
-            group = gruppen.get(link.group_id)
-            if group is None:
-                continue
-            auftrag = auftrag_aus_gruppe(
-                group, campaign, config, varianten=anzahl_varianten
-            )
-            auftrag.bisherige_texte = [
-                e.text for e in store.entwuerfe_for(campaign_id, link.group_id)
-            ]
-            try:
-                entwuerfe, verworfen = erzeuge_entwuerfe(
-                    modell,
-                    auftrag,
-                    campaign_id=campaign_id,
-                    group_id=link.group_id,
-                )
-            except (UngueltigerVorschlag, KINichtVerfuegbar) as exc:
-                console.print(f"[red]{group.name or link.group_id}:[/red] {exc}")
-                continue
-
-            for entwurf in entwuerfe:
-                store.add_entwurf(entwurf)
-            erzeugt += len(entwuerfe)
-            verworfen_gesamt += len(verworfen)
-
-            if entwuerfe:
-                # Die erste Fassung wird uebernommen - waehlbar bleibt jede
-                # andere ueber 'campaign entwuerfe'.
-                store.set_post_text(
-                    campaign_id, link.group_id, entwuerfe[0].text, TextQuelle.KI
-                )
-                # Ein neuer Text macht jede bestehende Freigabe ungueltig: Ein
-                # Mensch hat einen *anderen* Text freigegeben. Waere der Stand
-                # geblieben, ginge ein ungeprueter Text in eine Gruppe hinaus -
-                # und niemand haette ihn je gesehen. Der Weg zurueck fuehrt
-                # ueber ``draft``, weil ``approved -> ai_generated`` in der
-                # Uebergangstabelle zu Recht fehlt.
-                if link.job_status not in _VOR_DER_PRUEFUNG:
-                    _wechsle(
-                        store, campaign_id, link.group_id, JobStatus.DRAFT, erzwingen=True
-                    )
-                _wechsle(store, campaign_id, link.group_id, JobStatus.AI_GENERATED)
-                console.print(
-                    f"[green]OK[/green] {group.name or link.group_id}: "
-                    f"{len(entwuerfe)} Fassungen"
-                )
-            else:
-                console.print(f"[yellow]--[/yellow] {group.name or link.group_id}: nichts Gutes")
-            for grund in verworfen:
-                console.print(f"   [dim]verworfen: {grund}[/dim]")
-    finally:
-        store.close()
-
-    console.print(
-        f"\n[green]{erzeugt}[/green] Entwuerfe erzeugt"
-        + (f", [yellow]{verworfen_gesamt}[/yellow] verworfen." if verworfen_gesamt else ".")
-    )
-    console.print(f"[dim]Ansehen:  fbgroups campaign entwuerfe {campaign_id} <gruppe>[/dim]")
-
-
 @campaign_app.command("text")
 def campaign_text(
     campaign_id: str = typer.Argument(...),
@@ -1238,15 +1068,20 @@ def campaign_text(
     ueberschreiben: bool = typer.Option(
         False, "--ueberschreiben", help="Auch dort, wo schon ein Text steht."
     ),
+    typ: str = typer.Option(
+        "",
+        "--typ",
+        help="post | kommentar | beide (Vorgabe: was die Kampagne fuehrt).",
+    ),
     ja: bool = typer.Option(False, "--ja", help="Wirklich schreiben (sonst nur zeigen)."),
 ) -> None:
-    """Traegt die Textvorlage der Kampagne als Beitragstext ein - ohne KI.
+    """Fuellt die Vorlagen aus ``config/textvorlagen.yaml`` je Gruppe.
 
-    Der Weg fuer alle, die keine Textvorschlaege erzeugen wollen oder koennen:
-    Ohne ``post_text`` kommt eine Zuordnung nicht durch die Freigabe
-    (``pruefe_uebergang`` verlangt einen Text) und damit nie in die
-    Warteschlange. ``campaign draft`` fuellt das Feld mit einem Modell, dieser
-    Befehl mit der Vorlage.
+    Ohne Text kommt eine Zuordnung nicht durch die Freigabe
+    (``pruefe_uebergang`` verlangt einen) und damit nie in die Warteschlange.
+    Dieser Befehl schreibt den Text fuer viele Gruppen auf einmal; die eine
+    Gruppe, bei der die Vorlage nicht passt, bekommt ihren Text auf der
+    Arbeitsseite.
 
     Die Vorlage bleibt dabei **je Gruppe** eine eigene Kopie. Das ist kein
     Umweg: ``{link}`` wird erst beim Absetzen durch den Code *dieser* Gruppe
@@ -1256,12 +1091,16 @@ def campaign_text(
     Vorhandene Texte bleiben stehen, sofern nicht ``--ueberschreiben``. Ein von
     Hand ueberarbeiteter oder freigegebener Text ist Arbeit eines Menschen; ein
     Sammelbefehl macht sie nicht beilaeufig zunichte.
+
+    Welche Textarten entstehen, sagt die Kampagne (``kommentare``); ``--typ``
+    ueberstimmt das fuer diesen einen Lauf. Beide Arten haben eigene Vorlagen
+    und eigene Felder - ein Beitrag wird nie als Kommentar wiederverwendet.
     """
     if not aus_vorlage:
         console.print(
-            "Nichts zu tun. Der Text kommt entweder aus der Vorlage "
-            f"([bold]--aus-vorlage[/bold]) oder aus einem Modell "
-            f"([bold]fbgroups campaign draft {campaign_id}[/bold])."
+            "Nichts zu tun. Der Text kommt aus der Vorlage "
+            "([bold]--aus-vorlage[/bold]) - oder, fuer eine einzelne Gruppe, "
+            "aus dem Textfeld auf der Arbeitsseite."
         )
         raise typer.Exit(code=2)
 
@@ -1269,32 +1108,78 @@ def campaign_text(
     with MarketingStore(config.path("sqlite_path")) as store:
         campaign = _kampagne_oder_ende(store, campaign_id)
 
-        if not campaign.message_template.strip():
+        # Eine eigene Vorlage der Kampagne ist optional geworden: Ohne sie
+        # kommt der Text aus config/textvorlagen.yaml, und das ist seither der
+        # Normalfall. Gibt es sie aber, muss sie den Platzhalter tragen - sonst
+        # ginge der Beitrag ohne Tracking-Link hinaus und keine Gruppe bekaeme
+        # je einen Klick gutgeschrieben.
+        eigene = campaign.message_template.strip()
+        if eigene and vorlagen.PLATZHALTER_LINK not in eigene:
             console.print(
-                "[red]Diese Kampagne hat keine Textvorlage.[/red]\n"
-                f"Setzen mit:  fbgroups campaign set {campaign_id} --vorlage \"...\""
+                f"[yellow]Die eigene Vorlage der Kampagne enthaelt kein "
+                f"{vorlagen.PLATZHALTER_LINK}.[/yellow] Der Beitrag ginge dann ohne "
+                "Tracking-Link hinaus."
             )
             raise typer.Exit(code=2)
 
-        if PLATZHALTER not in campaign.message_template:
-            console.print(
-                f"[yellow]Die Vorlage enthaelt kein {PLATZHALTER}.[/yellow] "
-                "Der Beitrag ginge dann ohne Tracking-Link hinaus, und keine "
-                "Gruppe bekaeme je einen Klick gutgeschrieben."
-            )
+        beanstandungen = vorlagen.pruefe(config)
+        if not eigene and beanstandungen:
+            console.print("[red]config/textvorlagen.yaml stimmt nicht:[/red]")
+            for beanstandung in beanstandungen[:5]:
+                console.print(f"  - {beanstandung}")
             raise typer.Exit(code=2)
+
+        gewuenscht = (typ or "").strip().lower()
+        if gewuenscht == "beide":
+            zwecke = list(Texttyp)
+        elif gewuenscht:
+            try:
+                zwecke = [Texttyp(gewuenscht)]
+            except ValueError:
+                console.print(f"[red]Unbekannter Texttyp:[/red] {typ}")
+                raise typer.Exit(code=2) from None
+        else:
+            zwecke = [Texttyp.POST]
+            if campaign.kommentare:
+                zwecke.append(Texttyp.KOMMENTAR)
 
         links = store.links_for_campaign(campaign_id)
         betroffen = [
             link
             for link in links
-            if ueberschreiben or not link.post_text.strip()
+            if any(
+                ueberschreiben or not link.text_fuer(texttyp).strip()
+                for texttyp in zwecke
+            )
             if link.job_status not in (JobStatus.PUBLISHED, JobStatus.PROCESSING)
         ]
 
-        console.print(Panel(campaign.message_template, title="Vorlage"))
+        # Die Gruppen werden gebraucht, weil der Text je Gruppe ein anderer
+        # ist: Stadt und Zielgruppe gehen hinein, und welche der fuenf
+        # Fassungen es wird, entscheidet die Gruppenkennung.
+        with SqliteStore(config.path("sqlite_path")) as gruppen_store:
+            gruppen = _gruppen_nach_id(gruppen_store)
+
+        # Vorschau an einer wirklich betroffenen Gruppe. Die Vorlage roh zu
+        # zeigen hiesse, etwas anderes zu zeigen als das, was geschrieben wird.
+        beispiel = next((link for link in betroffen if link.group_id in gruppen), None)
+        if beispiel is not None:
+            for texttyp in zwecke:
+                schluessel, beispieltext = vorlagen.text_fuer_gruppe(
+                    gruppen[beispiel.group_id],
+                    campaign,
+                    config,
+                    schluessel=beispiel.vorlage_fuer(texttyp),
+                    texttyp=texttyp,
+                )
+                titel = gruppen[beispiel.group_id].name or beispiel.group_id
+                console.print(
+                    Panel(beispieltext, title=f"Beispiel: {titel}  [{schluessel}]")
+                )
+
         console.print(
-            f"{len(betroffen)} von {len(links)} Zuordnungen bekaemen diesen Text."
+            f"{len(betroffen)} von {len(links)} Zuordnungen bekaemen einen Text "
+            f"({', '.join(t.value for t in zwecke)})."
         )
         uebersprungen = len(links) - len(betroffen)
         if uebersprungen:
@@ -1311,65 +1196,48 @@ def campaign_text(
             )
             return
 
-        for link in betroffen:
-            store.set_post_text(
-                campaign_id, link.group_id, campaign.message_template, TextQuelle.VORLAGE
-            )
+        # Gruppen ohne Datensatz werden uebersprungen statt mit einem Text
+        # versehen, der ihre Stadt und Zielgruppe raten muesste.
+        geschrieben = [link for link in betroffen if link.group_id in gruppen]
+        gezaehlt = dict.fromkeys((t.value for t in zwecke), 0)
+        for link in geschrieben:
+            for texttyp in zwecke:
+                # Ein vorhandener Text bleibt stehen, sofern nicht
+                # ``--ueberschreiben``: Handarbeit ueberlebt einen
+                # Sammelbefehl. Die Gruppe steht trotzdem in der Liste, weil
+                # der andere Zweck vielleicht noch fehlt.
+                if not ueberschreiben and link.text_fuer(texttyp).strip():
+                    continue
+                schluessel, text = vorlagen.text_fuer_gruppe(
+                    gruppen[link.group_id],
+                    campaign,
+                    config,
+                    schluessel=link.vorlage_fuer(texttyp),
+                    texttyp=texttyp,
+                )
+                store.set_generierten_text(
+                    campaign_id,
+                    link.group_id,
+                    text=text,
+                    vorlage_key=schluessel,
+                    uebernehmen=True,
+                    texttyp=texttyp,
+                )
+                gezaehlt[texttyp.value] += 1
+        fehlend = len(betroffen) - len(geschrieben)
+        betroffen = geschrieben
 
-    console.print(f"\n[green]{len(betroffen)}[/green] Texte eingetragen.")
+    if fehlend:
+        console.print(f"[dim]{fehlend} ohne Datensatz im Bestand uebersprungen.[/dim]")
+    console.print(
+        "\n[green]"
+        + ", ".join(f"{anzahl} {name}" for name, anzahl in gezaehlt.items())
+        + "[/green] eingetragen."
+    )
     console.print(
         f"[dim]Weiter:  fbgroups campaign approve {campaign_id} alle"
         f"  →  fbgroups campaign enqueue {campaign_id}[/dim]"
     )
-
-
-@campaign_app.command("entwuerfe")
-def campaign_entwuerfe(
-    campaign_id: str = typer.Argument(...),
-    group_id: str = typer.Argument(...),
-    waehle: int = typer.Option(0, "--waehle", help="Diese Variantennummer uebernehmen."),
-) -> None:
-    """Zeigt die Fassungen einer Gruppe - und uebernimmt auf Wunsch eine.
-
-    Die verworfenen bleiben stehen. Sie kosten nichts und beantworten spaeter
-    die Frage, wogegen entschieden wurde.
-    """
-    config = _config()
-    with MarketingStore(config.path("sqlite_path")) as store:
-        _kampagne_oder_ende(store, campaign_id)
-        link = _job_oder_ende(store, campaign_id, group_id)
-        entwuerfe = store.entwuerfe_for(campaign_id, group_id)
-
-        if waehle:
-            passend = next((e for e in entwuerfe if e.variante == waehle), None)
-            if passend is None or passend.entwurf_id is None:
-                console.print(f"[red]Variante {waehle}[/red] gibt es nicht.")
-                raise typer.Exit(code=1)
-            store.waehle_entwurf(passend.entwurf_id)
-            console.print(f"[green]Variante {waehle} uebernommen.[/green]")
-            console.print(
-                f"[dim]Freigeben:  fbgroups campaign approve {campaign_id} {group_id}[/dim]"
-            )
-            return
-
-        if not entwuerfe:
-            console.print(
-                f"Keine Entwuerfe. Erzeugen mit:\n"
-                f"  fbgroups campaign draft {campaign_id} --gruppe {group_id}"
-            )
-            return
-
-        console.print(f"[bold]{group_id}[/bold] - Stand: {link.job_status.value}\n")
-        for entwurf in entwuerfe:
-            marke = "[green]* gewaehlt[/green]" if entwurf.gewaehlt else ""
-            console.print(f"[bold]Variante {entwurf.variante}[/bold] "
-                          f"([dim]{entwurf.modell}[/dim]) {marke}")
-            console.print(entwurf.text)
-            console.print()
-        console.print(
-            f"[dim]Uebernehmen:  fbgroups campaign entwuerfe {campaign_id} "
-            f"{group_id} --waehle 2[/dim]"
-        )
 
 
 # Staende, aus denen ein Beitrag zur Pruefung vorgelegt werden kann.
@@ -1771,246 +1639,6 @@ def campaign_next(
         store.close()
 
 
-def _baue_veroeffentlicher(name: str) -> Veroeffentlicher:
-    """Sucht den Adapter aus der Registry - oder endet mit einer Auskunft.
-
-    Die Liste steht nicht hier: Ein neuer Adapter traegt sich ueber
-    ``@register_veroeffentlicher`` selbst ein, und diese Datei aendert sich
-    dabei nicht. Was die Kommandozeile anbietet, ist damit immer genau das,
-    was es wirklich gibt.
-    """
-    try:
-        return baue_veroeffentlicher(
-            name,
-            frage=console.input,
-            melde=lambda zeile: console.print(Panel(zeile)),
-        )
-    except UnbekannterVeroeffentlicher as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=2) from exc
-
-
-@campaign_app.command("worker")
-def campaign_worker(
-    campaign_id: str = typer.Argument(...),
-    limit: int = typer.Option(
-        0, "--limit", help="Hoechstens so viele in diesem Lauf (0 = Wert aus der Konfiguration)."
-    ),
-    tageslimit: int = typer.Option(
-        0, "--tageslimit", help="Ueberschreibt max_pro_tag fuer diesen Lauf."
-    ),
-    adapter: str = typer.Option(
-        "assistiert", "--adapter", help=" | ".join(verfuegbare())
-    ),
-    trocken: bool = typer.Option(
-        False, "--dry-run", help="Zeigt den Plan und die Grenzen, ohne etwas abzusetzen."
-    ),
-) -> None:
-    """Arbeitet die Warteschlange ab - eine Gruppe nach der anderen.
-
-    Die Reihenfolge kommt aus der Warteschlange und damit aus dem Score: Beim
-    ``enqueue`` wird nach Rang sortiert, hier nicht mehr - sonst entschiede
-    eine Neubewertung mitten im Lauf, welcher Beitrag als naechstes hinausgeht.
-
-    ``pause``, ``resume`` und ``stop`` wirken **waehrend** der Arbeiter laeuft:
-    Der Zustand wird vor jedem Beitrag und nach jeder Wartezeit frisch aus der
-    Datenbank gelesen. Ein zweites Fenster genuegt.
-
-    Das Tageslimit zaehlt aus ``post_versuche`` und ueberlebt damit einen
-    Neustart - zwei Laeufe am selben Tag setzen zusammen nicht mehr Beitraege
-    als einer.
-    """
-    config = _config()
-    gruppen_store, store = _stores(config)
-    try:
-        campaign = _kampagne_oder_ende(store, campaign_id)
-        gruppen = _gruppen_nach_id(gruppen_store)
-    finally:
-        gruppen_store.close()
-
-    try:
-        grenzen = lade_grenzen(config)
-        if limit:
-            grenzen = replace(grenzen, max_pro_lauf=limit)
-        if tageslimit:
-            grenzen = replace(grenzen, tageslimit=tageslimit)
-
-        heute = store.versuche_heute(campaign_id)
-        offen = store.job_counts(campaign_id).get(JobStatus.QUEUED.value, 0)
-        zustand = store.queue_zustand(campaign_id)
-
-        tabelle = Table(box=None, show_header=False)
-        tabelle.add_column(style="dim")
-        tabelle.add_column()
-        tabelle.add_row("Warteschlange", f"{offen} eingereiht · Zustand: {zustand.value}")
-        tabelle.add_row("Heute schon", f"{heute} von {grenzen.tageslimit} Versuchen")
-        tabelle.add_row("Dieser Lauf", f"hoechstens {grenzen.max_pro_lauf}")
-        tabelle.add_row(
-            "Wartezeit", f"{grenzen.pause_min:.0f}-{grenzen.pause_max:.0f}s zwischen Beitraegen"
-        )
-        tabelle.add_row("Adapter", f"{adapter} - {verfuegbare().get(adapter, 'unbekannt')}")
-        console.print(tabelle)
-        console.print()
-
-        if trocken:
-            # Der Arbeiter schlaeft nicht bis zur Startzeit: Ein Prozess, der
-            # vierzehn Stunden wartet, ueberlebt keinen Neustart. Die
-            # Aufgabenplanung des Systems kann das, und sie tut es zuverlaessig
-            # - hier steht der fertige Befehl dafuer.
-            startzeit = str(
-                config.get("marketing", "posting", "startzeit", default="08:00")
-            )
-            console.print(
-                f"[dim]Taeglich um {startzeit} starten (einmalig einrichten):[/dim]\n"
-                f'  schtasks /create /tn "fbgroups-worker-{campaign_id}" /sc daily '
-                f'/st {startzeit} /tr "cmd /c cd /d {Path.cwd()} && '
-                f'.venv\\Scripts\\python.exe -m fbgroups.cli campaign worker {campaign_id}"'
-            )
-            console.print()
-            console.print("[dim]--dry-run: es wurde nichts abgesetzt.[/dim]")
-            return
-
-        if zustand is not QueueZustand.LAUFEND:
-            console.print(
-                f"[yellow]Die Warteschlange ist {zustand.value}.[/yellow]\n"
-                f"Weiter mit:  fbgroups campaign resume {campaign_id}"
-            )
-            raise typer.Exit(code=2)
-
-        veroeffentlicher = _baue_veroeffentlicher(adapter)
-        bericht = arbeite(
-            store,
-            campaign,
-            gruppen,
-            veroeffentlicher,
-            grenzen,
-            melde=lambda zeile: console.print(f"[dim]{zeile}[/dim]"),
-        )
-    finally:
-        store.close()
-
-    console.print()
-    for name, ausgang in bericht.zeilen:
-        farbe = "green" if ausgang == "veroeffentlicht" else "dim"
-        console.print(f"  [{farbe}]{ausgang:<24}[/{farbe}] {name}")
-    console.print()
-    console.print(
-        f"[green]{bericht.veroeffentlicht}[/green] veroeffentlicht · "
-        f"[red]{bericht.fehlgeschlagen}[/red] fehlgeschlagen · "
-        f"{bericht.uebersprungen} uebersprungen"
-    )
-    console.print(f"[dim]Ende: {bericht.grund}[/dim]")
-
-
-@campaign_app.command("tageslauf")
-def campaign_tageslauf(
-    campaign_id: str = typer.Argument(...),
-    adapter: str = typer.Option("assistiert", "--adapter", help=" | ".join(verfuegbare())),
-    trocken: bool = typer.Option(False, "--dry-run", help="Nur zeigen, was liefe."),
-) -> None:
-    """Der ganze Tag in einem Befehl: nachfuellen, einreihen, abarbeiten.
-
-    Genau das, was die Aufgabenplanung des Systems taeglich aufruft. Die drei
-    Schritte stehen bewusst auch einzeln zur Verfuegung (``retry``,
-    ``enqueue``, ``worker``) - dieser Befehl ist ihre Reihenfolge, nicht ihr
-    Ersatz.
-
-    **Zuerst ``retry``, dann ``enqueue``.** Ein gestern gescheiterter Beitrag
-    hat seinen Text und seine Freigabe schon; er gehoert vor die Gruppen, die
-    heute zum ersten Mal drankommen. Umgekehrt fuellte die Warteschlange sich
-    mit Neuem, und der Fehlschlag von gestern rutschte Tag um Tag nach hinten.
-
-    Eingereiht wird nur so viel, wie heute noch hineinpasst: Das Tageslimit
-    zaehlt ueber alle Kampagnen, und was darueber hinaus in der Warteschlange
-    stuende, waere eine Liste, die den Tag ueberlebt und morgen die
-    Score-Reihenfolge durcheinanderbraechte.
-    """
-    config = _config()
-    grenzen = lade_grenzen(config)
-    max_versuche = int(config.get("marketing", "posting", "max_versuche", default=3) or 0)
-
-    gruppen_store, store = _stores(config)
-    try:
-        campaign = _kampagne_oder_ende(store, campaign_id)
-        gruppen = _gruppen_nach_id(gruppen_store)
-    finally:
-        gruppen_store.close()
-
-    try:
-        heute_schon = store.versuche_heute()
-        rest = max(0, grenzen.tageslimit - heute_schon)
-        bereits_offen = store.job_counts(campaign_id).get(JobStatus.QUEUED.value, 0)
-
-        console.print(f"[bold]Tageslauf {campaign_id}[/bold]")
-        console.print(
-            f"[dim]Heute schon {heute_schon} von {grenzen.tageslimit} Versuchen · "
-            f"{bereits_offen} bereits eingereiht[/dim]\n"
-        )
-
-        if rest == 0:
-            console.print("[yellow]Tageslimit erreicht - heute geht nichts mehr hinaus.[/yellow]")
-            return
-
-        # 1. Gescheiterte von gestern zurueckholen.
-        zurueck = 0 if trocken else store.fehlgeschlagene_zuruecksetzen(
-            campaign_id, max_versuche=max_versuche
-        )
-        if zurueck:
-            console.print(f"  [green]{zurueck}[/green] fehlgeschlagene zurueckgeholt")
-
-        # 2. Auffuellen - die besten zuerst, hoechstens bis zur Tagesgrenze.
-        nachzulegen = max(0, rest - store.job_counts(campaign_id).get(JobStatus.QUEUED.value, 0))
-        freigegeben = store.jobs_mit_status(campaign_id, JobStatus.APPROVED)
-        geordnet = nach_prioritaet(
-            [gruppen[link.group_id] for link in freigegeben if link.group_id in gruppen], config
-        )
-        reihenfolge = {g.group_id: i for i, g in enumerate(geordnet)}
-        freigegeben.sort(key=lambda link: reihenfolge.get(link.group_id, len(reihenfolge)))
-
-        eingereiht = 0
-        for link in freigegeben[:nachzulegen]:
-            if trocken or _wechsle(store, campaign_id, link.group_id, JobStatus.QUEUED):
-                eingereiht += 1
-        if eingereiht:
-            console.print(f"  [green]{eingereiht}[/green] nach Score eingereiht")
-
-        offen = store.job_counts(campaign_id).get(JobStatus.QUEUED.value, 0)
-        console.print(f"  [bold]{offen}[/bold] in der Warteschlange · heute noch {rest} moeglich\n")
-
-        if trocken:
-            console.print("[dim]--dry-run: es wurde nichts geaendert und nichts abgesetzt.[/dim]")
-            return
-
-        # 3. Abarbeiten.
-        zustand = store.queue_zustand(campaign_id)
-        if zustand is not QueueZustand.LAUFEND:
-            console.print(
-                f"[yellow]Die Warteschlange ist {zustand.value} - "
-                f"es wird nichts abgesetzt.[/yellow]\n"
-                f"Weiter mit:  fbgroups campaign resume {campaign_id}"
-            )
-            raise typer.Exit(code=2)
-
-        bericht = arbeite(
-            store,
-            campaign,
-            gruppen,
-            _baue_veroeffentlicher(adapter),
-            grenzen,
-            melde=lambda zeile: console.print(f"[dim]{zeile}[/dim]"),
-        )
-    finally:
-        store.close()
-
-    console.print()
-    console.print(
-        f"[green]{bericht.veroeffentlicht}[/green] veroeffentlicht · "
-        f"[red]{bericht.fehlgeschlagen}[/red] fehlgeschlagen · "
-        f"{bericht.uebersprungen} uebersprungen"
-    )
-    console.print(f"[dim]Ende: {bericht.grund}[/dim]")
-
-
 @campaign_app.command("reset")
 def campaign_reset(
     campaign_id: str = typer.Argument(...),
@@ -2077,68 +1705,6 @@ def campaign_reset(
     )
     console.print(
         f"[dim]Weiter mit:  fbgroups campaign enqueue {campaign_id}[/dim]"
-    )
-
-
-@campaign_app.command("zeitplan")
-def campaign_zeitplan(
-    campaign_id: str = typer.Argument(...),
-    einrichten: bool = typer.Option(
-        False, "--einrichten", help="Die Aufgabe wirklich anlegen (sonst nur zeigen)."
-    ),
-    entfernen: bool = typer.Option(False, "--entfernen", help="Die Aufgabe wieder loeschen."),
-) -> None:
-    """Richtet den taeglichen Lauf in der Aufgabenplanung von Windows ein.
-
-    Der Arbeiter schlaeft **nicht** bis zur Startzeit: Ein Prozess, der
-    vierzehn Stunden wartet, ueberlebt keinen Neustart, keine Abmeldung und
-    keinen zugeklappten Deckel. Die Aufgabenplanung kann genau das, und sie
-    tut es seit Jahrzehnten zuverlaessig - dieser Befehl traegt dort ein, was
-    in ``startzeit`` steht.
-
-    Ohne ``--einrichten`` wird der Befehl nur angezeigt. Etwas, das sich
-    taeglich von selbst startet, legt man nicht beilaeufig an.
-    """
-    config = _config()
-    startzeit = str(config.get("marketing", "posting", "startzeit", default="08:00"))
-    aufgabe = f"fbgroups-tageslauf-{campaign_id}"
-
-    with MarketingStore(config.path("sqlite_path")) as store:
-        _kampagne_oder_ende(store, campaign_id)
-
-    if entfernen:
-        befehl = ["schtasks", "/delete", "/tn", aufgabe, "/f"]
-    else:
-        ziel = (
-            f'cmd /c cd /d "{Path.cwd()}" && '
-            f".venv\\Scripts\\python.exe -m fbgroups.cli campaign tageslauf {campaign_id}"
-        )
-        befehl = ["schtasks", "/create", "/tn", aufgabe, "/sc", "daily", "/st", startzeit,
-                  "/tr", ziel, "/f"]
-
-    if not einrichten and not entfernen:
-        console.print(f"[bold]Taeglicher Lauf um {startzeit}[/bold]  ({aufgabe})\n")
-        console.print(subprocess.list2cmdline(befehl))
-        console.print(
-            f"\n[dim]Wirklich einrichten:  fbgroups campaign zeitplan {campaign_id} --einrichten"
-            f"\nStartzeit aendern:     marketing.posting.startzeit in config/settings.yaml[/dim]"
-        )
-        return
-
-    if sys.platform != "win32":
-        console.print(
-            "[yellow]schtasks gibt es nur unter Windows.[/yellow]\n"
-            "Anderswo: cron, systemd-timer oder launchd - der Befehl dahinter ist derselbe:\n"
-            f"  fbgroups campaign tageslauf {campaign_id}"
-        )
-        raise typer.Exit(code=2)
-
-    ergebnis = subprocess.run(befehl, capture_output=True, text=True, check=False)
-    if ergebnis.returncode != 0:
-        console.print(f"[red]Fehlgeschlagen:[/red] {ergebnis.stderr.strip() or ergebnis.stdout}")
-        raise typer.Exit(code=1)
-    console.print(
-        f"[green]{'Entfernt' if entfernen else f'Eingerichtet - taeglich um {startzeit}'}.[/green]"
     )
 
 
@@ -2597,106 +2163,6 @@ _WOHER: dict[str, str] = {
     "qualified": "API",
     "conversion": "API",
 }
-
-
-# ---------------------------------------------------------------------------
-# KI-Anbieter: Stand und Selbsttest
-# ---------------------------------------------------------------------------
-
-ki_app = typer.Typer(help="Lokale KI (Ollama) und der optionale Anthropic-Weg.")
-
-
-@ki_app.command("status")
-def ki_stand() -> None:
-    """Zeigt, welcher Anbieter eingestellt ist und ob er antwortet.
-
-    Ruft nichts ab, was Geld kostet: Bei Ollama wird nur nachgesehen, welche
-    Modelle dort liegen; bei Anthropic wird ueberhaupt nichts abgerufen,
-    sondern nur geprueft, ob Paket und Schluessel da sind.
-    """
-    config = _config()
-    anbieter = gewaehlter_anbieter(config)
-    # Ausdruecklich frisch: Wer diesen Befehl tippt, sieht gerade nach und will
-    # nicht die Antwort von vor zehn Sekunden - er hat womoeglich genau
-    # dazwischen Ollama gestartet.
-    stand = ki_status(config, frisch=True)
-
-    table = Table(title="KI-Status", show_header=False, box=None)
-    table.add_row("Anbieter", f"{anbieter}" + (" (Standard)" if anbieter == "ollama" else ""))
-    table.add_row(
-        "Verbindung",
-        "[green]verbunden[/green]" if stand.erreichbar else "[red]nicht erreichbar[/red]",
-    )
-    table.add_row("Modell", stand.modell or "[dim]-[/dim]")
-    table.add_row("Adresse", stand.adresse or "[dim]-[/dim]")
-    if stand.erreichbar and stand.verfuegbare_modelle:
-        table.add_row(
-            "Modell liegt vor",
-            "[green]ja[/green]" if stand.modell_vorhanden else "[red]nein[/red]",
-        )
-    console.print(table)
-
-    if stand.verfuegbare_modelle:
-        console.print(f"[dim]Vorhanden: {', '.join(stand.verfuegbare_modelle)}[/dim]")
-    if stand.meldung:
-        farbe = "yellow" if stand.erreichbar else "red"
-        console.print(f"[{farbe}]{stand.meldung}[/{farbe}]")
-
-    # Kein Exit-Code ungleich 0: Der Befehl hat seine Auskunft gegeben, auch
-    # wenn die Auskunft "laeuft nicht" lautet. Ein Fehlercode waere hier ein
-    # Fehler des Befehls, und das ist er nicht.
-
-
-@ki_app.command("test")
-def ki_test(
-    anbieter: str = typer.Option("", "--anbieter", help=f"Einer von: {', '.join(ANBIETER)}"),
-) -> None:
-    """Schickt eine sehr kurze echte Anfrage - einen Testsatz auf Arabisch.
-
-    Anders als ``ki status`` wird hier wirklich etwas erzeugt. Bei Ollama
-    kostet das nichts ausser Sekunden; bei Anthropic ein paar Cent. Der Test
-    beantwortet in einem Zug drei Fragen: Laeuft der Dienst, liegt das Modell
-    vor, und gibt es arabische Schrift sauber aus.
-    """
-    config = _config()
-    name = anbieter or gewaehlter_anbieter(config)
-    console.print(f"[dim]Frage '{name}' ...[/dim]")
-
-    geklappt, text = ki_teste(config, anbieter)
-    if geklappt:
-        console.print(f"[green]OK[/green] {name} funktioniert.\n")
-        console.print(text)
-        return
-
-    console.print(f"[red]Fehlgeschlagen[/red] - {name} hat nicht geantwortet.\n")
-    console.print(text)
-    raise typer.Exit(code=1)
-
-
-@ki_app.command("modelle")
-def ki_modelle() -> None:
-    """Listet die Modelle, die bei Ollama tatsaechlich vorliegen."""
-    config = _config()
-    stand = ki_status(config, "ollama")
-
-    if not stand.erreichbar:
-        console.print(f"[red]{stand.meldung}[/red]")
-        raise typer.Exit(code=1)
-    if not stand.verfuegbare_modelle:
-        console.print(
-            "Ollama laeuft, aber es liegt kein Modell vor.\n"
-            f"[dim]Holen mit:  ollama pull {stand.modell}[/dim]"
-        )
-        return
-
-    table = Table(title=f"Modelle auf {stand.adresse}")
-    table.add_column("Modell")
-    table.add_column("eingestellt", justify="center")
-    eingestellt = stand.modell.split(":")[0]
-    for name in stand.verfuegbare_modelle:
-        marke = "[green]<--[/green]" if name.split(":")[0] == eingestellt else ""
-        table.add_row(name, marke)
-    console.print(table)
 
 
 # ---------------------------------------------------------------------------

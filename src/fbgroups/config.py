@@ -42,6 +42,22 @@ class Audience:
     # Optionales Kuerzel fuer Tracking-Codes (z. B. "SYR"). Ohne Angabe
     # entstehen die ersten drei Buchstaben der Kennung.
     code: str = ""
+    # Anrede fuer {zielgruppe} in Beitragsvorlagen - je Sprache eine eigene.
+    # ``label_de`` taugt dafuer nicht: Es lautet "Syrer in Deutschland" und
+    # ergaebe in einer Stadtvorlage "Syrer in Deutschland in Bonn".
+    label_ar: str = ""
+    label_kurz_de: str = ""
+
+    def anrede(self, sprache: str) -> str:
+        """Die Anrede in dieser Sprache, mit Rueckfall auf das lange Label.
+
+        Kein Erfinden: Fehlt ``label_ar``, steht dort das deutsche Label - gut
+        sichtbar falsch, statt still leer. Ein leerer Platzhalter mitten im
+        Satz faellt erst auf, wenn der Beitrag in der Gruppe steht.
+        """
+        if sprache == "ar":
+            return self.label_ar or self.label_kurz_de or self.label_de
+        return self.label_kurz_de or self.label_de
 
     def all_terms(self) -> list[str]:
         return [t for terms in self.terms.values() for t in terms]
@@ -57,6 +73,12 @@ class City:
     phase: int
     aliases: list[str] = field(default_factory=list)
     code: str = ""      # optionales Kuerzel fuer Tracking-Codes, z. B. "BER"
+
+    def anzeige(self, sprache: str) -> str:
+        """Der Stadtname in dieser Sprache, mit Rueckfall auf den deutschen."""
+        if sprache == "ar":
+            return self.name_ar or self.name_de
+        return self.name_de
 
     def all_names(self) -> list[str]:
         return [self.name_de, self.name_ar, *self.aliases]
@@ -80,6 +102,10 @@ class AppConfig:
     cities: dict[str, City]
     categories: list[Category]
     queries: dict[str, Any]
+    # Beitragsvorlagen je Sprache. Voreingestellt leer, damit eine Konfiguration
+    # ohne die Datei weiterhin laedt - ohne Vorlagen faellt nur die
+    # Personalisierung aus, nicht der Rest des Programms.
+    textvorlagen: dict[str, Any] = field(default_factory=dict)
 
     # -- Pfade ---------------------------------------------------------
     def path(self, key: str) -> Path:
@@ -146,6 +172,8 @@ def load_config(root: Path | None = None) -> AppConfig:
             phase=int(data.get("phase", 99)),
             terms={k: list(v) for k, v in (data.get("terms") or {}).items()},
             code=str(data.get("code", "")),
+            label_ar=str(data.get("label_ar", "")),
+            label_kurz_de=str(data.get("label_kurz_de", "")),
         )
         for aid, data in raw_audiences.items()
     }
@@ -177,6 +205,12 @@ def load_config(root: Path | None = None) -> AppConfig:
 
     queries = _read_yaml(cfg_dir / "queries.yaml")
 
+    # Fehlt die Datei, bleibt es beim leeren Mapping: ``_read_yaml`` wirft
+    # nicht, und ``vorlagen.waehle_vorlage`` meldet den Mangel dort, wo er
+    # jemanden interessiert - beim Fuellen, mit Namen der Sprache.
+    vorlagen_datei = cfg_dir / "textvorlagen.yaml"
+    textvorlagen = _read_yaml(vorlagen_datei) if vorlagen_datei.exists() else {}
+
     return AppConfig(
         root=base,
         settings=settings,
@@ -184,6 +218,7 @@ def load_config(root: Path | None = None) -> AppConfig:
         cities=cities,
         categories=categories,
         queries=queries,
+        textvorlagen=textvorlagen,
     )
 
 

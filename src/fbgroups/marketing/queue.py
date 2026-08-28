@@ -14,8 +14,6 @@ Tabelle laesst sich lesen und pruefen, verstreute Bedingungen nicht.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
 from fbgroups.marketing.models import JobStatus, QueueZustand
 
 # Schluessel im Meta-Speicher. Je Kampagne einer - eine angehaltene Kampagne
@@ -99,7 +97,8 @@ def pruefe_uebergang(von: JobStatus, nach: JobStatus, *, hat_text: bool) -> None
     if nach in BRAUCHT_TEXT and not hat_text:
         raise UngueltigerUebergang(
             f"{nach.value} braucht einen Beitragstext. "
-            f"Erst erzeugen (campaign draft) oder von Hand schreiben."
+            f"Erst fuellen (campaign text --aus-vorlage) oder auf der "
+            f"Arbeitsseite schreiben."
         )
 
 
@@ -116,20 +115,3 @@ def darf_arbeiten(zustand: QueueZustand) -> bool:
 def zustand_schluessel(campaign_id: str) -> str:
     """Meta-Schluessel, unter dem der Zustand dieser Kampagne steht."""
     return _ZUSTAND_SCHLUESSEL.format(campaign_id=campaign_id)
-
-
-def ist_verwaist(begonnen_am: datetime | None, grenze_minuten: int) -> bool:
-    """Haengt dieser ``processing``-Job seit zu langer Zeit?
-
-    Ein Arbeiter, der abstuerzt, laesst seinen Job in ``processing`` stehen.
-    Ohne diese Pruefung bliebe die Gruppe fuer immer belegt: Sie ist weder
-    offen noch fertig, taucht in keiner Liste auf und wird nie wieder
-    angefasst. Der Job wird deshalb **nicht** automatisch neu abgeschickt,
-    sondern nur als verwaist gemeldet - ob dort schon ein Beitrag steht, weiss
-    niemand ausser einem Menschen, der nachsieht.
-    """
-    if begonnen_am is None:
-        return True
-    if begonnen_am.tzinfo is None:
-        begonnen_am = begonnen_am.replace(tzinfo=UTC)
-    return datetime.now(UTC) - begonnen_am > timedelta(minutes=grenze_minuten)

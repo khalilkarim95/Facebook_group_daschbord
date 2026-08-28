@@ -1,45 +1,56 @@
-"""Tests fuer den gemeinsamen Arbeitsschritt und die Arbeitsseite.
+"""Tests fuer die gruppenweise Arbeit und die Arbeitsseite.
 
-Der Grund fuer ``arbeit.py`` ist, dass Schleife und Weboberflaeche **dieselben**
-Regeln benutzen. Genau das wird hier geprueft: Ein zweites Tageslimit, das vom
-ersten abweicht, faellt sonst erst auf, wenn vierzig Beitraege an einem Tag
-hinausgegangen sind.
+Der Grund fuer ``arbeit.py`` ist unveraendert, dass Kommandozeile und
+Weboberflaeche **dieselben** Regeln benutzen - eine zweite Fassung fuer den
+Dienst waere eine zweite Zaehlweise fuer dieselben Beitraege.
+
+Was sich geaendert hat, ist die Einheit. Die Datei prueft deshalb vor allem
+die Zusicherungen, die es vorher gar nicht geben konnte:
+
+* Eine Gruppe traegt mehrere Fassungen, und jede hat ihren eigenen Stand.
+* Speichern trifft genau eine davon.
+* Melden schaltet nichts weiter - nicht zur naechsten Gruppe, nicht zum
+  naechsten Vorschlag, und die andere Spalte bleibt unberuehrt.
+* Beitrag und Kommentar gehen unabhaengig voneinander hinaus.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from fbgroups.marketing.arbeit import (
-    Auftrag,
+    Ergebnis,
     Grund,
+    Gruppenarbeit,
     Sperre,
-    hole_auftrag,
-    melde_ergebnis,
+    arbeitsreihenfolge,
+    auswahlliste,
+    hole_gruppenarbeit,
+    melde_vorschlag,
+    stelle_texte_bereit,
 )
 from fbgroups.marketing.models import (
+    MAX_VORSCHLAEGE,
     Campaign,
     CampaignGroup,
     JobStatus,
+    PostStatus,
     QueueZustand,
     TextQuelle,
+    Texttyp,
+    VorschlagStatus,
 )
 from fbgroups.marketing.store import MarketingStore
-from fbgroups.marketing.veroeffentlicher import Ergebnis
-from fbgroups.marketing.worker import Grenzen
 from fbgroups.models import Group
 from fbgroups.storage import SqliteStore
 
 KAMPAGNE = "batreeq"
 GRUPPEN = {
-    "482910573829104": ("Syrer in Koeln", "FB-SYR-KLN-002"),
-    "739201847362915": ("Syrer in Berlin", "FB-SYR-BER-001"),
+    "482910573829104": ("Syrer in Koeln", "FB-SYR-KLN-002", "Köln"),
+    "739201847362915": ("Syrer in Berlin", "FB-SYR-BER-001", "Berlin"),
 }
-# Keine Wartezeit, sofern ein Test sie nicht ausdruecklich braucht.
-OHNE_PAUSE = Grenzen(tageslimit=20, max_pro_lauf=99, pause_min=0.0, pause_max=0.0)
 
 
 @pytest.fixture()
@@ -52,8 +63,10 @@ def bestand(tmp_path: Path) -> Path:
                     group_id=gid,
                     url_canonical=f"https://www.facebook.com/groups/{gid}",
                     name=name,
+                    city=stadt,
+                    audience_tags=["syrians"],
                 )
-                for gid, (name, _) in GRUPPEN.items()
+                for gid, (name, _, stadt) in GRUPPEN.items()
             ]
         )
     with MarketingStore(pfad) as store:
@@ -61,11 +74,13 @@ def bestand(tmp_path: Path) -> Path:
             Campaign(
                 campaign_id=KAMPAGNE,
                 name="Batreeq",
+                language="ar",
+                audiences=["syrians"],
                 landing_page="https://b-tarikak.de/",
-                message_template="Hallo! {link}",
+                kommentare=True,
             )
         )
-        for gid, (_, code) in GRUPPEN.items():
+        for gid, (_, code, _) in GRUPPEN.items():
             store.add_link(
                 CampaignGroup(
                     campaign_id=KAMPAGNE,
@@ -74,11 +89,6 @@ def bestand(tmp_path: Path) -> Path:
                     tracking_url=f"https://b-tarikak.de/r/{code}",
                 )
             )
-            store.set_post_text(KAMPAGNE, gid, "مرحبا! {link}", TextQuelle.KI)
-            store.set_job_status(KAMPAGNE, gid, JobStatus.AI_GENERATED)
-            store.set_job_status(KAMPAGNE, gid, JobStatus.PENDING_REVIEW)
-            store.set_job_status(KAMPAGNE, gid, JobStatus.APPROVED)
-            store.set_job_status(KAMPAGNE, gid, JobStatus.QUEUED)
     return pfad
 
 
@@ -101,452 +111,727 @@ def gruppen(bestand: Path) -> dict[str, Group]:
         return {g.group_id: g for g in s.load_groups()}
 
 
-def hole(store, campaign, gruppen, grenzen=OHNE_PAUSE, **kwargs):
-    kwargs.setdefault("ausgeloest_von", "test")
-    return hole_auftrag(store, campaign, gruppen, grenzen, **kwargs)
+@pytest.fixture()
+def gefuellt(store: MarketingStore, campaign: Campaign, gruppen, config) -> None:
+    """Alle Fassungen beider Gruppen - der Zustand nach dem ersten Aufruf."""
+    for gruppe in gruppen.values():
+        stelle_texte_bereit(store, campaign, gruppe, config)
 
 
-# --- Der Auftrag ----------------------------------------------------------
-
-def test_ein_auftrag_traegt_text_gruppe_und_versuch(store, campaign, gruppen) -> None:
-    auftrag = hole(store, campaign, gruppen)
-
-    assert isinstance(auftrag, Auftrag)
-    assert auftrag.versuch_id > 0
-    assert auftrag.link.tracking_url in auftrag.text
-    assert auftrag.url.startswith("https://www.facebook.com/groups/")
+def hole(store, campaign, gruppen, **kwargs) -> Gruppenarbeit:
+    stand = hole_gruppenarbeit(store, campaign, gruppen, **kwargs)
+    assert stand is not None
+    return stand
 
 
-def test_der_versuch_steht_schon_im_protokoll(store, campaign, gruppen) -> None:
-    """Vor dem Beitrag, nicht danach - sonst bliebe ein Absturz spurlos."""
-    auftrag = hole(store, campaign, gruppen)
+# --- Die Gruppe als Einheit -----------------------------------------------
 
-    versuche = store.versuche_for(KAMPAGNE, auftrag.link.group_id)
-    assert len(versuche) == 1
-    assert versuche[0].beendet_am is None          # laeuft noch
-    assert versuche[0].tracking_code == auftrag.link.tracking_code
+def test_eine_gruppe_traegt_mehrere_fassungen(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Der Kern der Umstellung: nicht ein Text je Gruppe, sondern der Topf."""
+    stand = hole(store, campaign, gruppen)
 
-
-def test_der_job_steht_auf_processing(store, campaign, gruppen) -> None:
-    auftrag = hole(store, campaign, gruppen)
-
-    link = store.link_for(KAMPAGNE, auftrag.link.group_id)
-    assert link is not None and link.job_status is JobStatus.PROCESSING
+    assert len(stand.posts) > 1
+    assert len(stand.kommentare) > 1
+    assert [f.nummer for f in stand.posts] == list(range(1, len(stand.posts) + 1))
 
 
-# --- Der geschlossene Reiter ---------------------------------------------
+def test_jede_fassung_ist_ein_eigener_text(store, campaign, gruppen, gefuellt) -> None:
+    """Fuenfmal derselbe Text waere fuenfmal dieselbe Entscheidung."""
+    stand = hole(store, campaign, gruppen)
 
-def test_ein_angefangener_auftrag_kommt_zurueck(store, campaign, gruppen) -> None:
-    """Wer den Reiter schliesst, verliert den Beitrag nicht.
+    texte = {f.vorschlag.text for f in stand.posts}
+    assert len(texte) == len(stand.posts)
 
-    Ohne das blutete die Warteschlange bei jedem geschlossenen Fenster einen
-    Beitrag aus: Der Job stuende auf ``processing``, in keiner Liste, und
-    niemand faende ihn wieder.
+
+def test_platz_eins_ist_die_fassung_von_frueher(
+    store, campaign, gruppen, gefuellt, config
+) -> None:
+    """Sonst bekaemen 310 Gruppen beim Umstellen einen anderen Text.
+
+    ``reihenfolge_fuer`` dreht den Topf um dieselbe Zahl, die vorher die eine
+    Fassung bestimmt hat - deshalb steht sie jetzt auf Platz 1.
     """
-    erster = hole(store, campaign, gruppen)
+    from fbgroups.marketing import vorlagen
 
-    zweiter = hole(store, campaign, gruppen)
+    gid = next(iter(GRUPPEN))
+    _, erwartet = vorlagen.text_fuer_gruppe(gruppen[gid], campaign, config)
 
-    assert isinstance(zweiter, Auftrag)
-    assert zweiter.link.group_id == erster.link.group_id
-    assert zweiter.versuch_id == erster.versuch_id       # dieselbe Zeile
-    assert len(store.versuche_for(KAMPAGNE, erster.link.group_id)) == 1
-
-
-def test_erst_nach_der_meldung_kommt_die_naechste(store, campaign, gruppen) -> None:
-    erster = hole(store, campaign, gruppen)
-    melde_ergebnis(
-        store, KAMPAGNE, erster.link.group_id, erster.versuch_id, Ergebnis(erfolg=True)
-    )
-
-    zweiter = hole(store, campaign, gruppen)
-
-    assert isinstance(zweiter, Auftrag)
-    assert zweiter.link.group_id != erster.link.group_id
+    erste = store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 1)
+    assert erste is not None
+    assert erste.text == erwartet
 
 
-# --- Die Sperren ----------------------------------------------------------
+def test_die_wahl_bleibt_ueber_laeufe_hinweg_dieselbe(
+    store, campaign, gruppen, gefuellt, config
+) -> None:
+    """Sonst aenderte sich der Text unter demjenigen, der ihn freigegeben hat."""
+    vorher = [v.vorlage_key for v in store.vorschlaege(
+        KAMPAGNE, next(iter(GRUPPEN)), Texttyp.POST)]
 
-def test_pausiert_sagt_pausiert(store, campaign, gruppen) -> None:
-    """Nicht "leer" und nicht "Wartezeit" - der Grund, der wirklich gilt."""
-    store.set_queue_zustand(KAMPAGNE, QueueZustand.PAUSIERT)
+    for gruppe in gruppen.values():
+        stelle_texte_bereit(store, campaign, gruppe, config)
 
-    sperre = hole(store, campaign, gruppen)
-
-    assert isinstance(sperre, Sperre)
-    assert sperre.grund == Grund.PAUSIERT
-
-
-def test_pausiert_faengt_keinen_versuch_an(store, campaign, gruppen) -> None:
-    """Eine Sperre darf nichts anfassen - sonst zaehlte Nachsehen als Arbeit."""
-    store.set_queue_zustand(KAMPAGNE, QueueZustand.PAUSIERT)
-
-    hole(store, campaign, gruppen)
-
-    assert store.versuche_heute() == 0
-    assert store.job_counts(KAMPAGNE)[JobStatus.QUEUED.value] == 2
+    nachher = [v.vorlage_key for v in store.vorschlaege(
+        KAMPAGNE, next(iter(GRUPPEN)), Texttyp.POST)]
+    assert nachher == vorher
 
 
-def test_das_tageslimit_gilt_auch_hier(store, campaign, gruppen) -> None:
-    """Dieselbe Regel wie in der Schleife - deshalb steht sie an einer Stelle."""
-    grenzen = Grenzen(tageslimit=1, max_pro_lauf=99, pause_min=0.0, pause_max=0.0)
-    erster = hole(store, campaign, gruppen, grenzen)
-    assert isinstance(erster, Auftrag)
-    melde_ergebnis(
-        store, KAMPAGNE, erster.link.group_id, erster.versuch_id, Ergebnis(erfolg=True)
-    )
+def test_der_tracking_code_steht_nur_im_angezeigten_text(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Gespeichert wird ``{link}``, kopiert wird der eingesetzte Link.
 
-    sperre = hole(store, campaign, gruppen, grenzen)
-
-    assert isinstance(sperre, Sperre)
-    assert sperre.grund == Grund.TAGESLIMIT
-    assert sperre.heute_schon == 1
-
-
-def test_leere_warteschlange_meldet_fertig(store, campaign, gruppen) -> None:
-    for _ in range(2):
-        auftrag = hole(store, campaign, gruppen)
-        assert isinstance(auftrag, Auftrag)
-        melde_ergebnis(
-            store, KAMPAGNE, auftrag.link.group_id, auftrag.versuch_id, Ergebnis(erfolg=True)
-        )
-
-    sperre = hole(store, campaign, gruppen)
-
-    assert isinstance(sperre, Sperre)
-    assert sperre.grund == Grund.FERTIG
-
-
-# --- Die Wartezeit --------------------------------------------------------
-
-def test_die_wartezeit_gilt_zwischen_zwei_beitraegen(store, campaign, gruppen) -> None:
-    """Sie kommt aus dem Bestand, nicht aus einem ``sleep``.
-
-    Ein Mensch, der die Seite neu laedt, umginge ein ``sleep`` muehelos;
-    ``letzter_versuch`` laesst sich nicht neu laden.
+    Wer den Platzhalter im gespeicherten Text ersetzte, haette einen Text, den
+    kein Sprachmodell und kein zweiter Leser mehr gefahrlos anfassen darf.
     """
-    grenzen = Grenzen(tageslimit=20, max_pro_lauf=99, pause_min=180.0, pause_max=180.0)
-    erster = hole(store, campaign, gruppen, grenzen)
-    assert isinstance(erster, Auftrag)
-    melde_ergebnis(
-        store, KAMPAGNE, erster.link.group_id, erster.versuch_id, Ergebnis(erfolg=True)
+    stand = hole(store, campaign, gruppen)
+
+    for fassung in stand.posts:
+        assert "{link}" in fassung.vorschlag.text
+        assert stand.link.tracking_code not in fassung.vorschlag.text
+        assert stand.link.tracking_url in fassung.angezeigt
+        assert "{link}" not in fassung.angezeigt
+
+
+def test_das_ansehen_faengt_keinen_versuch_an(store, campaign, gruppen, gefuellt) -> None:
+    """Vorher nahm das blosse Oeffnen der Seite einen Beitrag aus der Schlange."""
+    stand = hole(store, campaign, gruppen)
+    hole(store, campaign, gruppen, nummer=2)
+
+    assert store.versuche_for(KAMPAGNE, stand.link.group_id) == []
+    assert store.offene_versuche(KAMPAGNE) == []
+
+
+# --- Speichern trifft genau eine Fassung ----------------------------------
+
+def test_speichern_laesst_die_nachbarn_in_ruhe(store, campaign, gruppen, gefuellt) -> None:
+    """"Beim Speichern darf nur dieser konkrete Vorschlag gespeichert werden"."""
+    gid = next(iter(GRUPPEN))
+    vorher = {v.nummer: v.text for v in store.vorschlaege(KAMPAGNE, gid, Texttyp.POST)}
+
+    store.setze_vorschlag_text(KAMPAGNE, gid, Texttyp.POST, 2, "Nur der zweite {link}")
+
+    nachher = {v.nummer: v.text for v in store.vorschlaege(KAMPAGNE, gid, Texttyp.POST)}
+    assert nachher[2] == "Nur der zweite {link}"
+    assert {n: t for n, t in nachher.items() if n != 2} == {
+        n: t for n, t in vorher.items() if n != 2
+    }
+
+
+def test_speichern_laesst_die_kommentare_in_ruhe(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Zwei Zwecke, zwei Toepfe - und zwei Spalten in der Tabelle."""
+    gid = next(iter(GRUPPEN))
+    vorher = [v.text for v in store.vorschlaege(KAMPAGNE, gid, Texttyp.KOMMENTAR)]
+
+    store.setze_vorschlag_text(KAMPAGNE, gid, Texttyp.POST, 1, "Beitrag {link}")
+
+    assert [v.text for v in store.vorschlaege(KAMPAGNE, gid, Texttyp.KOMMENTAR)] == vorher
+
+
+def test_ein_gespeicherter_text_heisst_gespeichert(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Sonst liesse sich "aus der Vorlage gefallen" nicht von "durchgelesen"
+    unterscheiden - und beim Blaettern durch fuenf ist das die Frage."""
+    gid = next(iter(GRUPPEN))
+    assert store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 3).status is VorschlagStatus.ENTWURF
+
+    store.setze_vorschlag_text(KAMPAGNE, gid, Texttyp.POST, 3, "Angefasst {link}")
+
+    assert (
+        store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 3).status
+        is VorschlagStatus.GESPEICHERT
     )
 
-    sperre = hole(store, campaign, gruppen, grenzen)
 
-    assert isinstance(sperre, Sperre)
-    assert sperre.grund == Grund.WARTEZEIT
-    assert 0 < sperre.wartet_noch <= 180
+def test_das_paar_zeigt_den_zuletzt_bearbeiteten_text(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """``campaign message`` und die Uebersicht lesen weiterhin am Paar.
 
-
-def test_neuladen_verkuerzt_die_wartezeit_nicht(store, campaign, gruppen) -> None:
-    """Der Kern der Entscheidung: Die Sperre haengt nicht am Ablauf."""
-    grenzen = Grenzen(tageslimit=20, max_pro_lauf=99, pause_min=180.0, pause_max=180.0)
-    erster = hole(store, campaign, gruppen, grenzen)
-    melde_ergebnis(
-        store, KAMPAGNE, erster.link.group_id, erster.versuch_id, Ergebnis(erfolg=True)
-    )
-
-    for _ in range(5):                       # fuenfmal F5
-        sperre = hole(store, campaign, gruppen, grenzen)
-        assert isinstance(sperre, Sperre)
-        assert sperre.grund == Grund.WARTEZEIT
-
-
-def test_nach_der_wartezeit_geht_es_weiter(store, campaign, gruppen) -> None:
-    grenzen = Grenzen(tageslimit=20, max_pro_lauf=99, pause_min=180.0, pause_max=180.0)
-    erster = hole(store, campaign, gruppen, grenzen)
-    melde_ergebnis(
-        store, KAMPAGNE, erster.link.group_id, erster.versuch_id, Ergebnis(erfolg=True)
-    )
-
-    spaeter = datetime.now(UTC) + timedelta(seconds=200)
-    zweiter = hole(store, campaign, gruppen, grenzen, jetzt=spaeter)
-
-    assert isinstance(zweiter, Auftrag)
-
-
-def test_ein_zurueckgegebener_auftrag_wartet_nicht(store, campaign, gruppen) -> None:
-    """Er ist kein neuer Beitrag - die Pause traefe den falschen Fall.
-
-    Sonst saehe jemand, der seinen Reiter neu laedt, drei Minuten lang eine
-    Wartezeit fuer einen Beitrag, den er noch gar nicht abgesetzt hat.
+    Ohne die Spiegelung stuende dort der Text von vorgestern, waehrend die
+    Arbeitsseite den von heute zeigt.
     """
-    grenzen = Grenzen(tageslimit=20, max_pro_lauf=99, pause_min=180.0, pause_max=180.0)
-    erster = hole(store, campaign, gruppen, grenzen)
+    gid = next(iter(GRUPPEN))
+    store.setze_vorschlag_text(KAMPAGNE, gid, Texttyp.POST, 4, "Der vierte {link}")
 
-    zweiter = hole(store, campaign, gruppen, grenzen)
-
-    assert isinstance(zweiter, Auftrag)
-    assert zweiter.versuch_id == erster.versuch_id
+    assert store.link_for(KAMPAGNE, gid).post_text == "Der vierte {link}"
 
 
-# --- Die Rueckmeldung -----------------------------------------------------
+# --- Melden: der Ausgang gehoert der Fassung ------------------------------
 
-def test_veroeffentlicht_schliesst_den_versuch_ab(store, campaign, gruppen) -> None:
-    auftrag = hole(store, campaign, gruppen)
+def test_veroeffentlicht_gilt_nur_fuer_diese_fassung(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Der Fall aus der Anforderung: Post 1 raus, Post 2 noch Entwurf."""
+    stand = hole(store, campaign, gruppen)
 
-    stand = melde_ergebnis(
-        store, KAMPAGNE, auftrag.link.group_id, auftrag.versuch_id, Ergebnis(erfolg=True)
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
     )
 
-    assert stand is JobStatus.PUBLISHED
-    versuch = store.versuche_for(KAMPAGNE, auftrag.link.group_id)[0]
-    assert versuch.erfolg is True
-    assert versuch.beendet_am is not None
-    link = store.link_for(KAMPAGNE, auftrag.link.group_id)
-    assert link is not None and link.posted_at is not None
+    staende = {
+        v.nummer: v.status
+        for v in store.vorschlaege(KAMPAGNE, stand.link.group_id, Texttyp.POST)
+    }
+    assert staende[1] is VorschlagStatus.VEROEFFENTLICHT
+    assert staende[2] is VorschlagStatus.ENTWURF
 
 
-def test_fehlgeschlagen_speichert_den_grund(store, campaign, gruppen) -> None:
-    auftrag = hole(store, campaign, gruppen)
+def test_fehlgeschlagen_gilt_ebenfalls_nur_fuer_diese_fassung(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Nicht "Gruppe fehlgeschlagen", sondern "Fassung 2 fehlgeschlagen"."""
+    stand = hole(store, campaign, gruppen)
 
-    stand = melde_ergebnis(
-        store,
-        KAMPAGNE,
-        auftrag.link.group_id,
-        auftrag.versuch_id,
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 2,
         Ergebnis(erfolg=False, fehler="erlaubt keine Links"),
     )
 
-    assert stand is JobStatus.FAILED
-    link = store.link_for(KAMPAGNE, auftrag.link.group_id)
-    assert link is not None and link.post_error == "erlaubt keine Links"
-
-
-def test_uebersprungen_wird_nicht_zu_fehlgeschlagen(store, campaign, gruppen) -> None:
-    auftrag = hole(store, campaign, gruppen)
-
-    stand = melde_ergebnis(
-        store,
-        KAMPAGNE,
-        auftrag.link.group_id,
-        auftrag.versuch_id,
-        Ergebnis(erfolg=False, uebersprungen=True),
+    zwei = store.vorschlag(KAMPAGNE, stand.link.group_id, Texttyp.POST, 2)
+    assert zwei.status is VorschlagStatus.FEHLGESCHLAGEN
+    assert zwei.fehler == "erlaubt keine Links"
+    assert (
+        store.vorschlag(KAMPAGNE, stand.link.group_id, Texttyp.POST, 1).status
+        is VorschlagStatus.VEROEFFENTLICHT
     )
 
-    assert stand is JobStatus.CANCELLED
 
+def test_beitrag_und_kommentar_gehen_unabhaengig_hinaus(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Das Beispiel aus der Anforderung, vollstaendig.
 
-def test_schluss_legt_den_job_zurueck(store, campaign, gruppen) -> None:
-    """Wer aufhoert, verwirft nichts - der Beitrag ist morgen der naechste."""
-    auftrag = hole(store, campaign, gruppen)
+    Post 1 veroeffentlicht, Kommentar 1 Entwurf, Post 2 Entwurf,
+    Kommentar 2 veroeffentlicht - alles gleichzeitig in einer Gruppe.
+    """
+    stand = hole(store, campaign, gruppen)
 
-    stand = melde_ergebnis(
-        store,
-        KAMPAGNE,
-        auftrag.link.group_id,
-        auftrag.versuch_id,
-        Ergebnis(erfolg=False, abbrechen=True),
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.KOMMENTAR, 2, Ergebnis(erfolg=True)
     )
 
-    assert stand is JobStatus.QUEUED
-    assert store.job_counts(KAMPAGNE)[JobStatus.QUEUED.value] == 2
+    posts = {v.nummer: v.status for v in store.vorschlaege(
+        KAMPAGNE, stand.link.group_id, Texttyp.POST)}
+    kommentare = {v.nummer: v.status for v in store.vorschlaege(
+        KAMPAGNE, stand.link.group_id, Texttyp.KOMMENTAR)}
+
+    assert posts[1] is VorschlagStatus.VEROEFFENTLICHT
+    assert posts[2] is VorschlagStatus.ENTWURF
+    assert kommentare[1] is VorschlagStatus.ENTWURF
+    assert kommentare[2] is VorschlagStatus.VEROEFFENTLICHT
 
 
-# --- Die Seite ------------------------------------------------------------
+def test_melden_schaltet_nicht_zur_naechsten_gruppe(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Der wichtigste Test der Datei.
 
-def test_die_seite_zeigt_text_code_und_gruppe(store, campaign, gruppen) -> None:
-    from fbgroups.marketing.arbeitsseite import render_auftrag
+    Vorher war der Rueckgabewert der naechste Auftrag - wer veroeffentlichte,
+    bekam damit die naechste Gruppe, ob er wollte oder nicht.
+    """
+    stand = hole(store, campaign, gruppen)
 
-    auftrag = hole(store, campaign, gruppen)
-    seite = render_auftrag(auftrag, KAMPAGNE)
+    ergebnis = melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
 
-    assert auftrag.link.tracking_code in seite
-    assert auftrag.url in seite
-    assert "name='versuch_id'" in seite
+    assert not isinstance(ergebnis, Sperre)
+    assert ergebnis.group_id == stand.link.group_id
+    assert ergebnis.nummer == 1
+    # Und dieselbe Gruppe steht danach immer noch an derselben Stelle.
+    assert hole(store, campaign, gruppen).link.group_id == stand.link.group_id
 
 
-def test_arabisch_laeuft_von_rechts_nach_links(store, campaign, gruppen) -> None:
-    """Sonst steht die Satzzeichenfolge falsch und der Text sieht kaputt aus."""
-    from fbgroups.marketing.arbeitsseite import render_auftrag
+def test_der_erste_erfolg_setzt_den_zeitpunkt_und_der_zweite_nicht(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Dieselbe Regel wie ``posted_at`` am Paar."""
+    stand = hole(store, campaign, gruppen)
 
-    auftrag = hole(store, campaign, gruppen)
-    seite = render_auftrag(auftrag, KAMPAGNE)
+    erst = melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
+    nochmal = melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
 
-    assert "مرحبا" in seite
+    assert erst.veroeffentlicht_am == nochmal.veroeffentlicht_am
+    assert nochmal.versuche == 2
+
+
+def test_ein_erfolg_loescht_den_alten_fehlergrund(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Sonst stuende der Grund neben einer veroeffentlichten Fassung."""
+    stand = hole(store, campaign, gruppen)
+
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1,
+        Ergebnis(erfolg=False, fehler="Netz weg"),
+    )
+    danach = melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
+
+    assert danach.fehler == ""
+
+
+# --- Der Stand des Paares wird nachgezogen --------------------------------
+
+def test_eine_veroeffentlichte_fassung_erledigt_die_gruppe(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """``campaign queue``, ``retry`` und die Uebersicht lesen am Paar weiter."""
+    stand = hole(store, campaign, gruppen)
+
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
+
+    link = store.link_for(KAMPAGNE, stand.link.group_id)
+    assert link.post_status is PostStatus.VEROEFFENTLICHT
+    assert link.job_status is JobStatus.PUBLISHED
+
+
+def test_veroeffentlicht_gewinnt_gegen_fehlgeschlagen(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Die Gruppe **hat** ihren Beitrag.
+
+    Zoege eine gescheiterte zweite Fassung das Paar auf "fehlgeschlagen",
+    holte ``campaign retry`` sie zurueck in eine Liste, auf der sie nichts
+    mehr zu suchen hat.
+    """
+    stand = hole(store, campaign, gruppen)
+
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 2,
+        Ergebnis(erfolg=False, fehler="ging nicht"),
+    )
+
+    assert (
+        store.link_for(KAMPAGNE, stand.link.group_id).post_status
+        is PostStatus.VEROEFFENTLICHT
+    )
+
+
+def test_eine_erledigte_gruppe_bleibt_in_der_liste(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Sie hat vier weitere Fassungen - sie darf nicht verschwinden."""
+    stand = hole(store, campaign, gruppen)
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
+
+    reihe = arbeitsreihenfolge(store, KAMPAGNE, gruppen)
+
+    assert stand.link.group_id in {link.group_id for link in reihe}
+
+
+def test_ein_kommentar_zieht_den_gruppenstand_nicht_mit(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Der Beitrag traegt den Ablauf - ein Kommentar ist kein Beitrag."""
+    stand = hole(store, campaign, gruppen)
+
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.KOMMENTAR, 1, Ergebnis(erfolg=True)
+    )
+
+    assert store.link_for(KAMPAGNE, stand.link.group_id).post_status is PostStatus.OFFEN
+
+
+# --- Die Bremsen bleiben ---------------------------------------------------
+
+def test_es_gibt_keine_gezaehlte_tagesgrenze_mehr(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Das Tageslimit ist am 27.08.2026 entfernt worden.
+
+    Es war der letzte Rest des Arbeiters. Gegen eine Schleife, die selbst
+    abschickt, war es eine Bremse; gegen einen Menschen, der jeden Beitrag von
+    Hand einfuegt, war es eine Sperre, die ausgerechnet den traf, der gerade
+    arbeitet. Der Test haelt fest, dass keine Zahl mehr dazwischensteht -
+    haengt jemand eine neue Grenze ein, faellt sie hier auf.
+    """
+    stand = hole(store, campaign, gruppen)
+
+    for nummer in range(1, MAX_VORSCHLAEGE + 1):
+        ergebnis = melde_vorschlag(
+            store, campaign, stand.link, Texttyp.POST, nummer, Ergebnis(erfolg=True)
+        )
+        assert not isinstance(ergebnis, Sperre)
+
+
+def test_pausiert_haelt_beide_zwecke_an(store, campaign, gruppen, gefuellt) -> None:
+    """Ein Entschluss, in dieser Kampagne gerade nichts hinauszugeben."""
+    stand = hole(store, campaign, gruppen)
+    store.set_queue_zustand(KAMPAGNE, QueueZustand.PAUSIERT)
+
+    for texttyp in (Texttyp.POST, Texttyp.KOMMENTAR):
+        ergebnis = melde_vorschlag(
+            store, campaign, stand.link, texttyp, 1, Ergebnis(erfolg=True)
+        )
+        assert isinstance(ergebnis, Sperre)
+        assert ergebnis.grund == Grund.PAUSIERT
+
+
+def test_eine_sperre_faengt_keinen_versuch_an(store, campaign, gruppen, gefuellt) -> None:
+    stand = hole(store, campaign, gruppen)
+    store.set_queue_zustand(KAMPAGNE, QueueZustand.GESTOPPT)
+
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
+
+    assert store.versuche_for(KAMPAGNE, stand.link.group_id) == []
+
+
+def test_eine_sperre_verschliesst_die_seite_nicht(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Eine pausierte Kampagne ist kein Grund, die Texte von morgen nicht
+    vorzubereiten."""
+    store.set_queue_zustand(KAMPAGNE, QueueZustand.PAUSIERT)
+
+    stand = hole(store, campaign, gruppen)
+
+    assert stand.posts                      # die Texte stehen weiterhin da
+    assert stand.sperre() is not None       # nur der Ausgang ist zu
+
+
+# --- Die Gruppen-Navigation ------------------------------------------------
+
+def test_die_besten_gruppen_stehen_oben(bestand: Path, gruppen, config) -> None:
+    """Wer abbricht, soll die wertvollsten Beitraege geschrieben haben."""
+    from fbgroups.scoring import sort_by_rank
+
+    with MarketingStore(bestand) as store:
+        reihe = arbeitsreihenfolge(store, KAMPAGNE, gruppen)
+
+    erwartet = [g.group_id for g in sort_by_rank(list(gruppen.values()))]
+    assert [link.group_id for link in reihe] == erwartet
+
+
+def test_die_gruppenwahl_geht_vor_die_nummer(store, campaign, gruppen, gefuellt) -> None:
+    """Wer eine bestimmte Gruppe meint, meint sie auch nach einer Neubewertung."""
+    gid = "739201847362915"
+
+    stand = hole(store, campaign, gruppen, nummer=1, group_id=gid)
+
+    assert stand.link.group_id == gid
+
+
+def test_eine_ausgeschlossene_gruppe_steht_nicht_in_der_liste(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Sie ist bereits als "daran arbeiten wir nicht" beurteilt."""
+    from fbgroups.marketing.models import GroupMarketing
+
+    gid = next(iter(GRUPPEN))
+    store.save_marketing(GroupMarketing(group_id=gid, bearbeiten=False))
+
+    reihe = arbeitsreihenfolge(store, KAMPAGNE, gruppen)
+
+    assert gid not in {link.group_id for link in reihe}
+
+
+def test_die_auswahl_nennt_dieselben_nummern_wie_die_arbeit(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Sonst fuehrte ein Eintrag auf eine andere Gruppe als die daneben.
+
+    Dieselbe Ueberlegung wie bei ``search.build_plan``: Zwei Berechnungen
+    derselben Rangfolge koennen auseinanderlaufen.
+    """
+    reihe = arbeitsreihenfolge(store, KAMPAGNE, gruppen)
+    eintraege = auswahlliste(store, KAMPAGNE, reihe, gruppen)
+
+    for eintrag in eintraege:
+        stand = hole(store, campaign, gruppen, nummer=eintrag.nummer, reihe=reihe)
+        assert stand.link.group_id == eintrag.group_id
+
+
+def test_die_auswahl_zeigt_wo_schon_etwas_steht(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Sonst blaettert man durch dreihundert Eintraege, um festzustellen,
+    dass die ersten zwanzig erledigt sind."""
+    reihe = arbeitsreihenfolge(store, KAMPAGNE, gruppen)
+    melde_vorschlag(
+        store, campaign, reihe[0], Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
+
+    eintraege = auswahlliste(store, KAMPAGNE, reihe, gruppen)
+
+    assert eintraege[0].veroeffentlicht is True
+    assert eintraege[1].veroeffentlicht is False
+
+
+# --- Die Seite -------------------------------------------------------------
+
+def test_die_seite_zeigt_zwei_spalten(store, campaign, gruppen, gefuellt) -> None:
+    from fbgroups.marketing.arbeitsseite import render_gruppenarbeit
+
+    reihe = arbeitsreihenfolge(store, KAMPAGNE, gruppen)
+    stand = hole(store, campaign, gruppen, reihe=reihe)
+    seite = render_gruppenarbeit(
+        stand, KAMPAGNE, auswahlliste(store, KAMPAGNE, reihe, gruppen)
+    )
+
+    assert "data-spalte='post'" in seite
+    assert "data-spalte='kommentar'" in seite
+    assert stand.link.tracking_code in seite
+
+
+def test_die_nummernleiste_zeigt_den_stand(store, campaign, gruppen, gefuellt) -> None:
+    """"Die Navigation der 5 Vorschlaege sollte diesen Status sichtbar machen"."""
+    from fbgroups.marketing.arbeitsseite import render_gruppenarbeit
+
+    reihe = arbeitsreihenfolge(store, KAMPAGNE, gruppen)
+    melde_vorschlag(
+        store, campaign, reihe[0], Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
+    melde_vorschlag(
+        store, campaign, reihe[0], Texttyp.POST, 2,
+        Ergebnis(erfolg=False, fehler="ging nicht"),
+    )
+    stand = hole(store, campaign, gruppen, reihe=reihe)
+    seite = render_gruppenarbeit(
+        stand, KAMPAGNE, auswahlliste(store, KAMPAGNE, reihe, gruppen)
+    )
+
+    assert "data-stand='veroeffentlicht'" in seite
+    assert "data-stand='fehlgeschlagen'" in seite
+    assert "data-stand='entwurf'" in seite
+    assert "✓" in seite
+    assert "✕" in seite
+
+
+def test_arabisch_laeuft_von_rechts_nach_links(store, campaign, gruppen, gefuellt) -> None:
+    from fbgroups.marketing.arbeitsseite import render_gruppenarbeit
+
+    reihe = arbeitsreihenfolge(store, KAMPAGNE, gruppen)
+    stand = hole(store, campaign, gruppen, reihe=reihe)
+    seite = render_gruppenarbeit(
+        stand, KAMPAGNE, auswahlliste(store, KAMPAGNE, reihe, gruppen)
+    )
+
     assert "dir='rtl'" in seite
 
 
-def test_die_seite_nennt_den_grund_der_sperre(store, campaign, gruppen) -> None:
+def test_die_seite_nennt_den_grund_der_sperre() -> None:
     from fbgroups.marketing.arbeitsseite import render_sperre
 
-    seite = render_sperre(Sperre(Grund.WARTEZEIT, wartet_noch=42), KAMPAGNE)
+    seite = render_sperre(Sperre(Grund.PAUSIERT), KAMPAGNE)
 
-    assert "42" in seite
-    assert "location.reload" in seite          # laedt von selbst neu
+    assert "pausiert" in seite
+    assert "resume" in seite
 
 
 # --- Der Weg im Dienst ----------------------------------------------------
 
-def test_die_arbeitsseite_ist_von_aussen_nicht_erreichbar(bestand: Path, config) -> None:
-    """Sie **beginnt** einen Versuch und ist damit kein Lesen."""
+def _client(bestand, config, **kwargs):
     pytest.importorskip("fastapi", reason="nur mit dem optionalen web-Zusatz")
     from fastapi.testclient import TestClient
 
     from fbgroups.marketing.web import create_app
 
-    fremd = TestClient(
-        create_app(config=config, db_path=bestand), client=("203.0.113.7", 44321)
-    )
+    return TestClient(create_app(config=config, db_path=bestand), **kwargs)
+
+
+def test_die_arbeitsseite_ist_von_aussen_nicht_erreichbar(bestand: Path, config) -> None:
+    """Von hier aus wird veroeffentlicht - die Knoepfe dafuer stehen darauf."""
+    fremd = _client(bestand, config, client=("203.0.113.7", 44321))
 
     assert fremd.get(f"/arbeit/{KAMPAGNE}").status_code == 404
 
 
-def test_die_arbeitsseite_liefert_einen_beitrag(bestand: Path, config) -> None:
-    pytest.importorskip("fastapi", reason="nur mit dem optionalen web-Zusatz")
-    from fastapi.testclient import TestClient
+def _oeffne_alle(client) -> None:
+    """Jede Gruppe einmal aufrufen - die Seite fuellt je Gruppe beim Oeffnen.
 
-    from fbgroups.marketing.web import create_app
+    Sie fuellt bewusst nicht den ganzen Bestand auf einmal: Bei 310 Gruppen
+    waeren das 3100 Texte bei jedem ersten Aufruf, und die allermeisten
+    davon sieht an diesem Tag niemand an.
+    """
+    for nummer in range(1, len(GRUPPEN) + 1):
+        client.get(f"/arbeit/{KAMPAGNE}?gruppe={nummer}")
 
-    client = TestClient(create_app(config=config, db_path=bestand))
 
-    antwort = client.get(f"/arbeit/{KAMPAGNE}")
+def test_die_arbeitsseite_bereitet_die_texte_selbst_vor(bestand: Path, config) -> None:
+    """Eine Knopfreihe zu druecken, bevor ueberhaupt ein Text dasteht, ist
+    kein Entschluss, sondern eine Wegstrecke."""
+    antwort = _client(bestand, config).get(f"/arbeit/{KAMPAGNE}")
 
     assert antwort.status_code == 200
     assert "FB-SYR" in antwort.text
-
-
-def test_die_meldung_leitet_zur_naechsten_gruppe(bestand: Path, config) -> None:
-    """303 statt 200: Ein Neuladen soll den Ausgang nicht zweimal melden."""
-    pytest.importorskip("fastapi", reason="nur mit dem optionalen web-Zusatz")
-    from fastapi.testclient import TestClient
-
-    from fbgroups.marketing.web import create_app
-
-    client = TestClient(create_app(config=config, db_path=bestand), follow_redirects=False)
-    client.get(f"/arbeit/{KAMPAGNE}")
     with MarketingStore(bestand) as store:
-        offen = store.offene_versuche(KAMPAGNE)
-    assert offen and offen[0].versuch_id
+        gefuellte = [
+            gid for gid in GRUPPEN
+            if len(store.vorschlaege(KAMPAGNE, gid, Texttyp.POST)) > 1
+        ]
+    # Genau die geoeffnete Gruppe, nicht der ganze Bestand.
+    assert len(gefuellte) == 1
+    with MarketingStore(bestand) as store:
+        assert len(store.vorschlaege(KAMPAGNE, gefuellte[0], Texttyp.KOMMENTAR)) > 1
+
+
+def test_veroeffentlichen_leitet_nirgendwohin(bestand: Path, config) -> None:
+    """Kein 303, keine naechste Gruppe - nur der neue Stand dieser Fassung.
+
+    Der Unterschied zu vorher in einem Test: Frueher antwortete dieser Weg
+    mit einer Weiterleitung auf dieselbe Adresse, und die holte den naechsten
+    Beitrag.
+    """
+    client = _client(bestand, config, follow_redirects=False)
+    _oeffne_alle(client)
+    gid = next(iter(GRUPPEN))
 
     antwort = client.post(
-        f"/arbeit/{KAMPAGNE}/ergebnis",
-        data={
+        f"/arbeit/{KAMPAGNE}/vorschlag/ergebnis",
+        json={"group_id": gid, "nummer": 2, "ausgang": "veroeffentlicht"},
+    )
+
+    assert antwort.status_code == 200
+    daten = antwort.json()
+    assert daten["ok"] is True
+    assert daten["nummer"] == 2
+    assert daten["stand"] == "veroeffentlicht"
+    with MarketingStore(bestand) as store:
+        assert (
+            store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 2).status
+            is VorschlagStatus.VEROEFFENTLICHT
+        )
+        assert (
+            store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 1).status
+            is VorschlagStatus.ENTWURF
+        )
+
+
+def test_das_ergebnis_traegt_keinen_text(bestand: Path, config) -> None:
+    """Ein manipuliertes Formular kann keinen fremden Text in eine Gruppe bringen."""
+    client = _client(bestand, config)
+    _oeffne_alle(client)
+    gid = next(iter(GRUPPEN))
+    with MarketingStore(bestand) as store:
+        vorher = store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 1).text
+
+    client.post(
+        f"/arbeit/{KAMPAGNE}/vorschlag/ergebnis",
+        json={
+            "group_id": gid,
+            "nummer": 1,
             "ausgang": "veroeffentlicht",
-            "group_id": offen[0].group_id,
-            "versuch_id": str(offen[0].versuch_id),
+            "text": "Untergeschoben {link}",
         },
     )
 
-    assert antwort.status_code == 303
-    assert antwort.headers["location"] == f"/arbeit/{KAMPAGNE}"
     with MarketingStore(bestand) as store:
-        link = store.link_for(KAMPAGNE, offen[0].group_id)
-        assert link is not None and link.job_status is JobStatus.PUBLISHED
+        assert store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 1).text == vorher
 
 
-def test_eine_unvollstaendige_meldung_wird_abgewiesen(bestand: Path, config) -> None:
-    """Ohne ``versuch_id`` liesse sich nicht sagen, welche Zeile gemeint ist."""
-    pytest.importorskip("fastapi", reason="nur mit dem optionalen web-Zusatz")
-    from fastapi.testclient import TestClient
+def test_ein_erfundener_ausgang_wird_abgewiesen(bestand: Path, config) -> None:
+    client = _client(bestand, config)
+    _oeffne_alle(client)
 
-    from fbgroups.marketing.web import create_app
+    antwort = client.post(
+        f"/arbeit/{KAMPAGNE}/vorschlag/ergebnis",
+        json={
+            "group_id": next(iter(GRUPPEN)),
+            "nummer": 1,
+            "ausgang": "vielleicht",
+        },
+    )
 
-    client = TestClient(create_app(config=config, db_path=bestand))
+    assert antwort.status_code == 422
 
-    assert client.post(
-        f"/arbeit/{KAMPAGNE}/ergebnis", data={"ausgang": "veroeffentlicht"}
-    ).status_code == 400
+
+def test_eine_unbekannte_zuordnung_wird_abgewiesen(bestand: Path, config) -> None:
+    """Ein Vorschlag ohne Zuordnung haette keinen Tracking-Code - also keinen Link."""
+    antwort = _client(bestand, config).post(
+        f"/arbeit/{KAMPAGNE}/vorschlag/text",
+        json={"group_id": "999999999999999", "nummer": 1, "text": "Fremd {link}"},
+    )
+
+    assert antwort.status_code == 404
 
 
 def test_der_arbeiten_knopf_fehlt_im_nur_lesen_zugang(bestand: Path, config) -> None:
-    """Er schreibt - von aussen fuehrte er ins Leere.
-
-    Ein Knopf, dessen Weg mit 404 antwortet, sieht aus wie ein Fehler der
-    Seite. Dieselbe Ueberlegung wie bei den uebrigen schreibenden Knoepfen.
-    """
+    """Er schreibt - von aussen fuehrte er ins Leere."""
     from fbgroups.marketing.dashboard import render, sammle_daten
 
     daten = sammle_daten(config, bestand)
 
-    # Auf den Link pruefen, nicht auf die Klasse: Der CSS-Block bleibt in
-    # beiden Faellen stehen, entfernt wird nur der Weg dorthin.
     assert "href='/arbeit/" in render(daten, nur_lesen=False)
     assert "href='/arbeit/" not in render(daten, nur_lesen=True)
 
 
+def test_ohne_zuordnungen_nennt_die_seite_den_grund(tmp_path: Path, config) -> None:
+    """Der haeufigste Griff daneben bekommt Klartext."""
+    pfad = tmp_path / "leer.sqlite"
+    with SqliteStore(pfad):
+        pass
+    with MarketingStore(pfad) as store:
+        store.save_campaign(Campaign(campaign_id="leer", name="Leer"))
+
+    seite = _client(pfad, config).get("/arbeit/leer").text
+
+    assert "keine gruppen zugeordnet" in seite.lower()
+
+
 # --- Zuruecksetzen fuer Testlaeufe ---------------------------------------
 
-def test_reset_laesst_den_tracking_code_unberuehrt(store, campaign, gruppen) -> None:
-    """Die wichtigste Zusage: Ein Code steht moeglicherweise in einem Beitrag.
-
-    Ein Klick darauf muss weiterhin ankommen. Zurueckgesetzt wird der Stand,
-    nie die Zuordnung.
-    """
+def test_reset_laesst_den_tracking_code_unberuehrt(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    """Er steht moeglicherweise in einem veroeffentlichten Beitrag."""
+    stand = hole(store, campaign, gruppen)
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
     vorher = {
-        link.group_id: (link.tracking_code, link.tracking_url)
+        link.group_id: link.tracking_code
         for link in store.links_for_campaign(KAMPAGNE)
     }
-    auftrag = hole(store, campaign, gruppen)
-    melde_ergebnis(
-        store, KAMPAGNE, auftrag.link.group_id, auftrag.versuch_id, Ergebnis(erfolg=True)
-    )
 
     store.setze_kampagne_zurueck(KAMPAGNE)
 
     nachher = {
-        link.group_id: (link.tracking_code, link.tracking_url)
+        link.group_id: link.tracking_code
         for link in store.links_for_campaign(KAMPAGNE)
     }
     assert nachher == vorher
 
 
-def test_reset_stellt_den_beitragsstand_auf_anfang(store, campaign, gruppen) -> None:
-    auftrag = hole(store, campaign, gruppen)
-    melde_ergebnis(
-        store, KAMPAGNE, auftrag.link.group_id, auftrag.versuch_id, Ergebnis(erfolg=True)
+def test_reset_stellt_den_beitragsstand_auf_anfang(
+    store, campaign, gruppen, gefuellt
+) -> None:
+    stand = hole(store, campaign, gruppen)
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
     )
 
     store.setze_kampagne_zurueck(KAMPAGNE)
 
-    link = store.link_for(KAMPAGNE, auftrag.link.group_id)
-    assert link is not None
-    assert link.job_status is JobStatus.APPROVED      # Text ist da
-    assert link.posted_at is None
-    assert link.post_attempts == 0
-    assert link.post_error == ""
-    assert store.versuche_heute() == 0                # Protokoll geleert
-
-
-def test_reset_laesst_die_ereignisse_stehen(store, campaign, gruppen) -> None:
-    """Gemessene Resonanz ist das Einzige, was nicht wiederkommt.
-
-    Sie ist von aussen entstanden; deshalb braucht ihr Loeschen einen eigenen
-    Schalter und geschieht nicht nebenbei.
-    """
-    from fbgroups.marketing.models import EventType, TrackingEvent
-
-    store.record_event(
-        TrackingEvent(
-            tracking_code=GRUPPEN["482910573829104"][1],
-            campaign_id=KAMPAGNE,
-            group_id="482910573829104",
-            event_type=EventType.CLICK,
-        )
-    )
-
-    store.setze_kampagne_zurueck(KAMPAGNE)
-
-    assert store.event_counts().get(EventType.CLICK.value, 0) == 1
-
-
-def test_mit_schalter_verschwinden_auch_die_ereignisse(store, campaign, gruppen) -> None:
-    from fbgroups.marketing.models import EventType, TrackingEvent
-
-    store.record_event(
-        TrackingEvent(
-            tracking_code=GRUPPEN["482910573829104"][1],
-            campaign_id=KAMPAGNE,
-            group_id="482910573829104",
-            event_type=EventType.CLICK,
-        )
-    )
-
-    zahlen = store.setze_kampagne_zurueck(KAMPAGNE, auch_ereignisse=True)
-
-    assert zahlen["ereignisse"] == 1
-    assert store.event_counts().get(EventType.CLICK.value, 0) == 0
+    for link in store.links_for_campaign(KAMPAGNE):
+        assert link.post_status is PostStatus.OFFEN
+        assert link.posted_at is None
 
 
 def test_reset_faengt_die_warteschlange_wieder_an(store, campaign, gruppen) -> None:
@@ -558,16 +843,11 @@ def test_reset_faengt_die_warteschlange_wieder_an(store, campaign, gruppen) -> N
     assert store.queue_zustand(KAMPAGNE) is QueueZustand.LAUFEND
 
 
-def test_die_vorschau_nennt_dieselben_zahlen(store, campaign, gruppen) -> None:
-    """``--dry-run`` und Ernstfall lesen dieselbe Zaehlung.
-
-    Dieselbe Ueberlegung wie bei ``search.build_plan``: Eine zweite Zaehlung
-    koennte abweichen, und der Mensch bestaetigte eine Zahl und bekaeme eine
-    andere.
-    """
-    auftrag = hole(store, campaign, gruppen)
-    melde_ergebnis(
-        store, KAMPAGNE, auftrag.link.group_id, auftrag.versuch_id, Ergebnis(erfolg=True)
+def test_die_vorschau_nennt_dieselben_zahlen(store, campaign, gruppen, gefuellt) -> None:
+    """``--dry-run`` und Ernstfall lesen dieselbe Zaehlung."""
+    stand = hole(store, campaign, gruppen)
+    melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
     )
 
     vorschau = store.zaehle_zuruecksetzbar(KAMPAGNE)
@@ -578,129 +858,30 @@ def test_die_vorschau_nennt_dieselben_zahlen(store, campaign, gruppen) -> None:
     assert getan["veroeffentlicht"] == vorschau["veroeffentlicht"] == 1
 
 
-# --- Text aus der Vorlage (ohne KI) --------------------------------------
-
-def test_ohne_text_kommt_nichts_in_die_warteschlange(store) -> None:
-    """Der Grund, warum es ``campaign text`` gibt.
-
-    ``pruefe_uebergang`` verlangt einen Text; ohne ihn ist die Freigabe
-    versperrt und die Warteschlange bleibt fuer immer leer. Wer keine KI
-    benutzt, haette sonst keinen Weg dorthin.
-    """
-    from fbgroups.marketing.queue import UngueltigerUebergang
-
-    store.set_post_text(KAMPAGNE, "482910573829104", "", TextQuelle.VORLAGE)
-    store.set_job_status(KAMPAGNE, "482910573829104", JobStatus.DRAFT, erzwingen=True)
-
-    with pytest.raises(UngueltigerUebergang):
-        store.set_job_status(KAMPAGNE, "482910573829104", JobStatus.PENDING_REVIEW)
-
-
-def test_die_vorlage_wird_je_gruppe_zur_eigenen_kopie(store, campaign) -> None:
-    """Kein Umweg: ``{link}`` wird spaeter durch den Code *dieser* Gruppe ersetzt.
-
-    Wer einen einzelnen Text nachtraeglich anpasst, soll damit nicht alle
-    anderen aendern.
-    """
-    for gid in GRUPPEN:
-        store.set_post_text(KAMPAGNE, gid, campaign.message_template, TextQuelle.VORLAGE)
-
-    store.set_post_text(KAMPAGNE, "482910573829104", "Anders! {link}", TextQuelle.HAND)
-
-    a = store.link_for(KAMPAGNE, "482910573829104")
-    b = store.link_for(KAMPAGNE, "739201847362915")
-    assert a is not None and b is not None
-    assert a.post_text == "Anders! {link}"
-    assert b.post_text == campaign.message_template
-
-
-# --- Die beiden Fehler aus dem ersten Livelauf ---------------------------
-
-def test_leere_warteschlange_schlaegt_die_wartezeit(store, campaign, gruppen) -> None:
-    """Der Fehler, der beim ersten Test auffiel.
-
-    Bei einer Kampagne mit genau einer Gruppe war nach dem einzigen Beitrag
-    die Schlange leer - angezeigt wurde aber "Wartezeit laeuft noch". Der
-    Zaehler lief ab, die Seite lud neu, und dann stand doch "leer" da. Eine
-    Wartezeit verspricht einen naechsten Beitrag; ohne einen ist sie eine
-    falsche Auskunft.
-    """
-    grenzen = Grenzen(tageslimit=20, max_pro_lauf=99, pause_min=180.0, pause_max=180.0)
-    # Die Zeit ruecken lassen, sonst haengt der Test in der eigenen Wartezeit.
-    for nummer in range(len(GRUPPEN)):
-        spaeter = datetime.now(UTC) + timedelta(seconds=600 * nummer)
-        auftrag = hole(store, campaign, gruppen, grenzen, jetzt=spaeter)
-        assert isinstance(auftrag, Auftrag)
-        melde_ergebnis(
-            store, KAMPAGNE, auftrag.link.group_id, auftrag.versuch_id, Ergebnis(erfolg=True)
-        )
-
-    # Unmittelbar nach dem letzten Beitrag - die Wartezeit laeuft also noch,
-    # aber es steht nichts mehr an. Genau der Fall aus dem Livelauf.
-    sperre = hole(store, campaign, gruppen, grenzen)
-
-    assert isinstance(sperre, Sperre)
-    assert sperre.grund == Grund.FERTIG          # nicht WARTEZEIT
-
-
-def test_die_wartezeit_springt_beim_neuladen_nicht(store, campaign, gruppen) -> None:
-    """Sonst waere sie durch haeufiges Neuladen zu unterlaufen.
-
-    Der Zufall kommt aus dem Zeitpunkt des letzten Versuchs, nicht aus einem
-    frischen Wurf je Seitenaufruf: Wer oft genug F5 druecke, erwischte sonst
-    irgendwann die kurze Zahl - und der Takt waere eine Empfehlung statt einer
-    Grenze.
-    """
-    grenzen = Grenzen(tageslimit=20, max_pro_lauf=99, pause_min=180.0, pause_max=420.0)
-    erster = hole(store, campaign, gruppen, grenzen, wuerfel=None)
-    melde_ergebnis(
-        store, KAMPAGNE, erster.link.group_id, erster.versuch_id, Ergebnis(erfolg=True)
-    )
-
-    fest = datetime.now(UTC)
-    gesehen = {
-        hole(store, campaign, gruppen, grenzen, wuerfel=None, jetzt=fest).wartet_noch
-        for _ in range(8)
-    }
-
-    assert len(gesehen) == 1                     # bei gleichem Zeitpunkt immer dieselbe Zahl
-
-
 # --- Die Vorbereitungsknoepfe --------------------------------------------
 
-def _client(bestand, config):
-    pytest.importorskip("fastapi", reason="nur mit dem optionalen web-Zusatz")
-    from fastapi.testclient import TestClient
-
-    from fbgroups.marketing.web import create_app
-
-    return TestClient(create_app(config=config, db_path=bestand))
-
-
-def test_die_werkbank_erscheint_nur_bei_leerer_warteschlange(store, campaign, gruppen) -> None:
-    """Sonst laege sie unter einem Beitrag, der gerade geschrieben werden soll."""
+def test_die_werkbank_erscheint_nur_ohne_zuordnungen() -> None:
+    """Sonst laege sie unter Texten, die gerade geschrieben werden sollen."""
     from fbgroups.marketing.arbeitsseite import render_sperre
 
-    leer = render_sperre(Sperre(Grund.FERTIG), KAMPAGNE)
-    wartend = render_sperre(Sperre(Grund.WARTEZEIT, wartet_noch=30), KAMPAGNE)
+    leer = render_sperre(Sperre(Grund.KEINE_GRUPPEN), KAMPAGNE)
+    pausiert = render_sperre(Sperre(Grund.PAUSIERT), KAMPAGNE)
 
-    assert "Warteschlange fuellen" in leer
-    assert "Warteschlange fuellen" not in wartend
+    assert "Texte vorbereiten" in leer
+    assert "Texte vorbereiten" not in pausiert
 
 
-def test_text_und_freigabe_und_einreihen_ueber_den_dienst(bestand: Path, config) -> None:
+def test_text_und_freigabe_und_einreihen_ueber_den_dienst(
+    bestand: Path, config
+) -> None:
     """Die ganze Kette per Knopf - ohne ein einziges Terminal."""
-    with MarketingStore(bestand) as store:
-        store.setze_kampagne_zurueck(KAMPAGNE)
-        for gid in GRUPPEN:                       # Text entfernen, wie nach einem Reset
-            store.set_post_text(KAMPAGNE, gid, "", TextQuelle.VORLAGE)
-            store.set_job_status(KAMPAGNE, gid, JobStatus.DRAFT, erzwingen=True)
-
     client = _client(bestand, config)
 
     text = client.post(f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "text"})
     assert text.status_code == 200
-    assert text.json()["betroffen"] == len(GRUPPEN)
+    # Gezaehlt werden die Fassungen, nicht die Gruppen: Seit eine Gruppe fuenf
+    # davon bekommt, ist "2 Texte" bei zwei Gruppen eine andere Auskunft.
+    assert text.json()["betroffen"] > len(GRUPPEN)
 
     frei = client.post(f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "approve"})
     assert frei.json()["betroffen"] == len(GRUPPEN)
@@ -711,11 +892,6 @@ def test_text_und_freigabe_und_einreihen_ueber_den_dienst(bestand: Path, config)
 
 def test_freigeben_ohne_text_meldet_den_grund(bestand: Path, config) -> None:
     """"0 betroffen" allein liesse offen, woran es lag."""
-    with MarketingStore(bestand) as store:
-        for gid in GRUPPEN:
-            store.set_post_text(KAMPAGNE, gid, "", TextQuelle.VORLAGE)
-            store.set_job_status(KAMPAGNE, gid, JobStatus.DRAFT, erzwingen=True)
-
     antwort = _client(bestand, config).post(
         f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "approve"}
     )
@@ -726,18 +902,48 @@ def test_freigeben_ohne_text_meldet_den_grund(bestand: Path, config) -> None:
 
 def test_die_werkbank_ist_von_aussen_nicht_bedienbar(bestand: Path, config) -> None:
     """Sie schreibt - wie jeder andere schreibende Weg hinter ``_nur_lokal``."""
-    pytest.importorskip("fastapi", reason="nur mit dem optionalen web-Zusatz")
-    from fastapi.testclient import TestClient
-
-    from fbgroups.marketing.web import create_app
-
-    fremd = TestClient(
-        create_app(config=config, db_path=bestand), client=("203.0.113.7", 44321)
-    )
+    fremd = _client(bestand, config, client=("203.0.113.7", 44321))
 
     assert fremd.post(
         f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "enqueue"}
     ).status_code == 404
+
+
+def test_texte_neu_erzeugen_ueberschreibt_auch_handarbeit(
+    bestand: Path, config
+) -> None:
+    """Der Weg fuer geaenderte Vorlagen - und er verwirft Handarbeit.
+
+    Deshalb ein eigener Schritt und keine stillere Vorgabe.
+    """
+    client = _client(bestand, config)
+    client.post(f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "text"})
+    gid = next(iter(GRUPPEN))
+    with MarketingStore(bestand) as store:
+        store.setze_vorschlag_text(KAMPAGNE, gid, Texttyp.POST, 2, "Von Hand {link}")
+
+    client.post(f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "text_neu"})
+
+    with MarketingStore(bestand) as store:
+        assert store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 2).text != "Von Hand {link}"
+
+
+def test_texte_erzeugen_laesst_handarbeit_stehen(bestand: Path, config) -> None:
+    """Handarbeit ueberlebt einen Sammelschritt - wie Notizen einen Reimport."""
+    client = _client(bestand, config)
+    client.post(f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "text"})
+    gid = next(iter(GRUPPEN))
+    with MarketingStore(bestand) as store:
+        store.setze_vorschlag_text(KAMPAGNE, gid, Texttyp.POST, 2, "Von Hand {link}")
+
+    client.post(f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "text"})
+
+    with MarketingStore(bestand) as store:
+        vorschlag = store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 2)
+    assert vorschlag.text == "Von Hand {link}"
+    # Die Vergleichsgroesse wird trotzdem aufgefrischt.
+    assert vorschlag.generated_text.strip()
+    assert vorschlag.generated_text != vorschlag.text
 
 
 def test_ein_unbekannter_schritt_wird_abgewiesen(bestand: Path, config) -> None:
@@ -746,3 +952,80 @@ def test_ein_unbekannter_schritt_wird_abgewiesen(bestand: Path, config) -> None:
     )
 
     assert antwort.status_code == 422
+
+
+def test_ein_veroeffentlichter_beitrag_bleibt_unangetastet(
+    bestand: Path, config
+) -> None:
+    """Der Text steht dort schon in der Gruppe - ihn zu aendern hiesse luegen."""
+    client = _client(bestand, config)
+    client.post(f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "text"})
+    gid = next(iter(GRUPPEN))
+    with MarketingStore(bestand) as store:
+        for stand in (JobStatus.PENDING_REVIEW, JobStatus.APPROVED, JobStatus.QUEUED,
+                      JobStatus.PROCESSING, JobStatus.PUBLISHED):
+            store.set_job_status(KAMPAGNE, gid, stand)
+        vorher = store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 1).text
+
+    client.post(f"/kampagnen/{KAMPAGNE}/vorbereiten", json={"schritt": "text_neu"})
+
+    with MarketingStore(bestand) as store:
+        assert store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 1).text == vorher
+
+
+# --- Die Migration ---------------------------------------------------------
+
+def test_ein_vorhandener_text_wird_zu_fassung_eins(bestand: Path) -> None:
+    """Sonst stuenden 310 Texte in der alten Spalte und die Seite zeigte leere Felder."""
+    import sqlite3
+
+    with MarketingStore(bestand) as store:
+        gid = next(iter(GRUPPEN))
+        store.set_post_text(KAMPAGNE, gid, "Von damals {link}", TextQuelle.HAND)
+        store.set_post_status(KAMPAGNE, gid, PostStatus.VEROEFFENTLICHT)
+
+    conn = sqlite3.connect(bestand)
+    conn.executescript("DROP TABLE campaign_group_texte; PRAGMA user_version = 14;")
+    conn.commit()
+    conn.close()
+
+    with SqliteStore(bestand):
+        pass
+
+    with MarketingStore(bestand) as store:
+        vorschlag = store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 1)
+    assert vorschlag is not None
+    assert vorschlag.text == "Von damals {link}"
+    assert vorschlag.quelle is TextQuelle.HAND
+    # Der Stand kommt aus ``post_status`` - andersherum entstuende der
+    # Eindruck, ein laengst veroeffentlichter Beitrag stuende noch aus.
+    assert vorschlag.status is VorschlagStatus.VEROEFFENTLICHT
+
+
+def test_ohne_text_entsteht_keine_leere_fassung(bestand: Path) -> None:
+    """Eine Migration, die Texte erfindet, waere eine, die Inhalte schreibt."""
+    import sqlite3
+
+    conn = sqlite3.connect(bestand)
+    conn.executescript("DROP TABLE campaign_group_texte; PRAGMA user_version = 14;")
+    conn.commit()
+    conn.close()
+
+    with SqliteStore(bestand):
+        pass
+
+    with MarketingStore(bestand) as store:
+        assert store.vorschlaege(KAMPAGNE, next(iter(GRUPPEN))) == []
+
+
+def test_der_marketing_speicher_holt_den_schritt_ebenfalls_nach(bestand: Path) -> None:
+    """``GET /r/{code}`` oeffnet nur diesen Speicher - er darf nicht scheitern."""
+    import sqlite3
+
+    conn = sqlite3.connect(bestand)
+    conn.executescript("DROP TABLE campaign_group_texte; PRAGMA user_version = 14;")
+    conn.commit()
+    conn.close()
+
+    with MarketingStore(bestand) as store:
+        assert store.vorschlaege(KAMPAGNE, next(iter(GRUPPEN))) == []

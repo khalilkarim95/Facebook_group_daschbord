@@ -977,3 +977,50 @@ def test_ohne_gesetztes_geheimnis_hilft_die_kopfzeile_nicht(
 
     assert fremd.get("/", headers={"X-Uebersicht-Token": ""}).status_code == 404
     assert fremd.get("/", headers={"X-Uebersicht-Token": "irgendwas"}).status_code == 404
+
+
+# --- Die Beitragsspalte und das Blaettern ---------------------------------
+
+
+def test_die_beitragsspalte_zeigt_nur_den_stand(bestand: Path, config) -> None:
+    """Kein Knopf mehr in der Zelle - gearbeitet wird auf der Arbeitsseite.
+
+    Zuerst fielen "Gruppe", "steht" und "ging nicht", zuletzt "Text": Alle vier
+    boten denselben Weg ein zweites Mal an, nur schmaler und ohne die Merkmale
+    der Gruppe. Zwei Wege zum selben Beitrag heissen zwei Zaehlweisen.
+    """
+    seite = render(sammle_daten(config, bestand))
+
+    assert "b-marke" in seite             # der Stand bleibt
+    for knopf in ("b-kopieren", "b-oeffnen", "b-fertig", "b-fehlschlag", "b-knopf"):
+        assert knopf not in seite
+
+
+def test_die_tabelle_laesst_sich_blaettern(bestand: Path, config) -> None:
+    """Bei 314 Zeilen lag die Kampagnenliste hinter dreihundert Zeilen."""
+    seite = render(sammle_daten(config, bestand))
+
+    assert "zeichneBlaetterleiste" in seite
+    assert 's-pro-seite' in seite
+    assert "let seite = 1, proSeite = 25;" in seite
+
+
+def test_gefiltert_wird_vor_dem_blaettern(bestand: Path, config) -> None:
+    """Sonst zeigte Seite 1 die ersten Zeilen der Datei statt die besten.
+
+    Die Reihenfolge im Code ist die Zusicherung: erst ``sortiert(gefiltert())``
+    ueber den ganzen Bestand, dann ``slice`` auf die Seite.
+    """
+    seite = render(sammle_daten(config, bestand))
+    stelle = seite.index("function zeichne()")
+    rumpf = seite[stelle : stelle + 900]
+
+    assert rumpf.index("sortiert(gefiltert())") < rumpf.index(".slice(")
+
+
+def test_die_gemerkte_seite_ueberlebt_eine_aenderung(bestand: Path, config) -> None:
+    """Wer auf Seite 7 zuordnet, will danach Seite 7 sehen."""
+    seite = render(sammle_daten(config, bestand))
+
+    assert "seite, proSeite, y: window.scrollY" in seite
+    assert "if (stand.seite) seite = Number(stand.seite);" in seite

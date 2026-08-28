@@ -31,7 +31,6 @@ from fbgroups.marketing.models import (
     EventType,
     GroupMarketing,
     JobStatus,
-    PostEntwurf,
     PostStatus,
     PostVersuch,
     QueueZustand,
@@ -40,7 +39,10 @@ from fbgroups.marketing.models import (
     Reward,
     RewardStatus,
     TextQuelle,
+    Texttyp,
+    Textvorschlag,
     TrackingEvent,
+    VorschlagStatus,
 )
 from fbgroups.marketing.queue import darf_arbeiten, pruefe_uebergang, zustand_schluessel
 
@@ -72,6 +74,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
     target_min_score        REAL,
     target_include_unscored INTEGER NOT NULL DEFAULT 0,
     auto_assign             INTEGER NOT NULL DEFAULT 0,
+    -- Braucht diese Kampagne neben dem Beitrag auch Kommentartexte?
+    kommentare              INTEGER NOT NULL DEFAULT 0,
     created_at       TEXT NOT NULL,
     updated_at       TEXT NOT NULL
 );
@@ -105,10 +109,30 @@ CREATE TABLE IF NOT EXISTS campaign_groups (
     -- Nummer ja schon stimmt.
     job_status      TEXT NOT NULL DEFAULT 'draft',
     post_text       TEXT NOT NULL DEFAULT '',
+    -- Das Ergebnis der deterministischen Herstellung, unveraendert daneben.
+    -- Siehe CampaignGroup: "was hat die Maschine gebaut?" und "was steht
+    -- jetzt da?" sind zwei Fragen. Auch diese Spalten stehen hier UND als
+    -- Migrationsschritt 13, aus dem oben genannten Grund.
+    generated_text  TEXT NOT NULL DEFAULT '',
+    vorlage_key     TEXT NOT NULL DEFAULT '',
     text_quelle     TEXT NOT NULL DEFAULT 'vorlage',
     generiert_am    TEXT,
     freigegeben_am  TEXT,
     freigegeben_von TEXT NOT NULL DEFAULT '',
+    -- Der Kommentar: dieselben Felder, eigener Einsatzzweck. Er gehoert zum
+    -- SELBEN Paar aus Kampagne und Gruppe - gleiche Lebensdauer, gleicher
+    -- Schluessel, gleiche Loeschung. Eine zweite Tabelle daneben waere eine
+    -- Kopie dieses Schluessels mit dem Risiko, auseinanderzulaufen.
+    --
+    -- Kein eigener job_status: Der Beitrag traegt den Ablauf (Freigabe,
+    -- Warteschlange, Versuche), der Kommentar wird kopiert und eingefuegt.
+    -- Auch diese Spalten stehen hier UND als Migrationsschritt 14, aus dem
+    -- oben genannten Grund.
+    kommentar_text         TEXT NOT NULL DEFAULT '',
+    kommentar_generated    TEXT NOT NULL DEFAULT '',
+    kommentar_vorlage_key  TEXT NOT NULL DEFAULT '',
+    kommentar_quelle       TEXT NOT NULL DEFAULT 'vorlage',
+    kommentar_generiert_am TEXT,
     PRIMARY KEY (campaign_id, group_id),
     FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
     FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
@@ -223,31 +247,20 @@ CREATE TABLE IF NOT EXISTS marketing_meta (
 # Zuordnung und steht deshalb als eigener Migrationsschritt in
 # storage/sqlite_store.py.
 #
+# ``post_entwuerfe`` stand hier einmal daneben: Textfassungen, die ein
+# Sprachmodell geschrieben hatte. Die KI ist aus dem Projekt entfernt, und
+# damit hat die Tabelle keinen Schreiber und keinen Leser mehr. Aus dem
+# aktuellen Schema ist sie deshalb weg; in einer **bestehenden** Datei bleibt
+# sie unberuehrt stehen. Migrationen sind hier ausschliesslich additiv - ein
+# DROP loeschte Zeilen, die einmal Arbeit waren, und gewaenne nichts ausser
+# ein paar Kilobyte.
+#
 # Die Job-Felder selbst liegen NICHT hier, sondern als Spalten an
 # ``campaign_groups``: Ein Beitrag gehoert zum Paar aus Kampagne und Gruppe,
 # und genau dieses Paar ist diese Tabelle. Eine zweite Tabelle daneben haette
 # dieselbe Schluesselkombination und dieselbe Lebensdauer - sie waere eine
 # Kopie mit dem Risiko, auseinanderzulaufen.
 SCHEMA_POSTING = """
-CREATE TABLE IF NOT EXISTS post_entwuerfe (
-    entwurf_id  INTEGER PRIMARY KEY AUTOINCREMENT,
-    campaign_id TEXT NOT NULL,
-    group_id    TEXT NOT NULL,
-    -- Laufende Nummer je Paar. Mehrere Fassungen zur Auswahl: Wer nur den
-    -- ersten Vorschlag bekommt, nimmt ihn - und alle 310 Beitraege klingen
-    -- gleich, was genau das ist, was Facebook als Spam erkennt.
-    variante    INTEGER NOT NULL DEFAULT 1,
-    text        TEXT NOT NULL DEFAULT '',
-    quelle      TEXT NOT NULL DEFAULT 'ki',
-    modell      TEXT NOT NULL DEFAULT '',
-    erzeugt_am  TEXT NOT NULL,
-    gewaehlt    INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (campaign_id, group_id, variante)
-);
-
-CREATE INDEX IF NOT EXISTS idx_entwuerfe_paar
-    ON post_entwuerfe(campaign_id, group_id);
-
 CREATE TABLE IF NOT EXISTS post_versuche (
     versuch_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     campaign_id    TEXT NOT NULL,
@@ -270,6 +283,56 @@ CREATE TABLE IF NOT EXISTS post_versuche (
 
 CREATE INDEX IF NOT EXISTS idx_versuche_paar ON post_versuche(campaign_id, group_id);
 CREATE INDEX IF NOT EXISTS idx_versuche_zeit ON post_versuche(begonnen_am);
+"""
+
+# Vierter Teil: die Textvorschlaege - mehrere Fassungen je Gruppe und Zweck.
+#
+# Bis hierher trug ``campaign_groups`` genau einen Beitrags- und einen
+# Kommentartext. Das war die stillschweigende Behauptung, die Wahl der Vorlage
+# sei schon getroffen - dabei ist sie das einzige, was ein Mensch beim
+# Durchsehen wirklich entscheidet. Wer eine andere Fassung wollte, musste die
+# vorhandene ueberschreiben, und die verworfene war weg.
+#
+# Warum hier doch eine eigene Tabelle, wo der Kommentar bewusst als **Spalten**
+# an ``campaign_groups`` haengt: Der Kommentar ist *einer* je Paar, die
+# Vorschlaege sind *viele*. Fuenf Fassungen mal zwei Zwecke waeren vierzig
+# Spalten, und die sechste Fassung ein Schemawechsel. Die Regel ist nicht
+# "keine zweite Tabelle", sondern "keine zweite Tabelle mit demselben
+# Schluessel" - dieser Schluessel ist um Zweck und Nummer laenger.
+#
+# Die Spalten von ``campaign_groups`` bleiben unveraendert und werden
+# weitergepflegt: Sie sind das Schaufenster fuer alles, was nach einem Text je
+# Paar fragt (``campaign message``, ``queue``, ``beitragstext``, die
+# Uebersicht). Was dort steht, ist die zuletzt bearbeitete oder
+# veroeffentlichte Fassung - siehe ``spiegle_ins_paar``.
+SCHEMA_VORSCHLAEGE = """
+CREATE TABLE IF NOT EXISTS campaign_group_texte (
+    campaign_id        TEXT NOT NULL,
+    group_id           TEXT NOT NULL,
+    -- 'post' | 'kommentar'. Beide Zwecke in einer Tabelle, weil sie sich bis
+    -- auf den Vorrat, aus dem sie stammen, gleich verhalten.
+    texttyp            TEXT NOT NULL,
+    -- Position im Vorrat, ab 1. Keine Rangfolge: Fassung 1 ist nicht besser
+    -- als Fassung 4, sie steht nur vorn.
+    nummer             INTEGER NOT NULL,
+    text               TEXT NOT NULL DEFAULT '',
+    generated_text     TEXT NOT NULL DEFAULT '',
+    vorlage_key        TEXT NOT NULL DEFAULT '',
+    quelle             TEXT NOT NULL DEFAULT 'vorlage',
+    -- 'entwurf' | 'gespeichert' | 'veroeffentlicht' | 'fehlgeschlagen'.
+    -- Je Fassung, nicht je Gruppe - das ist der ganze Zweck der Tabelle.
+    status             TEXT NOT NULL DEFAULT 'entwurf',
+    generiert_am       TEXT,
+    veroeffentlicht_am TEXT,
+    versuche           INTEGER NOT NULL DEFAULT 0,
+    fehler             TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (campaign_id, group_id, texttyp, nummer),
+    FOREIGN KEY (campaign_id, group_id)
+        REFERENCES campaign_groups(campaign_id, group_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_texte_paar
+    ON campaign_group_texte(campaign_id, group_id);
 """
 
 # Dritter Teil: der Uebergang vom anonymen Besucher zum angemeldeten Benutzer.
@@ -357,6 +420,31 @@ def _schema_version() -> int:
     return SCHEMA_VERSION
 
 
+#: Welche Spalten zu welchem Einsatzzweck gehoeren.
+#:
+#: Eine Tabelle statt zweier Methodensaetze: ``set_post_text`` und
+#: ``set_generierten_text`` gaebe es sonst zweimal, und die zweite Kopie waere
+#: irgendwann die laxere - genau der Unterschied, der erst in einem
+#: veroeffentlichten Beitrag auffaellt. Der Kommentar hat bewusst keine
+#: Entsprechung fuer ``job_status``: Der Beitrag traegt den Ablauf.
+_TEXTSPALTEN: dict[Texttyp, dict[str, str]] = {
+    Texttyp.POST: {
+        "text": "post_text",
+        "erzeugt": "generated_text",
+        "vorlage": "vorlage_key",
+        "quelle": "text_quelle",
+        "wann": "generiert_am",
+    },
+    Texttyp.KOMMENTAR: {
+        "text": "kommentar_text",
+        "erzeugt": "kommentar_generated",
+        "vorlage": "kommentar_vorlage_key",
+        "quelle": "kommentar_quelle",
+        "wann": "kommentar_generiert_am",
+    },
+}
+
+
 class MarketingStore:
     """Zugriff auf die Marketing-Tabellen derselben SQLite-Datei."""
 
@@ -377,6 +465,7 @@ class MarketingStore:
         self.conn.executescript(SCHEMA_TRACKING)
         self.conn.executescript(SCHEMA_IDENTITAETEN)
         self.conn.executescript(SCHEMA_POSTING)
+        self.conn.executescript(SCHEMA_VORSCHLAEGE)
         if not vorhanden:
             # Eine hier neu entstandene Datei traegt das aktuelle Schema und
             # muss das auch sagen. Ohne die Versionsnummer hielte der naechste
@@ -430,8 +519,8 @@ class MarketingStore:
                 message_template, landing_page, ziel, status, starts_on, ends_on,
                 target_audiences, target_cities, target_categories,
                 target_statuses, target_min_score, target_include_unscored,
-                auto_assign, created_at, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                auto_assign, kommentare, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(campaign_id) DO UPDATE SET
                 name             = excluded.name,
                 description      = excluded.description,
@@ -451,6 +540,7 @@ class MarketingStore:
                 target_min_score        = excluded.target_min_score,
                 target_include_unscored = excluded.target_include_unscored,
                 auto_assign             = excluded.auto_assign,
+                kommentare              = excluded.kommentare,
                 updated_at       = excluded.updated_at
             """,
             (
@@ -473,6 +563,7 @@ class MarketingStore:
                 campaign.target_min_score,
                 int(campaign.target_include_unscored),
                 int(campaign.auto_assign),
+                int(campaign.kommentare),
                 _iso(campaign.created_at),
                 _iso(campaign.updated_at),
             ),
@@ -520,7 +611,6 @@ class MarketingStore:
                 "SELECT COUNT(*) FROM campaign_groups "
                 "WHERE campaign_id = ? AND posted_at IS NOT NULL"
             ),
-            "entwuerfe": eins("SELECT COUNT(*) FROM post_entwuerfe WHERE campaign_id = ?"),
             "versuche": eins("SELECT COUNT(*) FROM post_versuche WHERE campaign_id = ?"),
             # Bleiben stehen - sie haengen an keinem Fremdschluessel. Die Zahlen
             # einer Auswertung von gestern aendern sich durch das Loeschen also
@@ -814,6 +904,40 @@ class MarketingStore:
         ).fetchall()
         return [self._row_to_link(row) for row in rows]
 
+    def links_zum_bearbeiten(self, campaign_id: str) -> list[CampaignGroup]:
+        """Alle Zuordnungen, an denen gearbeitet wird - erledigte eingeschlossen.
+
+        Die Liste der **Arbeitsseite**, und der Unterschied zu ``offene_links``
+        ist der Kern der gruppenweisen Arbeitsweise: Eine Gruppe verschwindet
+        nicht mehr, sobald ihr erster Beitrag draussen steht. Sie hat fuenf
+        Fassungen, und die zweite kann Wochen spaeter drankommen; wer sie dann
+        sucht, findet sie in einer Liste, die nur Offenes zeigt, nicht mehr
+        wieder.
+
+        Ausgeschlossen bleibt genau das, was ein Mensch ausgeschlossen hat
+        (``bearbeiten = 0``) - und ``uebersprungen``, denn "passt nicht" ist
+        ein Urteil ueber die Gruppe und keine offene Aufgabe. Beide behalten
+        ihren Tracking-Code: Er steht moeglicherweise in einem
+        veroeffentlichten Beitrag, und ein Klick darauf muss ankommen.
+
+        Sortiert wird hier nach ``tracking_code`` - also stabil, aber
+        fachlich beliebig. Die Rangfolge nach Score setzt
+        ``arbeit.arbeitsreihenfolge``, weil dafuer der Gruppenbestand
+        gebraucht wird und dieser Speicher ihn nicht kennt.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT cg.* FROM campaign_groups AS cg
+            LEFT JOIN group_marketing AS gm ON gm.group_id = cg.group_id
+             WHERE cg.campaign_id = ?
+               AND cg.post_status <> 'uebersprungen'
+               AND COALESCE(gm.bearbeiten, 1) = 1
+             ORDER BY cg.tracking_code
+            """,
+            (campaign_id,),
+        ).fetchall()
+        return [self._row_to_link(row) for row in rows]
+
     def post_counts(self, campaign_id: str) -> dict[str, int]:
         """Wie viele Beitraege je Stand - fuer die Fortschrittsanzeige."""
         zaehler = {status.value: 0 for status in PostStatus}
@@ -840,9 +964,9 @@ class MarketingStore:
         stehen, die es schon so oft versucht haben. Ohne diese Grenze holte
         jeder Aufruf dieselbe Gruppe zurueck, die aus einem *dauerhaften* Grund
         scheitert - "erlaubt keine Links" wird beim vierten Mal nicht anders
-        ausgehen als beim ersten, aber es kostet jedes Mal einen Platz im
-        Tageslimit, den eine erreichbare Gruppe gebraucht haette. ``0`` schaltet
-        die Grenze ab; die Zahl steht in der Konfiguration und nicht hier.
+        ausgehen als beim ersten, steht aber jedes Mal wieder in der Liste und
+        verdeckt die erreichbaren Gruppen. ``0`` schaltet die Grenze ab; die
+        Zahl steht in der Konfiguration und nicht hier.
 
         **Beide Achsen werden gesetzt.** Ein Job mit ``post_status: offen``
         neben ``job_status: failed`` waere fuer die eine Liste erledigt und
@@ -913,9 +1037,6 @@ class MarketingStore:
             ),
             "ereignisse": eins(
                 "SELECT COUNT(*) FROM tracking_events WHERE campaign_id = ?", campaign_id
-            ),
-            "entwuerfe": eins(
-                "SELECT COUNT(*) FROM post_entwuerfe WHERE campaign_id = ?", campaign_id
             ),
         }
 
@@ -1084,10 +1205,10 @@ class MarketingStore:
             # sie auf Pruefung wartet.
             #
             # Die Regel gilt fuer **jeden** Weg zurueck, nicht nur fuer
-            # ``approved -> pending_review``: ``campaign draft --neu`` schickt
-            # einen freigegebenen Job ueber ``draft`` zurueck, weil sein Text
-            # ersetzt wurde. Blieb der Zeitpunkt dabei stehen, trug ein Entwurf
-            # die Freigabe eines Textes, den es nicht mehr gibt.
+            # ``approved -> pending_review``: Auch ein neu gefuellter oder von
+            # Hand ueberschriebener Text schickt einen freigegebenen Job ueber
+            # ``draft`` zurueck. Blieb der Zeitpunkt dabei stehen, trug ein
+            # Entwurf die Freigabe eines Textes, den es nicht mehr gibt.
             felder["freigegeben_am"] = None
             felder["freigegeben_von"] = ""
         if neu is JobStatus.PUBLISHED and link.posted_at is None:
@@ -1124,14 +1245,25 @@ class MarketingStore:
         quelle: TextQuelle,
         *,
         neuer_status: JobStatus | None = None,
+        texttyp: Texttyp = Texttyp.POST,
     ) -> CampaignGroup:
-        """Legt den Beitragstext ab - den, der spaeter wirklich gepostet wird.
+        """Legt den laufenden Text ab - den, der spaeter wirklich hinausgeht.
 
         Bewusst ohne Statuswechsel als Vorgabe: Text schreiben und Text
         freigeben sind zwei Handlungen, und die zweite gehoert einem Menschen.
+
+        ``texttyp`` waehlt die Spalten (``_TEXTSPALTEN``). Der Vorgabewert
+        haelt jeden bestehenden Aufruf unveraendert - ein Beitrag bleibt ein
+        Beitrag, auch wenn es den Kommentar jetzt gibt. Ein ``neuer_status``
+        gilt allein fuer den Beitrag: ``JobStatus`` beschreibt dessen
+        Vorbereitung, und ein Kommentar wird nicht eingereiht.
         """
+        spalten = _TEXTSPALTEN[texttyp]
+        if neuer_status is not None and texttyp is not Texttyp.POST:
+            raise ValueError("Ein Kommentar hat keinen JobStatus - der Ablauf gehoert dem Beitrag.")
         self.conn.execute(
-            "UPDATE campaign_groups SET post_text = ?, text_quelle = ?, generiert_am = ? "
+            f"UPDATE campaign_groups SET {spalten['text']} = ?, "  # noqa: S608
+            f"{spalten['quelle']} = ?, {spalten['wann']} = ? "
             "WHERE campaign_id = ? AND group_id = ?",
             (text, quelle.value, _iso(datetime.now(UTC)), campaign_id, group_id),
         )
@@ -1142,6 +1274,367 @@ class MarketingStore:
         if link is None:
             raise UnknownGroupError(f"{campaign_id}/{group_id}")
         return link
+
+    def set_generierten_text(
+        self,
+        campaign_id: str,
+        group_id: str,
+        *,
+        text: str,
+        vorlage_key: str,
+        uebernehmen: bool,
+        texttyp: Texttyp = Texttyp.POST,
+    ) -> CampaignGroup:
+        """Legt den erzeugten Text ab - und auf Wunsch auch als laufenden Text.
+
+        Beides in einer Anweisung, damit die zwei Felder nie halb geschrieben
+        nebeneinanderstehen: Ein ``generated_text`` ohne den zugehoerigen
+        ``post_text`` saehe aus wie ein Text, den jemand verworfen hat.
+
+        ``uebernehmen=False`` ist der Fall "es steht schon etwas da". Der
+        laufende Text kann von Hand ueberarbeitet oder freigegeben sein, und
+        ein erneutes Fuellen darf diese Arbeit nicht beilaeufig ueberschreiben -
+        dieselbe Regel wie bei ``upsert_groups`` und den Notizen. Der erzeugte
+        Text wird trotzdem aufgefrischt: Er ist die Vergleichsgroesse, und eine
+        veraltete Vergleichsgroesse ist schlechter als gar keine.
+        """
+        jetzt = _iso(datetime.now(UTC))
+        spalten = _TEXTSPALTEN[texttyp]
+        if uebernehmen:
+            self.conn.execute(
+                f"UPDATE campaign_groups SET {spalten['erzeugt']} = ?, "  # noqa: S608
+                f"{spalten['vorlage']} = ?, {spalten['text']} = ?, "
+                f"{spalten['quelle']} = ?, {spalten['wann']} = ? "
+                "WHERE campaign_id = ? AND group_id = ?",
+                (text, vorlage_key, text, TextQuelle.VORLAGE.value, jetzt,
+                 campaign_id, group_id),
+            )
+        else:
+            self.conn.execute(
+                f"UPDATE campaign_groups SET {spalten['erzeugt']} = ?, "  # noqa: S608
+                f"{spalten['vorlage']} = ? "
+                "WHERE campaign_id = ? AND group_id = ?",
+                (text, vorlage_key, campaign_id, group_id),
+            )
+        self.conn.commit()
+        link = self.link_for(campaign_id, group_id)
+        if link is None:
+            raise UnknownGroupError(f"{campaign_id}/{group_id}")
+        return link
+
+    # -- Die Textvorschlaege ------------------------------------------------
+    #
+    # Fuenf Fassungen je Gruppe und Zweck, jede mit eigenem Stand. Die
+    # Methoden hier sind die einzige Stelle, an der ``campaign_group_texte``
+    # geschrieben wird - dieselbe Ueberlegung wie bei ``set_job_status``: eine
+    # Regel, die an drei Stellen gepflegt wird, gilt bald an zweien.
+
+    def vorschlaege(
+        self,
+        campaign_id: str,
+        group_id: str,
+        texttyp: Texttyp | None = None,
+    ) -> list[Textvorschlag]:
+        """Alle Fassungen dieses Paares, nach Nummer geordnet.
+
+        Ohne ``texttyp`` kommen beide Zwecke - der Aufrufer trennt sie dann
+        selbst. Mit ``texttyp`` genau ein Topf, und das ist der Regelfall:
+        Die Arbeitsseite fragt je Spalte einmal.
+        """
+        if texttyp is None:
+            rows = self.conn.execute(
+                "SELECT * FROM campaign_group_texte WHERE campaign_id = ? "
+                "AND group_id = ? ORDER BY texttyp, nummer",
+                (campaign_id, group_id),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM campaign_group_texte WHERE campaign_id = ? "
+                "AND group_id = ? AND texttyp = ? ORDER BY nummer",
+                (campaign_id, group_id, texttyp.value),
+            ).fetchall()
+        return [self._row_to_vorschlag(row) for row in rows]
+
+    def vorschlag(
+        self, campaign_id: str, group_id: str, texttyp: Texttyp, nummer: int
+    ) -> Textvorschlag | None:
+        """Genau eine Fassung. ``None``, wenn es sie nicht gibt."""
+        row = self.conn.execute(
+            "SELECT * FROM campaign_group_texte WHERE campaign_id = ? "
+            "AND group_id = ? AND texttyp = ? AND nummer = ?",
+            (campaign_id, group_id, texttyp.value, nummer),
+        ).fetchone()
+        return self._row_to_vorschlag(row) if row else None
+
+    def setze_erzeugten_vorschlag(
+        self,
+        campaign_id: str,
+        group_id: str,
+        texttyp: Texttyp,
+        nummer: int,
+        *,
+        text: str,
+        vorlage_key: str,
+        ueberschreiben: bool = False,
+    ) -> Textvorschlag:
+        """Legt eine erzeugte Fassung ab - ohne Handarbeit zu ueberschreiben.
+
+        Dieselbe Regel wie bei ``set_generierten_text`` am Paar: Der
+        **erzeugte** Text wird immer aufgefrischt (eine veraltete
+        Vergleichsgroesse ist schlechter als keine), der **laufende** nur
+        dann, wenn dort noch nichts steht oder ``ueberschreiben`` es
+        ausdruecklich verlangt.
+
+        Der Stand einer Fassung wird dabei nie zurueckgedreht: Was
+        veroeffentlicht ist, steht in der Gruppe, und ein erneutes Fuellen
+        macht daraus keinen Entwurf mehr. ``ueberschreiben`` gilt deshalb fuer
+        den Text, nicht fuer die Geschichte.
+        """
+        jetzt = _iso(datetime.now(UTC))
+        vorhanden = self.vorschlag(campaign_id, group_id, texttyp, nummer)
+
+        if vorhanden is None:
+            self.conn.execute(
+                "INSERT INTO campaign_group_texte (campaign_id, group_id, texttyp, "
+                "nummer, text, generated_text, vorlage_key, quelle, status, "
+                "generiert_am) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (campaign_id, group_id, texttyp.value, nummer, text, text,
+                 vorlage_key, TextQuelle.VORLAGE.value,
+                 VorschlagStatus.ENTWURF.value, jetzt),
+            )
+        elif ueberschreiben or not vorhanden.text.strip():
+            # Ein veroeffentlichter Vorschlag behaelt seinen Stand - der Text
+            # steht in der Gruppe, und "Entwurf" waere eine Falschaussage.
+            stand = (
+                vorhanden.status
+                if vorhanden.status
+                in (VorschlagStatus.VEROEFFENTLICHT, VorschlagStatus.FEHLGESCHLAGEN)
+                else VorschlagStatus.ENTWURF
+            )
+            self.conn.execute(
+                "UPDATE campaign_group_texte SET text = ?, generated_text = ?, "
+                "vorlage_key = ?, quelle = ?, status = ?, generiert_am = ? "
+                "WHERE campaign_id = ? AND group_id = ? AND texttyp = ? AND nummer = ?",
+                (text, text, vorlage_key, TextQuelle.VORLAGE.value, stand.value,
+                 jetzt, campaign_id, group_id, texttyp.value, nummer),
+            )
+        else:
+            self.conn.execute(
+                "UPDATE campaign_group_texte SET generated_text = ?, vorlage_key = ? "
+                "WHERE campaign_id = ? AND group_id = ? AND texttyp = ? AND nummer = ?",
+                (text, vorlage_key, campaign_id, group_id, texttyp.value, nummer),
+            )
+        self.conn.commit()
+
+        # Das **Paar** wird hier bewusst nicht angefasst. Wer die Fassungen
+        # einer Gruppe fuellt, schreibt Platz 1 ausdruecklich ueber
+        # ``set_generierten_text`` ans Paar (``arbeit.stelle_texte_bereit``) -
+        # dort steht die Regel, wann ein laufender Text uebernommen wird, und
+        # sie ein zweites Mal hier zu haben hiesse, sie zweimal zu pflegen.
+        neu = self.vorschlag(campaign_id, group_id, texttyp, nummer)
+        if neu is None:  # pragma: no cover - gerade geschrieben
+            raise UnknownGroupError(f"{campaign_id}/{group_id}")
+        return neu
+
+    def setze_vorschlag_text(
+        self,
+        campaign_id: str,
+        group_id: str,
+        texttyp: Texttyp,
+        nummer: int,
+        text: str,
+        quelle: TextQuelle = TextQuelle.HAND,
+    ) -> Textvorschlag:
+        """Speichert **genau diese** Fassung - keine der vier anderen.
+
+        Der Kern der Forderung "beim Speichern darf nur dieser konkrete
+        Vorschlag gespeichert werden": Der Schluessel traegt die Nummer, und
+        die Anweisung fasst keine Zeile ohne sie an.
+
+        Der Stand geht auf ``gespeichert``, wenn die Fassung noch nirgends
+        hingegangen ist. Ein veroeffentlichter Vorschlag behaelt seinen Haken:
+        Der Text in der Gruppe aendert sich nicht dadurch, dass jemand hier
+        etwas umschreibt - er waere sonst als erledigt markiert und traege
+        einen anderen Wortlaut, als wirklich draussen steht.
+        """
+        vorhanden = self.vorschlag(campaign_id, group_id, texttyp, nummer)
+        if vorhanden is None:
+            self.conn.execute(
+                "INSERT INTO campaign_group_texte (campaign_id, group_id, texttyp, "
+                "nummer, text, quelle, status, generiert_am) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (campaign_id, group_id, texttyp.value, nummer, text, quelle.value,
+                 VorschlagStatus.GESPEICHERT.value, _iso(datetime.now(UTC))),
+            )
+        else:
+            stand = (
+                vorhanden.status
+                if vorhanden.status is VorschlagStatus.VEROEFFENTLICHT
+                else VorschlagStatus.GESPEICHERT
+            )
+            self.conn.execute(
+                "UPDATE campaign_group_texte SET text = ?, quelle = ?, status = ? "
+                "WHERE campaign_id = ? AND group_id = ? AND texttyp = ? AND nummer = ?",
+                (text, quelle.value, stand.value,
+                 campaign_id, group_id, texttyp.value, nummer),
+            )
+        self.conn.commit()
+        self._spiegle_ins_paar(campaign_id, group_id, texttyp, text, "", quelle)
+        neu = self.vorschlag(campaign_id, group_id, texttyp, nummer)
+        if neu is None:  # pragma: no cover - gerade geschrieben
+            raise UnknownGroupError(f"{campaign_id}/{group_id}")
+        return neu
+
+    def vorschlag_zuruecksetzen(
+        self, campaign_id: str, group_id: str, texttyp: Texttyp, nummer: int
+    ) -> Textvorschlag | None:
+        """Holt den erzeugten Text dieser einen Fassung zurueck.
+
+        Der Ausweg aus einer misslungenen Ueberarbeitung - genau dafuer steht
+        ``generated_text`` neben ``text``. Ist nichts erzeugt worden, bleibt
+        alles stehen: Ein leerer Text waere schlimmer als ein unpassender.
+        """
+        vorhanden = self.vorschlag(campaign_id, group_id, texttyp, nummer)
+        if vorhanden is None or not vorhanden.generated_text.strip():
+            return vorhanden
+        return self.setze_vorschlag_text(
+            campaign_id, group_id, texttyp, nummer,
+            vorhanden.generated_text, TextQuelle.VORLAGE,
+        )
+
+    def setze_vorschlag_stand(
+        self,
+        campaign_id: str,
+        group_id: str,
+        texttyp: Texttyp,
+        nummer: int,
+        stand: VorschlagStatus,
+        *,
+        fehler: str = "",
+    ) -> Textvorschlag | None:
+        """Traegt den Ausgang **einer** Fassung ein. Returns: die neue Fassung.
+
+        ``versuche`` zaehlt jeden gemeldeten Ausgang mit, auch den Erfolg -
+        dieselbe Bedeutung wie ``post_attempts`` am Paar.
+        ``veroeffentlicht_am`` wird dagegen nur beim **ersten** Erfolg
+        gesetzt: Die Klicks gehen auf den Beitrag zurueck, der zuerst stand.
+
+        Ein Erfolg loescht den Fehlergrund. Bliebe er stehen, stuende neben
+        einer veroeffentlichten Fassung der Grund, aus dem sie beim vorletzten
+        Mal nicht ging.
+        """
+        vorhanden = self.vorschlag(campaign_id, group_id, texttyp, nummer)
+        if vorhanden is None:
+            return None
+        jetzt = _iso(datetime.now(UTC))
+        erfolg = stand is VorschlagStatus.VEROEFFENTLICHT
+        zaehlt = stand in (
+            VorschlagStatus.VEROEFFENTLICHT,
+            VorschlagStatus.FEHLGESCHLAGEN,
+        )
+        self.conn.execute(
+            "UPDATE campaign_group_texte SET status = ?, fehler = ?, "
+            "versuche = ?, veroeffentlicht_am = ? "
+            "WHERE campaign_id = ? AND group_id = ? AND texttyp = ? AND nummer = ?",
+            (
+                stand.value,
+                "" if erfolg else fehler,
+                vorhanden.versuche + (1 if zaehlt else 0),
+                jetzt if (erfolg and vorhanden.veroeffentlicht_am is None)
+                else _iso(vorhanden.veroeffentlicht_am),
+                campaign_id, group_id, texttyp.value, nummer,
+            ),
+        )
+        self.conn.commit()
+
+        # Was veroeffentlicht wurde, ist der Text, der wirklich draussen steht -
+        # er gehoert ins Schaufenster des Paares, damit ``campaign message``
+        # und die Uebersicht ihn zeigen und nicht eine verworfene Fassung.
+        if erfolg and vorhanden.text.strip():
+            self._spiegle_ins_paar(
+                campaign_id, group_id, texttyp, vorhanden.text,
+                vorhanden.vorlage_key, vorhanden.quelle,
+            )
+        return self.vorschlag(campaign_id, group_id, texttyp, nummer)
+
+    def staende_je_gruppe(
+        self, campaign_id: str, texttyp: Texttyp = Texttyp.POST
+    ) -> dict[str, set[str]]:
+        """Welche Staende in welcher Gruppe vorkommen - eine Abfrage fuer alle.
+
+        Die Frage der Gruppenauswahl beim Blaettern durch 300 Gruppen: "wo bin
+        ich schon gewesen, wo ist etwas schiefgegangen?". Je Gruppe einzeln
+        nachzufragen waeren 300 Abfragen fuer eine Auswahlliste.
+        """
+        rows = self.conn.execute(
+            "SELECT DISTINCT group_id, status FROM campaign_group_texte "
+            "WHERE campaign_id = ? AND texttyp = ?",
+            (campaign_id, texttyp.value),
+        ).fetchall()
+        gefunden: dict[str, set[str]] = {}
+        for row in rows:
+            gefunden.setdefault(str(row["group_id"]), set()).add(str(row["status"]))
+        return gefunden
+
+    def _spiegle_ins_paar(
+        self,
+        campaign_id: str,
+        group_id: str,
+        texttyp: Texttyp,
+        text: str,
+        vorlage_key: str,
+        quelle: TextQuelle,
+        *,
+        nur_wenn_leer: bool = False,
+    ) -> None:
+        """Schreibt eine Fassung als Text des **Paares** mit.
+
+        Die Bruecke zu allem, was es vor den Vorschlaegen schon gab:
+        ``beitrag.beitragstext``, ``campaign message``, ``campaign queue``,
+        die Uebersicht und die Zustandsmaschine lesen ``post_text`` bzw.
+        ``kommentar_text`` am Paar. Ohne diese Spiegelung stuenden dort die
+        Texte von vorgestern, waehrend die Arbeitsseite die von heute zeigt -
+        und beim Kopieren aus der Kommandozeile ginge ein anderer Text hinaus
+        als der, den ein Mensch freigegeben hat.
+
+        Gespiegelt wird die zuletzt gespeicherte oder veroeffentlichte
+        Fassung. Das ist keine Rangaussage ueber die fuenf, sondern die
+        einzige Antwort, die auf die Frage "und was ist *der* Text dieser
+        Gruppe?" ehrlich moeglich ist, solange es fuenf gibt.
+        """
+        spalten = _TEXTSPALTEN[texttyp]
+        bedingung = ""
+        if nur_wenn_leer:
+            bedingung = f" AND TRIM({spalten['text']}) = ''"
+        werte: list[object] = [text, quelle.value, _iso(datetime.now(UTC))]
+        setzt = f"{spalten['text']} = ?, {spalten['quelle']} = ?, {spalten['wann']} = ?"
+        if vorlage_key:
+            setzt += f", {spalten['vorlage']} = ?"
+            werte.append(vorlage_key)
+        self.conn.execute(
+            f"UPDATE campaign_groups SET {setzt} "  # noqa: S608
+            f"WHERE campaign_id = ? AND group_id = ?{bedingung}",
+            (*werte, campaign_id, group_id),
+        )
+        self.conn.commit()
+
+    @staticmethod
+    def _row_to_vorschlag(row: sqlite3.Row) -> Textvorschlag:
+        return Textvorschlag(
+            campaign_id=str(row["campaign_id"]),
+            group_id=str(row["group_id"]),
+            texttyp=Texttyp(str(row["texttyp"])),
+            nummer=int(row["nummer"]),
+            text=str(row["text"]),
+            generated_text=str(row["generated_text"]),
+            vorlage_key=str(row["vorlage_key"]),
+            quelle=TextQuelle(str(row["quelle"])),
+            status=VorschlagStatus(str(row["status"])),
+            generiert_am=_parse_dt(row["generiert_am"]),
+            veroeffentlicht_am=_parse_dt(row["veroeffentlicht_am"]),
+            versuche=int(row["versuche"]),
+            fehler=str(row["fehler"]),
+        )
 
     def jobs_mit_status(
         self, campaign_id: str, status: JobStatus | None = None
@@ -1233,68 +1726,6 @@ class MarketingStore:
         return self._row_to_link(row) if row else None
 
     # -- Entwuerfe --------------------------------------------------------
-    def add_entwurf(self, entwurf: PostEntwurf) -> int:
-        """Legt eine Textfassung ab. Die Variantennummer zaehlt je Paar hoch."""
-        if entwurf.variante <= 0:
-            row = self.conn.execute(
-                "SELECT COALESCE(MAX(variante), 0) AS hoechste FROM post_entwuerfe "
-                "WHERE campaign_id = ? AND group_id = ?",
-                (entwurf.campaign_id, entwurf.group_id),
-            ).fetchone()
-            entwurf.variante = int(row["hoechste"]) + 1
-
-        cursor = self.conn.execute(
-            """
-            INSERT INTO post_entwuerfe
-                (campaign_id, group_id, variante, text, quelle, modell, erzeugt_am, gewaehlt)
-            VALUES (?,?,?,?,?,?,?,?)
-            """,
-            (
-                entwurf.campaign_id,
-                entwurf.group_id,
-                entwurf.variante,
-                entwurf.text,
-                entwurf.quelle.value,
-                entwurf.modell,
-                _iso(entwurf.erzeugt_am),
-                int(entwurf.gewaehlt),
-            ),
-        )
-        self.conn.commit()
-        return int(cursor.lastrowid or 0)
-
-    def entwuerfe_for(self, campaign_id: str, group_id: str) -> list[PostEntwurf]:
-        rows = self.conn.execute(
-            "SELECT * FROM post_entwuerfe WHERE campaign_id = ? AND group_id = ? "
-            "ORDER BY variante",
-            (campaign_id, group_id),
-        ).fetchall()
-        return [self._row_to_entwurf(row) for row in rows]
-
-    def waehle_entwurf(self, entwurf_id: int) -> PostEntwurf | None:
-        """Macht eine Fassung zur gewaehlten und uebernimmt ihren Text.
-
-        Die verworfenen Fassungen bleiben stehen. Sie kosten nichts und
-        beantworten spaeter die Frage, wogegen entschieden wurde.
-        """
-        row = self.conn.execute(
-            "SELECT * FROM post_entwuerfe WHERE entwurf_id = ?", (entwurf_id,)
-        ).fetchone()
-        if row is None:
-            return None
-        entwurf = self._row_to_entwurf(row)
-
-        self.conn.execute(
-            "UPDATE post_entwuerfe SET gewaehlt = 0 WHERE campaign_id = ? AND group_id = ?",
-            (entwurf.campaign_id, entwurf.group_id),
-        )
-        self.conn.execute(
-            "UPDATE post_entwuerfe SET gewaehlt = 1 WHERE entwurf_id = ?", (entwurf_id,)
-        )
-        self.conn.commit()
-        self.set_post_text(entwurf.campaign_id, entwurf.group_id, entwurf.text, entwurf.quelle)
-        return entwurf
-
     # -- Versuchsprotokoll ------------------------------------------------
     def beginne_versuch(self, versuch: PostVersuch) -> int:
         """Traegt einen begonnenen Versuch ein. Returns: seine Kennung.
@@ -1343,73 +1774,6 @@ class MarketingStore:
             ),
         )
         self.conn.commit()
-
-    def versuche_heute(
-        self, campaign_id: str | None = None, *, jetzt: datetime | None = None
-    ) -> int:
-        """Wie viele Versuche heute schon unternommen wurden.
-
-        Grundlage des Tageslimits, und sie steht mit Absicht in der Datenbank
-        statt in einem Zaehler im Arbeiter: Wer um 08:00 zwanzig Beitraege
-        setzt, abstuerzt und um 14:00 neu startet, saehe sonst einen leeren
-        Zaehler und setzte zwanzig weitere.
-
-        **Ohne ``campaign_id`` ueber alle Kampagnen** - und so ruft der Arbeiter
-        es auch. Die knappe Ressource ist das Facebook-Konto, nicht die
-        Kampagne: Zwei Kampagnen mit je zwanzig Beitraegen sind vierzig
-        Beitraege aus demselben Konto, und das Limit waere eine Beschriftung
-        ohne Wirkung. Je Kampagne zaehlen laesst sich weiterhin - fuer die
-        Anzeige, nicht fuer die Grenze.
-
-        Gezaehlt wird ab **oertlicher** Mitternacht, nicht ab UTC: "20 pro Tag"
-        meint den Tag des Menschen, der davorsitzt. Gespeichert ist in UTC, die
-        Grenze wird deshalb umgerechnet.
-
-        Gezaehlt wird **jeder** Versuch, auch der fehlgeschlagene. Das Limit
-        schuetzt nicht vor zu vielen Beitraegen, sondern vor zu viel Betrieb -
-        zehn Fehlschlaege hintereinander sind ein Grund, den Tag zu beenden,
-        kein Grund, es zwanzig weitere Male zu versuchen.
-        """
-        jetzt = jetzt or datetime.now()
-        mitternacht = jetzt.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
-        seit = _iso(mitternacht.astimezone(UTC))
-
-        if campaign_id is None:
-            row = self.conn.execute(
-                "SELECT COUNT(*) AS anzahl FROM post_versuche WHERE begonnen_am >= ?",
-                (seit,),
-            ).fetchone()
-        else:
-            row = self.conn.execute(
-                "SELECT COUNT(*) AS anzahl FROM post_versuche "
-                "WHERE campaign_id = ? AND begonnen_am >= ?",
-                (campaign_id, seit),
-            ).fetchone()
-        return int(row["anzahl"] or 0)
-
-    def letzter_versuch(self, *, campaign_id: str | None = None) -> datetime | None:
-        """Wann zuletzt ein Beitrag begonnen wurde - oder ``None``.
-
-        Grundlage der Wartezeit zwischen zwei Beitraegen, wenn der Ablauf
-        **nicht** in einer Schleife laeuft: Bei der Arbeit ueber die Uebersicht
-        steht zwischen zwei Beitraegen keine Schleife, die schlafen koennte,
-        sondern ein Mensch, der eine Seite neu laedt. Die Pause muss deshalb
-        aus dem Bestand kommen und nicht aus dem Ablauf - sonst umginge man sie
-        durch Neuladen.
-
-        Wie beim Tageslimit ueber **alle** Kampagnen: Der Takt gilt fuer das
-        Konto, nicht fuer eine einzelne Kampagne.
-        """
-        if campaign_id is None:
-            row = self.conn.execute(
-                "SELECT MAX(begonnen_am) AS letzte FROM post_versuche"
-            ).fetchone()
-        else:
-            row = self.conn.execute(
-                "SELECT MAX(begonnen_am) AS letzte FROM post_versuche WHERE campaign_id = ?",
-                (campaign_id,),
-            ).fetchone()
-        return _parse_dt(row["letzte"]) if row and row["letzte"] else None
 
     def versuche_for(self, campaign_id: str, group_id: str) -> list[PostVersuch]:
         rows = self.conn.execute(
@@ -1589,13 +1953,6 @@ class MarketingStore:
             (event_type.value, *refs),
         ).fetchone()
         return row is not None
-
-    def events_for_user(self, user_ref: str) -> list[TrackingEvent]:
-        rows = self.conn.execute(
-            "SELECT * FROM tracking_events WHERE user_ref = ? ORDER BY occurred_at",
-            (user_ref,),
-        ).fetchall()
-        return [self._row_to_event(row) for row in rows]
 
     def events_for_code(self, tracking_code: str) -> list[TrackingEvent]:
         """Alle Ereignisse, die diesem Tracking-Code zugeordnet sind."""
@@ -1805,20 +2162,6 @@ class MarketingStore:
         )
 
     @staticmethod
-    def _row_to_entwurf(row: sqlite3.Row) -> PostEntwurf:
-        return PostEntwurf(
-            entwurf_id=row["entwurf_id"],
-            campaign_id=row["campaign_id"],
-            group_id=row["group_id"],
-            variante=row["variante"],
-            text=row["text"],
-            quelle=row["quelle"],
-            modell=row["modell"],
-            erzeugt_am=row["erzeugt_am"],
-            gewaehlt=bool(row["gewaehlt"]),
-        )
-
-    @staticmethod
     def _row_to_versuch(row: sqlite3.Row) -> PostVersuch:
         return PostVersuch(
             versuch_id=row["versuch_id"],
@@ -1886,6 +2229,7 @@ class MarketingStore:
             target_min_score=row["target_min_score"],
             target_include_unscored=bool(row["target_include_unscored"]),
             auto_assign=bool(row["auto_assign"]),
+            kommentare=bool(row["kommentare"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -1905,10 +2249,17 @@ class MarketingStore:
             post_error=row["post_error"],
             job_status=row["job_status"],
             post_text=row["post_text"],
+            generated_text=row["generated_text"],
+            vorlage_key=row["vorlage_key"],
             text_quelle=row["text_quelle"],
             generiert_am=row["generiert_am"],
             freigegeben_am=row["freigegeben_am"],
             freigegeben_von=row["freigegeben_von"],
+            kommentar_text=row["kommentar_text"],
+            kommentar_generated=row["kommentar_generated"],
+            kommentar_vorlage_key=row["kommentar_vorlage_key"],
+            kommentar_quelle=row["kommentar_quelle"],
+            kommentar_generiert_am=row["kommentar_generiert_am"],
         )
 
     @staticmethod

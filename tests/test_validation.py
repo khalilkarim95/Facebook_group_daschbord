@@ -138,7 +138,7 @@ def test_platzhalter_erhaelt_keinen_score(config) -> None:
         audience_confidence=1.0,
         city="Berlin",
         city_confidence=1.0,
-        member_count_hint=50000,
+        member_count=50000,
         validation_status=ValidationStatus.TEST_DATA,
     )
     score_group(group, config)
@@ -224,14 +224,14 @@ def test_name_plus_signal_genuegt(config) -> None:
     assert group.score is not None
 
 
-def test_fehlende_mitgliederzahl_wird_nicht_erfunden(config_mit_mitgliederzahl) -> None:
+def test_fehlende_mitgliederzahl_wird_nicht_erfunden(config) -> None:
     """Unbekannte Mitgliederzahl bringt keine Punkte - und keinen Ersatzwert.
 
-    Geprueft mit eingeschalteter Mitgliederzahl: Im Projekt steht das Gewicht
-    auf 0, der Ersatzwert-Mechanismus muss aber weiterhin fehlen, falls jemand
-    die Zahl von Hand pflegt und den Bestandteil wieder einschaltet.
+    Seit dem 27.08.2026 traegt die Mitgliederzahl 25 der 100 Punkte. Ein
+    Ersatzwert waere damit noch gefaehrlicher als vorher: Er saehe in der
+    Datenbank aus wie eine gemessene Zahl und entschiede darueber, wo die
+    naechsten dreihundert Beitraege hingehen.
     """
-    config = config_mit_mitgliederzahl
     ohne = score_group(
         make_group(
             name="Syrer in Berlin",
@@ -243,8 +243,9 @@ def test_fehlende_mitgliederzahl_wird_nicht_erfunden(config_mit_mitgliederzahl) 
         config,
     )
     assert ohne.score is not None
-    assert ohne.score_breakdown.member_count == 0.0
-    assert "Mitgliederzahl unbekannt" in ohne.score_reason
+    assert ohne.score_breakdown.members == 0.0
+    assert ohne.member_count is None            # nicht 0 - das waere eine Aussage
+    assert "Mitglieder unbekannt" in ohne.score_reason
 
     mit = score_group(
         make_group(
@@ -254,14 +255,16 @@ def test_fehlende_mitgliederzahl_wird_nicht_erfunden(config_mit_mitgliederzahl) 
             audience_confidence=1.0,
             city="Berlin",
             city_confidence=1.0,
-            member_count_hint=60000,
+            member_count=60000,
         ),
         config,
     )
     # Eine sehr grosse Gruppe steht besser da. Die Gruppe ohne Angabe verliert
     # keine Punkte, ihre erreichbare Hoechstpunktzahl sinkt aber entsprechend.
     assert mit.score > ohne.score
-    assert mit.score_max == 100.0
+    # Nicht 100: Aktivitaet und Kategorie liegen auch hier nicht vor. Genau
+    # das soll score_max sagen - was bei DIESER Datenlage erreichbar war.
+    assert mit.score_max == 55.0
     assert ohne.score_max < mit.score_max
     # Alles, was ohne die Mitgliederzahl beurteilbar war, wurde vergeben.
     assert ohne.score == ohne.score_breakdown.total()
@@ -272,15 +275,15 @@ def test_fehlende_mitgliederzahl_wird_nicht_erfunden(config_mit_mitgliederzahl) 
     [
         ({}, DataQuality.NONE),
         ({"name": "Test"}, DataQuality.MINIMAL),
-        ({"name": "Test", "member_count_hint": 100}, DataQuality.PARTIAL),
+        ({"name": "Test", "member_count": 100}, DataQuality.PARTIAL),
         (
-            {"name": "Test", "member_count_hint": 100, "description_snippet": "Text"},
+            {"name": "Test", "member_count": 100, "description_snippet": "Text"},
             DataQuality.PARTIAL,
         ),
         (
             {
                 "name": "Syrer in Berlin",
-                "member_count_hint": 100,
+                "member_count": 100,
                 "description_snippet": "Oeffentliche Gruppe",
                 "privacy_hint": PrivacyHint.PUBLIC,
             },
@@ -342,7 +345,7 @@ def test_leere_spalte_erreichbar_aendert_nichts(config, tmp_path: Path) -> None:
     )
     groups, _ = run_seed_import(config, paths=[path])
     assert groups[0].validation_status is ValidationStatus.VALID
-    assert groups[0].member_count_hint == 12000
+    assert groups[0].member_count == 12000
 
 
 def test_manuelles_urteil_ueberlebt_einen_suchtreffer(config, tmp_path: Path) -> None:
@@ -374,7 +377,7 @@ def test_metadaten_werden_nie_erfunden(config, tmp_path: Path) -> None:
     assert group.city is None
     assert group.bundesland is None
     assert group.category is None
-    assert group.member_count_hint is None
+    assert group.member_count is None
     assert group.audience_tags == []
     assert group.privacy_hint.value == "unknown"
 

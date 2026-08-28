@@ -130,7 +130,7 @@ def passt(group: Group, auswahl: Auswahl) -> bool:
     return not (auswahl.statuses and group.status.value.lower() not in auswahl.statuses)
 
 
-def _vergabereihenfolge(group: Group) -> tuple[str, str]:
+def vergabereihenfolge(group: Group) -> tuple[str, str]:
     """Schluessel, nach dem Codes vergeben werden.
 
     Bewusst **nicht** der Score: Er aendert sich bei jedem ``rescore``, und
@@ -138,13 +138,18 @@ def _vergabereihenfolge(group: Group) -> tuple[str, str]:
     ``first_seen_at`` steht ab dem ersten Fund fest; ``group_id`` entscheidet
     bei gleichem Zeitpunkt, damit auch ein Sammelimport eine feste Reihenfolge
     hat. Gleiche Eingabe, gleiche Codes - unabhaengig von der Bewertung.
+
+    Oeffentlich, weil nicht nur die Regel danach vergibt: Auch das Zuordnen
+    von Hand (angehakte Zeilen in der Uebersicht) muss dieselbe Reihenfolge
+    benutzen. Zwei Sortierungen fuer dieselbe Frage waeren zwei Wahrheiten
+    darueber, welche Gruppe welche Nummer bekommt.
     """
     return (group.first_seen_at.isoformat(), group.group_id)
 
 
 def waehle_gruppen(groups: list[Group], auswahl: Auswahl) -> list[Group]:
     """Die passenden Gruppen in fester Vergabereihenfolge."""
-    return sorted((g for g in groups if passt(g, auswahl)), key=_vergabereihenfolge)
+    return sorted((g for g in groups if passt(g, auswahl)), key=vergabereihenfolge)
 
 
 @dataclass

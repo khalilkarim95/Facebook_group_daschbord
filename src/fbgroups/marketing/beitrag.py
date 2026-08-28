@@ -18,7 +18,7 @@ import subprocess
 import sys
 import webbrowser
 
-from fbgroups.marketing.models import Campaign, CampaignGroup
+from fbgroups.marketing.models import Campaign, CampaignGroup, Texttyp
 
 # Je Plattform das Programm, das von der Standardeingabe in die Zwischenablage
 # schreibt. Wayland vor X11: Auf einer Wayland-Sitzung ist ``xclip`` oft
@@ -34,14 +34,23 @@ _ZWISCHENABLAGE: dict[str, tuple[tuple[str, ...], ...]] = {
 }
 
 
-def beitragstext(campaign: Campaign, link: CampaignGroup) -> str:
-    """Setzt die Vorlage der Kampagne mit dem Link **dieser** Gruppe zusammen.
+def beitragstext(
+    campaign: Campaign,
+    link: CampaignGroup,
+    texttyp: Texttyp = Texttyp.POST,
+) -> str:
+    """Setzt den gespeicherten Text mit dem Link **dieser** Gruppe zusammen.
 
-    Die einzige Stelle, an der ein Beitragstext entsteht - ``campaign
-    message``, ``queue``, ``next`` und die Uebersicht lesen alle hier. Eine
-    zweite Fassung koennte abweichen, und der Unterschied fiele erst auf,
-    wenn ein Beitrag mit dem falschen Code veroeffentlicht ist; zurueckholen
-    laesst er sich dann nicht mehr.
+    Die einzige Stelle, an der ein fertiger Text entsteht - ``campaign
+    message``, ``queue``, ``next``, die Arbeitsseite und die Uebersicht lesen
+    alle hier. Eine zweite Fassung koennte abweichen, und der Unterschied
+    fiele erst auf, wenn ein Beitrag mit dem falschen Code veroeffentlicht
+    ist; zurueckholen laesst er sich dann nicht mehr.
+
+    ``texttyp`` waehlt **nur**, welches Feld gelesen wird - Beitrag oder
+    Kommentar. Die Ersetzung bleibt fuer beide dieselbe und an dieser einen
+    Stelle: Ein zweiter Weg fuer den Kommentar waere ein zweiter Ort, an dem
+    ein Tracking-Code in einen Text kommt.
 
     ``{link}`` ist der Platzhalter, um den es geht. Der Code steht bewusst
     nirgends fest im Text: Bei 300 Gruppen sind das 300 verschiedene Links,
@@ -58,7 +67,31 @@ def beitragstext(campaign: Campaign, link: CampaignGroup) -> str:
     Vorschlag von Claude enthaelt ``{link}`` und sonst nichts Linkartiges -
     ``ki.pruefe_platzhalter`` laesst nichts anderes durch.
     """
-    text = link.post_text or campaign.message_template or ""
+    # Die Vorlage der Kampagne faengt nur den **Beitrag** auf. Sie ist als
+    # Beitrag geschrieben; unter einem fremden Beitrag stuende sie als
+    # Kommentar da, den niemand dafuer vorgesehen hat. Ohne Kommentartext
+    # bleibt der Text leer - und die Arbeitsseite zeigt dann keinen.
+    if texttyp is Texttyp.KOMMENTAR:
+        text = link.kommentar_text
+    else:
+        text = link.post_text or campaign.message_template or ""
+    return mit_link(campaign, link, text)
+
+
+def mit_link(campaign: Campaign, link: CampaignGroup, text: str) -> str:
+    """Setzt die drei Platzhalter in einen **beliebigen** Text dieser Gruppe.
+
+    Herausgeloest aus ``beitragstext``, seit eine Gruppe nicht mehr einen Text
+    hat, sondern fuenf: Die Fassungen liegen in ``campaign_group_texte`` und
+    nicht in ``link.post_text``, gebraucht wird aber genau dieselbe Ersetzung.
+    Sie ein zweites Mal hinzuschreiben waere ein zweiter Ort, an dem ein
+    Tracking-Code in einen Text kommt - und der Unterschied zwischen beiden
+    fiele erst auf, wenn ein Beitrag mit dem falschen Code in einer Gruppe
+    steht.
+
+    ``beitragstext`` ist damit nur noch die Frage "welches Feld?"; die
+    Ersetzung selbst steht hier, an einer Stelle.
+    """
     return (
         text.replace("{link}", link.tracking_url)
         .replace("{tracking_code}", link.tracking_code)

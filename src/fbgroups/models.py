@@ -60,6 +60,33 @@ class PrivacyHint(StrEnum):
     UNKNOWN = "unknown"
 
 
+class MemberCountSource(StrEnum):
+    """Woher die Mitgliederzahl stammt - und damit, wie belastbar sie ist.
+
+    Die Angabe ist kein Beiwerk. Dieselbe Zahl bedeutet etwas anderes, je
+    nachdem, ob sie auf der Gruppenseite stand oder aus einem Suchtreffer
+    geschaetzt wurde; ``data_confidence`` liest genau das hier ab.
+    """
+
+    FACEBOOK = "facebook"    # oeffentlich erreichbare Gruppenseite
+    SEARCH = "search"        # ausdruecklich benannt im Suchtreffer
+    MANUAL = "manual"        # von Hand gepflegt (fbgroups pruefliste)
+
+
+class ActivitySource(StrEnum):
+    """Woher das Aktivitaetsmass stammt.
+
+    Drei Quellen mit deutlich verschiedener Aussagekraft, deshalb getrennt
+    benannt: Die Beitragsliste der Gruppe misst die Gruppe, die eigene
+    Resonanz misst, was **uns** von dort erreicht, und die Datumsangaben der
+    Suchtreffer belegen nur, dass irgendwann ein Beitrag indexiert wurde.
+    """
+
+    FACEBOOK = "facebook"          # Beitragsliste der Gruppenseite
+    RESONANZ = "resonanz"          # eigene Tracking-Ereignisse
+    SEARCH_DATES = "search_dates"  # Datumsangaben indexierter Beitraege
+
+
 class Provenance(BaseModel):
     """Woher stammt ein Datensatz - fuer die Qualitaetsauswertung."""
 
@@ -70,33 +97,41 @@ class Provenance(BaseModel):
 
 
 class ScoreBreakdown(BaseModel):
-    """Nachvollziehbare Einzelteile des Scores statt einer nackten Zahl."""
+    """Nachvollziehbare Einzelteile des Scores statt einer nackten Zahl.
 
-    audience_match: float = 0.0
-    city_match: float = 0.0
-    category_match: float = 0.0
-    member_count: float = 0.0
+    Die Feldnamen sind die Namen der Bestandteile aus ``scoring.BESTANDTEILE``;
+    ein neuer Bestandteil braucht hier ein Feld und in ``settings.yaml`` ein
+    Gewicht, sonst nichts. ``model_config`` laesst unbekannte Namen deshalb
+    **nicht** durchgehen: Ein Tippfehler im Bestandteilsnamen soll auffallen
+    und nicht still null Punkte ergeben.
+
+    Ein Bestandteil mit Gewicht 0 und einer, dessen Grundlage fehlt, stehen
+    hier beide auf 0,0 - unterscheiden lassen sie sich an ``score_max`` und
+    ``score_reason``. Das ist Absicht: Die Aufschluesselung nennt Punkte, die
+    Begruendung nennt Gruende.
+    """
+
+    # -- Die fuenf Bestandteile (Summe der Gewichte: 100) ------------------
+    members: float = 0.0           # 25 - Groesse, logarithmisch gestuft
+    activity: float = 0.0          # 25 - Betrieb in der Gruppe
+    location: float = 0.0          # 15 - geografische Passung
+    category: float = 0.0          # 20 - Themenpassung
+    target_audience: float = 0.0   # 15 - Zielgruppenpassung
+
+    # -- Abschaltbare Zusatzbestandteile (Vorgabegewicht 0) ----------------
+    # Sie zaehlen nicht mit, solange ihr Gewicht 0 ist, und erscheinen dann
+    # auch nicht als "unbekannt". Erhalten bleiben sie, weil das Abschalten
+    # eines Bestandteils eine Zahlenaenderung sein soll und keine Codeaenderung.
     name_quality: float = 0.0
-    # -- Gemessene Resonanz ------------------------------------------------
-    # Was die Gruppe tatsaechlich gebracht hat, nicht was sie verspricht. Die
-    # Zahlen stammen aus den eigenen Tracking-Ereignissen - dem einzigen
-    # Aktivitaetsmass, das dieses Projekt ohne facebook.com erheben kann.
-    resonanz_engagement: float = 0.0
-    resonanz_reichweite: float = 0.0
-    resonanz_aktualitaet: float = 0.0
 
     def total(self) -> float:
-        return round(
-            self.audience_match
-            + self.city_match
-            + self.category_match
-            + self.member_count
-            + self.name_quality
-            + self.resonanz_engagement
-            + self.resonanz_reichweite
-            + self.resonanz_aktualitaet,
-            2,
-        )
+        """Summe aller Bestandteile - unabhaengig davon, welche es gerade gibt.
+
+        Ueber die Felder statt ueber eine Aufzaehlung im Code: Wer einen
+        Bestandteil ergaenzt, soll ihn nicht an zwei Stellen eintragen
+        muessen - die zweite wird sonst vergessen.
+        """
+        return round(sum(float(w) for w in self.model_dump().values()), 2)
 
 
 class Group(BaseModel):
@@ -110,17 +145,51 @@ class Group(BaseModel):
     # Oeffentliche Angaben
     name: str = ""
     description_snippet: str | None = None
-    member_count_hint: int | None = None
     privacy_hint: PrivacyHint = PrivacyHint.UNKNOWN
     language_hint: str | None = None
+
+    # -- Mitgliederzahl ----------------------------------------------------
+    # Drei Felder, nicht eines. ``None`` heisst unbekannt und ist etwas
+    # anderes als 0: "0 Mitglieder" waere eine Aussage ueber die Gruppe,
+    # "unbekannt" eine ueber unsere Daten. Die Herkunft steht daneben, weil
+    # dieselbe Zahl je nach Quelle verschieden viel wert ist, und der
+    # Zeitpunkt, weil eine Mitgliederzahl von vor einem Jahr keine
+    # Mitgliederzahl von heute ist. ``checked_at`` wird auch dann gesetzt,
+    # wenn nichts gefunden wurde - sonst liefe der Abruf jedes Mal erneut.
+    member_count: int | None = None
+    member_count_source: MemberCountSource | None = None
+    member_count_checked_at: datetime | None = None
+
+    # -- Aktivitaet --------------------------------------------------------
+    # Dieselbe Trennung. ``posts_per_day`` bleibt ``None``, solange keine
+    # Zahl belegt ist; ``activity_factor`` (0-1) ist die daraus abgeleitete
+    # Bewertung und existiert getrennt, weil es Quellen gibt, die einen
+    # Betriebseindruck liefern, ohne eine Beitragszahl zu nennen - die
+    # Datumsangaben der Suchtreffer etwa.
+    posts_per_day: float | None = None
+    last_post_at: datetime | None = None
+    activity_factor: float | None = None
+    activity_confidence: float = 0.0
+    activity_source: ActivitySource | None = None
+    activity_checked_at: datetime | None = None
 
     # Klassifikation
     audience_tags: list[str] = Field(default_factory=list)
     audience_confidence: float = 0.0
     city: str | None = None
     bundesland: str | None = None
+    # Das Land ist fast immer Deutschland - aber "fast immer" ist kein
+    # "immer", und eine Gruppe ohne erkennbare Stadt kann trotzdem
+    # geografisch passen. Ohne das Feld waere "Deutschland allgemein" von
+    # "geografisch unbekannt" nicht zu unterscheiden.
+    country: str | None = None
     city_confidence: float = 0.0
     category: str | None = None
+    # Mehrere Themen sind der Normalfall: "Syrer in Bonn" ist zugleich
+    # Community, Lokales und Integration. Die Hauptkategorie entscheidet die
+    # Punkte, die Nebenkategorien heben sie an - eine Gruppe, die drei
+    # gesuchte Themen trifft, ist besser als eine, die eines trifft.
+    secondary_categories: list[str] = Field(default_factory=list)
     category_confidence: float = 0.0
 
     # Bewertung
@@ -133,6 +202,14 @@ class Group(BaseModel):
     score_max: float | None = None
     score_reason: str = ""
     score_breakdown: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
+    # Wie belastbar die Grundlage des Scores ist (0-1) - **neben** dem Score,
+    # nicht darin. Ein schlechter Score aus guten Daten und ein guter Score
+    # aus duennen Daten sind zwei verschiedene Aussagen; sie zu verrechnen
+    # machte beide unlesbar. Die Confidence darf deshalb nie in den Score
+    # einfliessen, sie wird daneben angezeigt.
+    data_confidence: float = 0.0
+    # Wann zuletzt versucht wurde, die Angaben aufzufrischen.
+    last_checked_at: datetime | None = None
 
     # Prozess
     validation_status: ValidationStatus = ValidationStatus.VALID
@@ -155,8 +232,12 @@ class Group(BaseModel):
         # Fehlende Angaben aus dem Duplikat ergaenzen, vorhandene nicht ueberschreiben.
         if not self.name and other.name:
             self.name = other.name
-        if self.member_count_hint is None and other.member_count_hint is not None:
-            self.member_count_hint = other.member_count_hint
+        # Die Mitgliederzahl kommt mit ihrer Herkunft oder gar nicht: Eine
+        # Zahl ohne Quellenangabe liesse sich spaeter nicht mehr einordnen.
+        if self.member_count is None and other.member_count is not None:
+            self.member_count = other.member_count
+            self.member_count_source = other.member_count_source
+            self.member_count_checked_at = other.member_count_checked_at
         if not self.description_snippet and other.description_snippet:
             self.description_snippet = other.description_snippet
 

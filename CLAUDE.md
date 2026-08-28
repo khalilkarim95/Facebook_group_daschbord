@@ -17,11 +17,27 @@ Testnamen. Bitte beibehalten.
 Diese Grenzen sind mit dem Nutzer vereinbart und dürfen nicht ohne
 ausdrückliche Aufforderung aufgeweicht werden:
 
-- Kein Zugriff auf facebook.com – kein Scraping, keine Login-Automatisierung,
-  keine Umgehung von Schutzmechanismen. Phase 1 liest nur lokale Dateien.
+- **facebook.com: lesen ja, alles andere nein** (geändert am 27.08.2026 auf
+  ausdrückliche Anweisung des Nutzers; vorher galt „kein Zugriff" ausnahmslos).
+  Erlaubt ist allein das Lesen **öffentlich erreichbarer Gruppenseiten** durch
+  `extract/gruppenseite.py` und `fbgroups enrich`. Unverändert verboten
+  bleiben: **kein Login und keine Sitzungsübernahme** (eine angemeldete Abfrage
+  gefährdet das Konto, an dem alle 313 Gruppenmitgliedschaften hängen), **keine
+  Umgehung von Sperren** (kein Proxywechsel, keine wechselnden Kennungen, kein
+  nachgeahmter Browser — die Kennung nennt das Werkzeug beim Namen, und nach
+  fünf Abweisungen endet der Lauf, statt härter zu klopfen), **kein
+  automatisches Posten oder Messaging**. Der Grund für die Öffnung: Mitglieder­-
+  zahl und Aktivität tragen zusammen die Hälfte des Scores und sind nirgends
+  sonst zu bekommen — in 147 gespeicherten Serper-Antworten (815.630 Zeichen)
+  kommt **keine einzige** Mitgliederzahl vor, in keiner Sprache. Die Tests
+  `test_es_wird_kein_browser_nachgeahmt` und `test_es_gibt_keinen_login_weg`
+  halten die verbliebenen Grenzen fest.
 - Keine Mitglieder-/Admindaten, keine Profil-URLs, keine Beitragsinhalte, keine
   Kontaktdaten. `models.Group` hat dafür bewusst keine Felder – ein Erweitern
-  des Modells um solche Felder wäre eine Grenzverletzung.
+  des Modells um solche Felder wäre eine Grenzverletzung. **Diese Grenze ist
+  nicht mitgeöffnet worden**: Vom Abruf übernommen werden Mitgliederzahl,
+  Sichtbarkeit, Name und Beitrags*zeitpunkte* — nie ein Beitragstext, nie ein
+  Mensch.
 - Kein automatisches Posten, kein automatisches Messaging.
 - Kein Suchdienst fest verdrahten. Vor Anbindung eines Providers dessen
   Verfügbarkeit für Neukunden prüfen (Google CSE: für Neukunden geschlossen,
@@ -45,6 +61,9 @@ $env:PYTHONIOENCODING="utf-8"        # sonst bricht arabische Terminalausgabe
 & $py -m fbgroups.cli pruefliste --top 40 # Liste zum Ausfuellen von Hand
 & $py -m fbgroups.cli import-seeds data\seeds\pruefliste.csv   # ausgefuellt zurueck
 & $py -m fbgroups.cli rescore --dry-run   # Wirkung geaenderter Gewichte zeigen
+& $py -m fbgroups.cli enrich --dry-run    # wer waere an der Reihe? ruft nichts ab
+& $py -m fbgroups.cli enrich --limit 5    # 5 oeffentliche Gruppenseiten lesen
+& $py -m fbgroups.cli enrich --alle       # bis enrich.max_pro_lauf
 & $py -m fbgroups.cli rescore        # Bestand neu bewerten, ohne Suchanfrage
                                      # holt dabei die gemessene Resonanz mit
 & $py -m fbgroups.cli report
@@ -143,62 +162,144 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
   Ersatzwert für fehlende Daten — eine frühere Fassung vergab bei unbekannter
   Mitgliederzahl einen „neutralen" Faktor und erzeugte damit für jede Gruppe
   ohne Metadaten denselben Score (8,75).
-- **Die Aktivitaet einer Gruppe wird gemessen, nicht von Facebook geholt.**
-  Mitgliederzahl, Beitraege je Woche, aktive Poster und letzter Beitrag stehen
-  ausschliesslich auf facebook.com. Die **Meta Groups API wurde am 22.04.2024
-  vollstaendig abgeschaltet** (angekuendigt mit Graph API v19 im Januar 2024);
-  `groups_access_member_info` und `publish_to_groups` sind ersatzlos entfallen.
-  Auch davor haette sie nicht geholfen: Sie verlangte, dass ein **Admin** der
-  Gruppe die App dort installiert — bei 307 Gruppen, in denen wir Gast sind,
-  war dieser Weg nie offen. Ein Nachbau ueber eine Browsersitzung ist Scraping
-  und faellt unter die harten Projektgrenzen.
-  Gemessen wird stattdessen die **Resonanz**: Klick auf den Tracking-Link,
-  Registrierung in der App. Das beantwortet die eigentliche Frage genauer —
-  nicht "wie viel wird dort geredet?", sondern "wie viele Menschen kommen von
-  dort zu uns?".
+- **Der Score sind 100 Punkte aus fünf Bestandteilen** (seit 27.08.2026):
+
+  | Bestandteil       | Punkte | Grundlage                                |
+  |-------------------|-------:|------------------------------------------|
+  | `members`         |     25 | Mitgliederzahl, logarithmisch gestuft    |
+  | `activity`        |     25 | Betrieb in der Gruppe (drei Quellen)     |
+  | `category`        |     20 | Haupt- und Nebenkategorien               |
+  | `location`        |     15 | Stadt, sonst Bundesland, sonst Land      |
+  | `target_audience` |     15 | erkannte Zielgruppen                     |
+
+  **Reichweite und Betrieb tragen zusammen die Hälfte.** Das ist die fachliche
+  Vorgabe und keine Feinheit: Eine thematisch perfekte Gruppe, in der nichts
+  geschieht, ist kein guter Platz für einen Beitrag. `config-check` prüft
+  beides — die Summe 100 *und* die 50 für `members` + `activity`; ohne die
+  zweite Prüfung verschiebt sich das Verhältnis beim nächsten Feintuning
+  unbemerkt.
+- **`scoring.BESTANDTEILE` ist die einzige Quelle der Bestandteile.**
+  `score_group` läuft über die Registry und nennt keinen Bestandteil beim
+  Namen. Einen ergänzen heißt: eine Funktion schreiben, sie mit
+  `@bestandteil(name, label, gewicht)` eintragen, ein Feld in `ScoreBreakdown`
+  ergänzen und in `settings.yaml` ein Gewicht setzen. Ein Gewicht für einen
+  Namen, den es nicht gibt, ist ein **Tippfehler und keine Erweiterung** —
+  `config-check` meldet ihn, sonst liefe der gemeinte Bestandteil still mit
+  seiner Vorgabe weiter.
+- **Ein Bestandteil liefert `Befund` oder `None` — nie eine 0.** `None` heißt
+  „keine Grundlage": Der Bestandteil senkt `score_max`, statt eine Null zu
+  behaupten. „Keine Aktivität" ist ein Urteil über die Gruppe, „Aktivität
+  unbekannt" eines über unsere Daten, und der Unterschied entscheidet die
+  Rangfolge. Der `Befund` trägt neben dem Faktor auch **Konfidenz und
+  Herkunft** — deshalb steht im Export „Mitglieder 22 (facebook)" und nicht
+  nur „22".
+- **Die Mitgliederzahl wächst logarithmisch** (`member_count_buckets`, neun
+  Stufen). Eine Gruppe mit 100.000 Mitgliedern ist nicht zehnmal so wertvoll
+  wie eine mit 10.000: Oberhalb einiger tausend entscheidet nicht mehr die
+  Größe, sondern ob dort etwas geschieht. Sie war bis zum 27.08.2026 mit 45
+  von 100 das schwerste Kriterium und dann abgeschaltet (`member_count: 0`),
+  weil sie ohne facebook.com in **273 von 273** Suchtreffern fehlte. Mit dem
+  geöffneten Abruf ist sie wieder eingeschaltet — mit 25 statt 45 Punkten.
+- **Die Aktivität hat drei Quellen, und ihre Reihenfolge ist begründet**
+  (`activity_source`):
+  1. `facebook` — die Beitragsliste der Gruppenseite. Sie misst **die Gruppe**
+     und ist damit die Antwort auf die gestellte Frage. Konfidenz 1,0.
+  2. `resonanz` — Klick auf den Tracking-Link, Registrierung in der App. Sie
+     misst, was von dort zu **uns** kommt; in mancher Hinsicht die bessere
+     Frage (eine Gruppe mit 500 Mitgliedern und 40 Registrierungen ist mehr
+     wert als eine mit 5.000 und zwei), aber eine andere. Konfidenz 0,8.
+  3. `search_dates` — das `date` eines indexierten Suchtreffers. Es belegt,
+     **dass** die Gruppe lebt, und sonst nichts; eine Beitragszahl je Tag ist
+     daraus nicht abzuleiten. Konfidenz 0,35. Bewertet wird allein die Frische
+     des jüngsten Fundes, **nicht die Anzahl** der datierten Treffer: Die
+     hängt daran, wie oft eine Gruppe in unseren Anfragen auftauchte, und das
+     ist eine Eigenschaft unserer Anfragen.
+- **Die Aktivität ist bewusst unabhängig von der Mitgliederzahl.** Sonst ließe
+  sich der Fall nicht abbilden, für den es sie gibt: 100.000 Mitglieder und
+  kaum neue Beiträge schlagen 20.000 mit täglichem Betrieb **nicht**. Test:
+  `test_grosse_stille_gruppe_verliert_gegen_kleine_lebendige`.
 - **`scoring.Resonanz` beschreibt die Zahlen, `marketing/resonanz.py` beschafft
   sie.** Die Richtung ist Absicht: `scoring.py` kennt weder `MarketingStore`
   noch die Ereignistabelle, so wie die Marketing-Erweiterung den Bestand nicht
   veraendert. Der Aufrufer (`rescore`, die Uebersicht) reicht die Zahlen herein.
   Ein Import in die andere Richtung machte den Kern von einem Aufsatz abhaengig.
+  Die Resonanz ist seit dem 27.08.2026 **kein eigener Block mehr**, sondern
+  eine Quelle von `activity` — zwei Blöcke wären zweimal dieselbe Frage.
 - **"Nicht gemessen" ist etwas anderes als "wirkungslos".** Ohne
-  veroeffentlichten Beitrag liefert `_resonanz_faktoren` `None`, die
-  Bestandteile erscheinen als "unbekannt" und `score_max` sinkt auf 100 statt
-  175. Null Klicks ohne Beitrag sind eine Aussage ueber **uns**, nicht ueber die
-  Gruppe. Dasselbe gilt fuer die Schonfrist (`schonfrist_tage: 3`): Wer vor zwei
-  Stunden gepostet hat, hat noch keine Klicks — eine Null waere hier eine
-  Behauptung ueber die Zukunft. Ein Beitrag **mit** null Klicks ist dagegen ein
-  Ergebnis und wird als solches bewertet (`score_max` 175, Resonanz 0).
+  veroeffentlichten Beitrag liefert `_resonanz_faktor` `None`, `activity`
+  erscheint als "unbekannt" und `score_max` sinkt um 25. Null Klicks ohne
+  Beitrag sind eine Aussage ueber **uns**, nicht ueber die Gruppe. Dasselbe
+  gilt fuer die Schonfrist (`schonfrist_tage: 3`): Wer vor zwei Stunden
+  gepostet hat, hat noch keine Klicks — eine Null waere hier eine Behauptung
+  ueber die Zukunft. Ein Beitrag **mit** null Klicks ist dagegen ein Ergebnis
+  und wird als solches bewertet (`score_max` voll, `activity` 0).
 - **Die Zielquote ist 15 %, nicht 100 %** (`resonanz.ziel_quote`). Wer die
   Registrierungsquote auf 1,0 normiert, gibt selbst der besten Gruppe ein
   Sechstel der Punkte und macht den Bestandteil wirkungslos. Daneben steht die
   Belastbarkeit (`mindest_klicks: 20`): 1 Klick mit 1 Registrierung sind 100 %
   und beweisen nichts — ohne diese Schranke stuende jede zufaellige Gruppe an
-  der Spitze.
+  der Spitze. Die drei Teilmaße werden über `resonanz.anteile` zu **einem**
+  Faktor verrechnet (Engagement 0,60 · Reichweite 0,25 · Aktualität 0,15) und
+  auf ihre Summe normiert, damit ein Tippfehler die Obergrenze nicht sprengt.
 - **Reichweite zaehlt je Beitrag, nicht absolut.** Sonst gewaenne die Gruppe, in
   der wir am oeftesten gepostet haben, statt der, die am besten wirkt.
-- **Passung (100 Punkte) und Resonanz (75 Punkte) sind zwei Bloecke.**
-  `config-check` prueft nur den ersten auf 100; beide zusammen zu pruefen hiesse,
-  das Einschalten der Resonanz als Fehler zu melden. Der Score wird weiterhin
-  **nicht** auf 100 normiert (Regel 3 in `scoring.py`) — eine Gruppe ohne Beitrag
-  erreicht hoechstens 100, und "100 von 100" steht zu Recht hinter "130 von 175".
-- **Die Mitgliederzahl ist abgeschaltet (`member_count: 0`).** Sie war mit 45
-  von 100 das schwerste Kriterium — für eine Kooperation entscheidet die
-  Reichweite. Sie ist aber die einzige Angabe, die das Projekt nicht selbst
-  beschaffen kann: In 273 gespeicherten Suchtreffern stand sie **kein einziges
-  Mal**, und facebook.com wird nicht aufgerufen. Damit fehlte sie ausnahmslos
-  jeder der 132 Gruppen, und die Decke von 55 Punkten unterschied keine Gruppe
-  von einer anderen — sie war eine Aussage über das Projekt, nicht über die
-  Gruppen. Ihre 45 Punkte liegen jetzt auf `audience_match` (45), `city_match`
-  (27), `category_match` (16) und `name_quality` (12).
+- **`data_confidence` steht neben dem Score, nie darin.** Ein mäßiger Score
+  aus belegten Zahlen und ein guter aus dünnen Hinweisen sind zwei Aussagen;
+  verrechnet wären beide unlesbar. Zwei Dinge fließen ein: **wie sicher** die
+  Angaben sind (die Konfidenzen der Befunde) und **wie viel** überhaupt vorlag
+  (der Anteil des beurteilten am möglichen Gewicht). Ohne das zweite bekäme
+  eine Gruppe, von der nur die Stadt bekannt ist, aber zweifelsfrei, die volle
+  Confidence — die Zahl sagte dann das Gegenteil dessen aus, wozu sie da ist.
+- **Der Ort kennt vier Stufen, und die unterste ist nicht null**
+  (`location_stufen`): Stadt (voll, mal Konfidenz) → Bundesland (0,45) → Land
+  (0,20) → nichts erkannt (`None`, unbekannt). „Deutschland allgemein" ist
+  eine schwächere Passung als „Bonn", aber immer noch eine.
+- **Nebenkategorien heben die Hauptkategorie an, gedeckelt**
+  (`kategorie_nebenbonus` 0,08 je Thema, höchstens 0,24). Eine Gruppe, die
+  drei gesuchte Themen bedient, ist mehr wert als eine, die eines bedient —
+  ohne Deckel gewänne aber die Gruppe mit dem längsten Namen.
 - **Gewicht `0` schaltet einen Bestandteil ganz ab, `None` heißt unbekannt.**
   Ein abgeschalteter Bestandteil senkt `score_max` nicht und erscheint nicht
-  als „unbekannt" in `score_reason` — er wird gar nicht erst erwartet. Ohne
-  diesen Filter in `scoring.score_group` setzte `DEFAULT_WEIGHTS` die 45 Punkte
-  gegen die Konfiguration wieder ein. Wer die Mitgliederzahl von Hand pflegt
-  (`fbgroups pruefliste`), setzt das Gewicht zurück auf > 0 und ruft `rescore`
-  auf; der gesamte Mechanismus ist erhalten und durch die Fixture
-  `config_mit_mitgliederzahl` weiterhin getestet.
+  als „unbekannt" in `score_reason` — er wird gar nicht erst erwartet. So
+  steht `name_quality` auf 0: Die Form des Namens sagt etwas über **unsere
+  Daten** und nichts über die Gruppe, sie gehört in `data_confidence`. Die
+  Regel dahinter (`_namensform`) bleibt vollständig erhalten, damit das
+  Wiedereinschalten eine Zahlenänderung ist und keine Codeänderung.
+- **`fbgroups enrich` startet nie beiläufig.** Ohne `--limit` oder `--alle`
+  bricht der Befehl mit Exit-Code 2 ab, ohne etwas abzurufen — dieselbe
+  Vorsicht wie bei `fbgroups search`, aber aus einem anderen Grund: Dort geht
+  es um Guthaben, hier um das Konto des Nutzers. Die Befunde liegen in
+  `data/gruppenseiten.sqlite` (eigene Datei wie der Anfragespeicher), damit
+  ein zweiter Lauf keinen zweiten Abruf kostet; `enrich.hoechstalter_tage`
+  entscheidet, wann ein Befund als veraltet gilt. `mindestabstand_sekunden: 6`
+  ist bewusst groß — bei 313 Gruppen gut eine halbe Stunde. Das ist der Preis
+  dafür, dass niemand den Abruf für einen Angriff hält.
+- **Ein Anmeldefenster ist ein gültiger Befund, kein Fehler.** Facebook
+  liefert einem nicht angemeldeten Abruf häufig eine Anmeldeseite;
+  `Seitenbefund.erreichbar` bleibt dann `False`, alle Zahlen bleiben `None`,
+  und `checked_at` wird **trotzdem** gesetzt — sonst liefe derselbe erfolglose
+  Abruf bei jedem Lauf erneut. Eine nicht gefundene Zahl **löscht keine
+  vorhandene**: Ein Anmeldefenster ist kein Beleg dafür, dass die Gruppe
+  geschrumpft ist.
+- **`upsert_groups` schützt erhobene Zahlen mit `COALESCE`.** Ein Suchlauf
+  schreibt jeden gefundenen Datensatz neu und bringt weder Mitgliederzahl noch
+  Aktivität mit. Ohne diesen Schutz löschte jeder `fbgroups search`, was
+  `fbgroups enrich` in einer halben Stunde erhoben hat — und niemand merkte
+  es, weil der Score einfach wieder sank. Test:
+  `test_ein_suchlauf_loescht_erhobene_zahlen_nicht`.
+- **Migrationsschritt 15 rechnet keine alten Scores um.** Ein Score aus den
+  alten Gewichten (45/25/15/8/7 plus 75 Resonanzpunkte) lässt sich nicht in
+  die neuen übersetzen; ein geratener Umrechnungsfaktor stünde hinterher in
+  der Rangliste, nach der entschieden wird, wo die nächsten dreihundert
+  Beiträge hingehen. Neu bewertet wird mit `fbgroups rescore` — das ist ein
+  Befehl und damit eine Entscheidung. Ebenso wird `member_count_source` für
+  Bestandszahlen **nicht** auf `search` gesetzt: Die Migration liest eine
+  Spalte, in der auch eine von Hand gepflegte Zahl stehen könnte, und eine
+  Migration, die Herkunft behauptet, erfindet Daten.
+- **Die Spalte heißt `member_count_hint`, das Feld `member_count`.** Migrationen
+  sind hier ausschließlich additiv, und ein `RENAME COLUMN` ist keine additive
+  Änderung; `_row_to_group` bildet den Namen ab. Ein zweites Feld für dieselbe
+  Zahl anzulegen wäre die schlechtere Lösung — zwei Wahrheiten über eine Zahl.
 - **`ValidationStatus.UNREACHABLE` ist ein Menschenurteil.** Nur wer die
   Gruppe im Browser geöffnet hat, kann sie für tot erklären. `upsert_groups`
   nimmt dieses Urteil deshalb nie zurück — ein späterer Suchtreffer belegt
@@ -295,7 +396,14 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
 & $py -m fbgroups.cli campaign sync batreeq-syrian-germany   # Regel auf den Bestand anwenden
 & $py -m fbgroups.cli campaign add-groups batreeq-syrian-germany --top 20  # einmaliger Griff
 & $py -m fbgroups.cli campaign links batreeq-syrian-germany --export data\exports\links.csv
+& $py -m fbgroups.cli campaign text batreeq-syrian-germany --aus-vorlage --ja
+                                             # Texte je Gruppe erzeugen
+                                             # (Beitrag; Kommentar, wenn die
+                                             #  Kampagne welche fuehrt)
+& $py -m fbgroups.cli campaign text batreeq-syrian-germany --aus-vorlage --typ beide --ja
+& $py -m fbgroups.cli campaign text batreeq-syrian-germany --aus-vorlage --ueberschreiben --ja   # nach Aenderung an config/textvorlagen.yaml
 & $py -m fbgroups.cli campaign message batreeq-syrian-germany arabinberlin
+& $py -m fbgroups.cli campaign message batreeq-syrian-germany arabinberlin --typ kommentar
 & $py -m fbgroups.cli campaign queue batreeq-syrian-germany   # was steht noch aus?
 & $py -m fbgroups.cli campaign next batreeq-syrian-germany    # Gruppe fuer Gruppe
 & $py -m fbgroups.cli campaign fortschritt batreeq-syrian-germany
@@ -385,6 +493,22 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
   Ende von `import-seeds` und `search` (nur für Kampagnen mit `auto_assign`,
   Vorgabe aus). Beide lesen denselben Plan aus `marketing/selection.py` –
   `--dry-run` und Ernstfall können nicht auseinanderlaufen.
+- **Drei Wege zur Zuordnung, und der dritte schließt eine Lücke.** `campaign
+  sync` beschreibt die Auswahl als **Regel**, das Feld in der Kampagnenspalte
+  greift **eine** Gruppe heraus — wer aber genau diese zwölf meint, müsste sie
+  erst als Regel formulieren, und eine Regel, die zwölf trifft und keine
+  dreizehnte, ist meist gar nicht formulierbar. `POST /kampagnen/{id}/gruppen`
+  nimmt deshalb die angehakten Zeilen entgegen, als **Liste** wie
+  `POST /bearbeiten`: Zwölf Zeilen sind ein Zug, keine zwölf Klicks — und nur
+  so entstehen die Codes aus **einem** `CodeAllocator`. Die Reihenfolge kommt
+  aus `selection.vergabereihenfolge` (deshalb ist der Schlüssel öffentlich),
+  nicht aus der Reihenfolge der Haken: Sonst bekäme dieselbe Gruppe eine andere
+  Nummer, je nachdem, wie die Tabelle gerade sortiert war. Bestätigt wird mit
+  der **Zahl**, nicht nur mit dem Namen — wie viele Codes gleich entstehen, ist
+  die Angabe, die man vorher gegenliest. Anders als das Feld in der Zeile nennt
+  die Liste **alle** Kampagnen: Hinter der Auswahl stehen viele Gruppen mit
+  verschiedenen Ständen, und der Server überspringt die bereits zugeordneten
+  und sagt hinterher, wie viele es waren.
 - **Zugeordnet wird nur hinzugefügt, nie entfernt.** Passt eine Gruppe später
   nicht mehr zur Regel, behält sie ihren Code und erscheint als
   `nicht_mehr_passend` im Bericht. Der Code steht möglicherweise in einem
@@ -468,170 +592,215 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
 & $py -m fbgroups.cli marketing audit
 ```
 
-### KI-Anbieter: lokal als Standard
+### Keine KI (entfernt)
 
-```powershell
-& $py -m fbgroups.cli ki status          # Anbieter, Verbindung, Modell, Adresse
-& $py -m fbgroups.cli ki test            # eine sehr kurze echte Anfrage
-& $py -m fbgroups.cli ki modelle         # was bei Ollama wirklich liegt
-& $py -m fbgroups.cli campaign draft <kampagne> --dry-run   # zeigt nur, was liefe
+Bis zum 26.08.2026 gab es `marketing/ki/`: Ollama als Standard auf dem eigenen
+Rechner, Anthropic als kostenpflichtiger Sonderfall, dazu Entwürfe
+(`post_entwuerfe`), ein „Mit KI anpassen" auf der Arbeitsseite, `campaign
+draft` und `fbgroups ki status|test|modelle`. **Alles davon ist entfernt** —
+Paket, Wege, Befehle, Konfiguration, Umgebungsvariablen, das `[ki]`-Extra und
+der Rückwärtstunnel auf Port 11434.
+
+Was davon bleibt und warum:
+
+- **`vorlagen.pruefe_platzhalter`** (früher `ki.basis`): genau ein `{link}`,
+  keine ausgeschriebene Adresse, kein codeähnliches Muster. Sie galt nie nur
+  für Modellantworten — sie gilt für **jeden** Text, auch für einen von Hand
+  geschriebenen. Mit der KI hatte sie nur zufällig zusammengewohnt.
+- **`TextQuelle.KI` und `JobStatus.AI_GENERATED`** stehen weiter in den
+  Aufzählungen. Sie werden nicht mehr vergeben, aber die Spalten tragen sie
+  für Zuordnungen von damals; entfernt wären diese Datensätze nicht mehr
+  ladbar.
+- **`post_entwuerfe`** verschwindet aus dem Schema, aber **nicht** aus einer
+  bestehenden Datei: Migrationen sind hier ausschließlich additiv, und ein
+  `DROP` löschte Zeilen, die einmal Arbeit waren. Eine frisch angelegte Datei
+  bekommt die Tabelle nicht mehr; niemand liest oder schreibt sie.
+
+Der Grund für den Ausbau ist nicht, dass die KI schlecht gearbeitet hätte,
+sondern dass sie den Ablauf nicht getragen hat: Die Vielfalt der 310 Texte kam
+ohnehin aus `config/textvorlagen.yaml`, und was dort nicht passte, schreibt ein
+Mensch auf der Arbeitsseite schneller, als ein lokales Modell einen Vorschlag
+liefert.
+
+### Textherstellung (`marketing/vorlagen.py`, `config/textvorlagen.yaml`)
+
+```
+Kampagne → Gruppen → je Gruppe und Einsatzzweck (POST | KOMMENTAR):
+Sprache → mit_stadt / ohne_stadt → deterministische Wahl → füllen → speichern
+   → Arbeit → [Kopieren] [Text bearbeiten → Speichern] → [Veröffentlicht]
 ```
 
-- **Ollama ist die Voreinstellung, Anthropic der Sonderfall.** Ollama läuft auf
-  dem eigenen Rechner: keine Kosten je Anfrage, und die Angaben über die
-  Gruppen verlassen den Rechner nicht. Beides sind Gründe für den Standard,
-  nicht für eine Ausweichlösung. `AI_PROVIDER` schlägt
-  `marketing.posting.ki.anbieter` — dieselbe Reihenfolge wie bei
-  `APP_BASE_URL`. Ein **unbekannter** Wert fällt auf Ollama zurück: Ein
-  Tippfehler soll niemanden unversehens bei einem kostenpflichtigen Dienst
-  abliefern, und die kostenlose Voreinstellung ist die harmlose Richtung.
-- **Es wird nie stillschweigend gewechselt.** Läuft Ollama gerade nicht, wird
-  *nicht* auf Anthropic ausgewichen — das verwandelte einen abgeschalteten
-  Rechner in eine Rechnung. Dieselbe Überlegung wie bei `fallback_chain` in der
-  Suchschicht, die aus genau diesem Grund leer ist.
-- **`marketing/ki/` trennt Fachlichkeit von Anbieter.** `basis.py` hält Prompt,
-  Prüfung und Entwürfe und kennt **keinen** Anbieter; `ollama.py` und
-  `anthropic.py` sind zwei Umsetzungen des Protokolls `Modell`; `factory.py`
-  entscheidet. Deshalb ändert ein dritter Anbieter nichts an der Prüfung des
-  Tracking-Links — und die Tests laufen ohne Netz, ohne Dienst, ohne Kosten.
-- **Ollama braucht keine neue Abhängigkeit.** Es spricht HTTP, und `httpx` ist
-  seit jeher Kernabhängigkeit. `[ki]` (das Extra mit `anthropic`) ist
-  ausschließlich für den optionalen Weg — ohne es laufen Suche, Zuordnung,
-  Warteschlange, Freigabe, Veröffentlichung **und** die Beitragsvorschläge.
-- **Eine Anfrage je Fassung, als reiner Text — nicht drei in einem JSON.** Der
-  Anthropic-Weg holt drei Fassungen in einem Aufruf mit Schema. Ein kleines
-  lokales Modell hält das Schema nicht ein; dann ist nicht eine Fassung
-  unbrauchbar, sondern alle drei. Lokal kostet eine dritte Anfrage nichts außer
-  Zeit. Die Verschiedenheit kommt aus `temperature` (Ollama nimmt den Parameter,
-  Claude Opus 5 lehnt ihn mit 400 ab) und daraus, dass jede Anfrage die bereits
-  geschriebenen Fassungen mitbekommt.
-- **Genau ein Reparaturversuch.** Ein kleines Modell verfehlt `{link}` deutlich
-  öfter als ein großes. Schlägt `pruefe_platzhalter` an, wird **einmal**
-  nachgefasst — mit der Regel, an der es lag — und das Ergebnis geht durch
-  **dieselbe** Prüfung. Ohne das wäre ein guter Teil der Fassungen unbrauchbar;
-  mit mehr als einem Versuch würde daraus eine Schleife, deren Dauer (lokal)
-  und Kosten (bei Anthropic) niemand mehr überblickt.
-- **Der Statusabruf erzeugt nie etwas** und wird 10 s zwischengespeichert. Die
-  Übersicht fragt ihn bei jedem Seitenaufbau; ohne Zwischenspeicher zahlte
-  jedes Neuladen die volle Zeitgrenze. `fbgroups ki status` umgeht ihn
-  (`frisch=True`) — wer nachsieht, hat womöglich gerade Ollama gestartet.
-- **„Verbunden" allein ist eine irreführende Auskunft.** Der häufigste Fehler
-  nach der Einrichtung ist ein laufender Dienst **ohne** das Modell. `Status.
-  modell_vorhanden` unterscheidet das, und die Meldung nennt `ollama pull`.
-  Ebenso getrennt: HTTP 404 bei `/api/generate` heißt „Modell fehlt", ein
-  Verbindungsfehler heißt „Dienst läuft nicht" — zwei Fehler, zwei Lösungen.
-- **Ohne KI funktioniert alles Übrige vollständig.** Sie ist ein Aufsatz, keine
-  Voraussetzung: `sammle_daten` fängt jeden Fehler des Statusabrufs,
-  `POST /ki/test` antwortet auch bei totem Ollama mit **200** und `ok: false`
-  (ein 500 sähe aus wie ein Fehler des Dienstes statt wie ein abgeschaltetes
-  Ollama), und die Übersicht baut sich unverändert.
-- **`POST /ki/test` steht hinter `_nur_lokal`** wie jeder schreibende Weg. Er
-  erzeugt wirklich etwas — lokal Rechenzeit, bei Anthropic Geld —, und ein Weg,
-  den jeder von außen auslösen könnte, wäre bei einem lokalen Modell eine
-  Einladung, den Rechner lahmzulegen.
+Beide Texte gehören zum **Paar aus Kampagne und Gruppe**, nicht zur Kampagne:
+`campaign_groups` hat je Zweck eigene Spalten (`post_text` / `kommentar_text`,
+dazu `*_generated`, `*_vorlage_key`, `*_quelle`, `*_generiert_am`).
 
-### Der Arbeiter (`worker.py`, `veroeffentlicher/`)
+- **Die Abwechslung kommt aus dem Vorrat, nicht aus dem Modell.** Vorher gab es
+  eine Vorlage je Kampagne, und `beitragstext` ersetzte nur `{link}`,
+  `{tracking_code}`, `{landing_page}` — der einzige Unterschied zwischen 310
+  Beiträgen war also der Link. Genau gleichlautende Beiträge in vielen Gruppen
+  sind das Muster, nach dem Facebooks Spam-Erkennung sucht. Deshalb fünf
+  Fassungen je Sprache und Topf in `config/textvorlagen.yaml`, und **kein**
+  Sprachmodell im Regelweg: Ein kleines Modell, das aus dem Nichts schreiben
+  soll, erfindet Produkt, Anlass und Zahlen.
+- **Der Text entsteht in zwei Stufen, und die Trennung ist der Kern.**
+  `vorlagen.fuelle` ersetzt `{zielgruppe}` und `{stadt}` — Angaben über *diese*
+  Gruppe, die sich nicht mehr ändern — und **speichert** das Ergebnis.
+  `beitrag.beitragstext` bleibt unverändert die einzige Stelle, an der
+  `{link}` aufgelöst wird, und tut das erst beim Lesen. Nur deshalb darf der
+  gespeicherte Text einem Sprachmodell vorgelegt werden: Was das Modell nie
+  bekommt, kann es nicht verfälschen. Test:
+  `test_das_modell_sieht_den_tracking_code_nie`.
+- **`generated_text` steht neben `post_text`, nicht darin.** Das erste ist, was
+  die Vorlage ergeben hat; das zweite, was wirklich hinausgeht („current_text"
+  im Aufbau). Mit einem Feld gäbe es nach einer KI-Überarbeitung keinen Weg
+  zurück, und niemand könnte mehr sagen, wie viel des Textes aus der Vorlage
+  stammt. „Zurueck zur Vorlage" auf der Arbeitsseite ist der Ausweg, der erst
+  dadurch möglich ist. Der erzeugte Text wird auch dann aufgefrischt, wenn der
+  laufende
+  stehenbleibt — eine veraltete Vergleichsgröße ist schlechter als keine.
+- **Die Wahl der Fassung folgt `blake2b(group_id)`, nicht `hash()`.** Der
+  eingebaute `hash` ist für Zeichenketten je Prozess gesalzen; dieselbe Gruppe
+  bekäme nach jedem Neustart des Dienstes eine andere Vorlage — und der Text
+  änderte sich unter demjenigen, der ihn gerade freigegeben hat. Derselbe
+  Gedanke wie bei der Codevergabe, die `first_seen_at` folgt und nicht dem
+  Score. Test: `test_die_wahl_ueberlebt_einen_neustart` (eigener Prozess mit
+  anderem `PYTHONHASHSEED`).
+- **`vorlage_key` wird gespeichert, nicht neu berechnet** (`"ar/mit_stadt/3"`).
+  Nur so bekommt dieselbe Gruppe beim nächsten Füllen wieder dieselbe Fassung —
+  etwa nachdem eine Stadt nachgetragen wurde. Die Nummer ist der **Index** in
+  der Liste: hinten anhängen ist gefahrlos, in der Mitte einfügen verschiebt
+  alle folgenden.
+- **Zwei Töpfe statt eines Platzhalters, der leer bleiben darf.** 152 von 313
+  Gruppen haben keine erkannte Stadt, 115 keine Zielgruppe. Eine Vorlage mit
+  „in {stadt}" zerbricht damit bei der Hälfte des Bestands, deshalb `mit_stadt`
+  und `ohne_stadt`. Eine Stadt, die in `cities.yaml` nicht vorkommt, gilt als
+  keine Stadt — lieber die allgemeine Vorlage als ein erfundener Ortsname.
+- **Drei Beschriftungen je Zielgruppe, und sie sind nicht austauschbar.**
+  `label_de` („Syrer in Deutschland") ist fürs Auswahlfeld; in einer
+  Stadtvorlage ergäbe es „Syrer in Deutschland in Bonn". Dafür gibt es
+  `label_kurz_de`, und für arabische Vorlagen `label_ar` — aus `terms.ar` nicht
+  ableitbar, das sind Suchbegriffe für den Abgleich und keine Anrede.
+- **Arabisch hat nur eine Form, also folgt daraus eine Regel für jede Vorlage.**
+  `label_ar` trägt den bestimmten Artikel und steht im Genitiv/Akkusativ
+  („السوريين"). Vor `{zielgruppe}` gehört deshalb ein eigenes Wort (مِن، إلى،
+  أهلنا، مجتمع) — nie ein angehängtes Präfix und nie „يا": „لـ" verschmilzt mit
+  dem Artikel („لـالسوريين" gibt es nicht), und „يا" verträgt keinen Artikel.
+  Beides stand im ersten Wurf drin und fiel erst in der Rauchprobe auf.
+- **Die eigene Vorlage einer Kampagne geht dem Vorrat vor, ist aber der
+  Sonderfall.** `campaign.message_template` gilt dann für **alle** Gruppen der
+  Kampagne — dann klingen wieder alle Beiträge gleich. Leer ist deshalb im
+  Formular der Normalfall und kein Mangel. Personalisiert wird sie trotzdem:
+  `{zielgruppe}` und `{stadt}` wirken darin genauso.
+- **Was die Vorlage nicht trifft, schreibt ein Mensch** — direkt auf der
+  Arbeitsseite, im Textfeld unter dem jeweiligen Text. Hier stand einmal die
+  KI-Überarbeitung; sie ist entfernt. Der Weg dorthin ist
+  `POST /arbeit/{k}/text` mit `texttyp`, und er geht durch **dieselbe**
+  `vorlagen.pruefe_platzhalter` wie jeder andere Text.
+- **Beitrag und Kommentar teilen sich keine Vorlage.** Ein Beitrag eröffnet: Er
+  darf begrüßen, erklären und mit einem Aufruf enden. Ein Kommentar steht unter
+  einem Beitrag, den jemand anderes geschrieben hat — er bringt seinen Anlass
+  nicht mit, sondern reagiert auf einen vorhandenen. Ein gekürzter Beitrag als
+  Kommentar liest sich wie eingeworfene Werbung, und genau danach sucht die
+  Spam-Erkennung. Deshalb `vorlagen: <sprache>: <post|kommentar>: <topf>` mit
+  je fünf Fassungen und ein eigenes Feld am Datensatz.
+- **Der Kommentar hängt am selben Paar — vier Spalten, keine zweite Tabelle.**
+  Er hat denselben Schlüssel, dieselbe Lebensdauer und verschwindet mit
+  derselben Zuordnung; eine Tabelle daneben wäre eine Kopie mit dem Risiko,
+  auseinanderzulaufen (dieselbe Überlegung wie bei den Job-Feldern).
+  Migrationsschritt 13 ist rein additiv und schreibt **keine** Abschrift des
+  Beitrags in `kommentar_text`: Einen Beitrag als Kommentar auszugeben wäre die
+  Behauptung, er tauge dafür.
+- **Der Beitrag trägt den Ablauf, der Kommentar wird kopiert.** `JobStatus`,
+  Freigabe, Warteschlange und `post_versuche` gehören dem Beitrag; der
+  Kommentar hat davon nichts. Eine zweite Warteschlange daneben wäre eine
+  zweite Zählweise für dieselben Beiträge.
+- **`campaigns.kommentare` ist die Frage „brauchen wir hier Kommentare?"** —
+  Vorgabe **aus**: Ein Text, den niemand braucht, ist ein Text, den jemand
+  durchlesen muss. Die Angabe steht an der Kampagne und nicht an der Gruppe
+  („wir kommentieren in dieser Kampagne" ist eine Entscheidung über die
+  Arbeitsweise) und ist in der Kampagnenzeile umschaltbar
+  (`POST /kampagnen/{id}/texte`) — sonst wäre sie nur beim Anlegen erreichbar,
+  und jede bestehende Kampagne bräuchte die Kommandozeile. **Ausschalten
+  löscht keinen geschriebenen Kommentar**: Er kann von Hand überarbeitet sein.
+- **Der Vorlagenschlüssel trägt eine Kennung, keine Nummer**
+  (`ar/post/mit_stadt/alltag`). Vorher stand dort die Position, und wer eine
+  Vorlage in der Mitte einfügte, verschob alle folgenden — eine Gruppe trug
+  dann einen Schlüssel, hinter dem ein anderer Text stand. Umsortieren ist
+  damit gefahrlos; eine Kennung zu **ändern** ist dasselbe wie die Vorlage zu
+  löschen, und das ist die ehrlichere Beschreibung. Ein Schlüssel aus drei
+  Teilen (`ar/mit_stadt/3`) stammt aus der Zeit davor, meint einen Beitrag und
+  wird weiterhin gelesen — sonst bekämen 310 Gruppen beim nächsten Füllen eine
+  andere Vorlage, ohne dass jemand etwas geändert hat.
+- **Die Wahl zieht den Zweck mit ein** (`blake2b("<group_id>|<zweck>")`). Sonst
+  fände dieselbe Gruppe in beiden Töpfen dieselbe Stelle — eine unnötige
+  Regelmäßigkeit in etwas, das gerade nicht regelmäßig aussehen soll. Stabil
+  bleibt es trotzdem: dieselbe Gruppe, derselbe Zweck, dieselbe Fassung.
+- **Ein Platzhalter, den niemand ersetzt, ist ein Fehler und keine Freiheit.**
+  Erlaubt sind `{zielgruppe}`, `{stadt}`, `{gruppe}` (dieses Modul) sowie
+  `{link}`, `{tracking_code}`, `{landing_page}` (`beitrag.beitragstext`). Alles
+  andere wirft `UnbekannterPlatzhalter` — eine Unterklasse von `VorlageFehlt`,
+  damit jeder Aufrufer, der eine lückenhafte Konfiguration schon behandelt,
+  auch diesen Fall behandelt: Für *diese* Gruppe entsteht kein Text, und der
+  Grund steht im Bericht. `config-check` meldet es vorher.
+- **Der Texttyp der Meldung entscheidet, welches Feld geschrieben wird.**
+  `POST /arbeit/{k}/text` und `/zuruecksetzen` tragen ihn mit (Vorgabe
+  `post`); ohne ihn landete ein Kommentar im Beitrag, und das fiele erst auf,
+  wenn er in der Gruppe steht.
+- **Das Kampagnenformular hat keine Vorlagenvorschau mehr** (entfernt am
+  27.08.2026 samt `GET /vorlagen/vorschau` und `vorlagen.vorschau`). Sie zeigte
+  eine Fassung mit den gewählten Beschriftungen, und „Andere Vorlage" lief im
+  Kreis durch den Topf — eine Antwort auf eine Frage, die sich beim Anlegen
+  nicht stellt: Welche Fassung eine **Gruppe** bekommt, entscheidet ihre
+  Kennung, und das steht erst beim Zuordnen fest. Wer die Texte sehen will,
+  sieht sie dort, wo mit ihnen gearbeitet wird — auf `/arbeit/{kampagne}`
+  stehen alle fünf Fassungen nebeneinander, mit dem Vorlagenschlüssel über
+  jeder. Der Hinweis am Feld „Eigene Textvorlage" bleibt: Er ist die
+  eigentliche Warnung vor dem häufigsten Griff daneben.
 
-```powershell
-& $py -m fbgroups.cli campaign enqueue batreeq-syrian-germany --top 20  # nach Score einreihen
-& $py -m fbgroups.cli campaign worker batreeq-syrian-germany --dry-run  # Plan, Grenzen, Zeitplan
-& $py -m fbgroups.cli campaign worker batreeq-syrian-germany            # abarbeiten
-& $py -m fbgroups.cli campaign tageslauf batreeq-syrian-germany   # retry + enqueue + worker
-& $py -m fbgroups.cli campaign zeitplan batreeq-syrian-germany    # taeglich einrichten
-& $py -m fbgroups.cli campaign pause batreeq-syrian-germany   # wirkt im laufenden Arbeiter
-& $py -m fbgroups.cli campaign retry batreeq-syrian-germany   # ohne die aufgegebenen
-```
+### Kein Arbeiter, keine Wartezeit, kein Tageslimit (entfernt)
 
-- **`worker.py` ist Ablaufsteuerung und sonst nichts.** Wie ein Beitrag in eine
-  Gruppe kommt, steht dort nirgends — das ist Sache eines `Veroeffentlicher`.
-  Dieselbe Trennung wie `providers/base.py` in der Suchschicht und aus
-  demselben Grund: Der Teil, der über Tageslimit, Reihenfolge und Abbruch
-  entscheidet, muss ohne Netz und ohne Browser prüfbar sein.
-- **`veroeffentlicher/basis.py` enthält nur den Vertrag.** Kein Modul außerhalb
-  von `veroeffentlicher/` darf eine konkrete Umsetzung importieren —
-  abgesichert durch `test_kein_modul_ausserhalb_des_pakets_kennt_einen_adapter`
-  und `test_der_arbeiter_kennt_keinen_adapter`. Neuer Adapter = Klasse +
-  `@register_veroeffentlicher(...)` + eine Zeile in `__init__.py`; weder
-  Arbeiter noch CLI noch Übersicht ändern sich dabei. Implementiert:
-  `assistiert` (Text bereit, Gruppe offen, Absenden von Hand).
-- **Ein Adapter bekommt nie eine Anmeldung.** Weder Passwort noch Cookie noch
-  Token wird durchgereicht; `PostVersuch.browser_session` ist ein *Name* wie
-  `standard`. Das Modell hat für eine Anmeldung schlicht kein Feld — geprüft
-  von `test_kein_feld_fuer_eine_anmeldung`.
-- **Streng nacheinander — kein Thread, kein `asyncio`.** Zwei gleichzeitig
-  laufende Beiträge wären nicht doppelt so schnell, sondern der Unterschied
-  zwischen einem Menschen, der arbeitet, und einem Programm, das sendet. Die
-  Wartezeit dazwischen ist deshalb kein Schönheitsfehler des Ablaufs, sondern
-  sein Kern.
-- **Der Zustand wird vor jedem Job neu gelesen — und nach jeder Wartezeit.**
-  Nur so wirken `pause`, `resume` und `stop` **während** ein Arbeiter läuft:
-  Sie werden von einem anderen Prozess geschrieben (CLI oder Übersicht), und
-  ein Arbeiter, der seinen Zustand im Speicher hielte, sähe sie nie. Ohne die
-  zweite Prüfung wirkte `pause` erst sieben Minuten später — und in der
-  Zwischenzeit stünde ein Beitrag in einer Gruppe, den niemand mehr wollte.
-- **Das Tageslimit zählt aus `post_versuche`, nicht aus einem Zähler im
-  Speicher** (`store.versuche_heute`). Wer um 08:00 zwanzig Beiträge setzt,
-  abstürzt und um 14:00 neu startet, sähe sonst einen leeren Zähler und setzte
-  zwanzig weitere. Gezählt wird ab **örtlicher** Mitternacht: „20 pro Tag"
-  meint den Tag des Menschen, der davorsitzt. Mitgezählt wird **jeder** Versuch,
-  auch der fehlgeschlagene — zehn Fehlschläge hintereinander sind ein Grund,
-  den Tag zu beenden, kein Grund, es zwanzig weitere Male zu versuchen.
-- **Die Reihenfolge entsteht beim `enqueue`, nicht beim Abarbeiten.** Dort
-  sortiert `nach_prioritaet` nach Score. Sortierte der Arbeiter selbst,
-  entschiede eine Neubewertung mitten im Lauf, welcher Beitrag als nächstes
-  hinausgeht — und die Reihenfolge wäre von Tag zu Tag eine andere.
-- **Der Versuch wird vor dem Absetzen protokolliert.** `beginne_versuch` läuft,
-  bevor der Adapter etwas tut. Bricht der Arbeiter mitten im Absetzen ab,
-  bleibt eine Zeile ohne `beendet_am` stehen — unangenehm, aber beantwortbar.
-  Ohne sie wüsste niemand, ob in der Gruppe nun ein Beitrag steht.
-- **Ein werfender Adapter reißt den Lauf nicht mit.** Der Job stünde sonst für
-  immer auf `processing`: weder offen noch fertig, in keiner Liste, nie wieder
-  angefasst. Der Grund wandert stattdessen ins Protokoll, und der nächste Job
-  kommt dran — eine zickige Gruppe darf nicht den Rest des Tages kosten.
-- **`abbrechen` ist ein eigenes Feld, nicht aus `erfolg` abgeleitet.** Ein
-  Adapter, der es nicht hätte, liefe nach einem Fehler weiter gegen die Wand;
-  einer, der bei jedem Fehler abbräche, verlöre den Tag wegen einer Gruppe. Wer
-  so abbricht, verwirft nichts: Der Job geht per `erzwingen` zurück auf
-  `queued` (`processing -> queued` fehlt in der Übergangstabelle bewusst, damit
-  ein Job nicht unbemerkt zwischen beiden kreist) und ist morgen der nächste.
-- **Der Arbeiter schläft nicht bis zur Startzeit.** Ein Prozess, der vierzehn
-  Stunden wartet, überlebt keinen Neustart, keine Abmeldung und keinen
-  zugeklappten Deckel. `startzeit` in `settings.yaml` ist der Wert für die
-  Aufgabenplanung des Systems; `campaign zeitplan` trägt ihn dort ein und
-  zeigt ohne `--einrichten` nur, was er täte — etwas, das sich täglich von
-  selbst startet, legt man nicht beiläufig an.
-- **`campaign tageslauf` ist die Reihenfolge der drei Schritte, nicht ihr
-  Ersatz.** Erst `retry`, dann `enqueue`, dann `worker`. Ein gestern
-  gescheiterter Beitrag hat Text und Freigabe schon und gehört vor die Gruppen,
-  die heute zum ersten Mal drankommen; umgekehrt füllte sich die Warteschlange
-  mit Neuem, und der Fehlschlag rutschte Tag um Tag nach hinten. Eingereiht
-  wird nur, was ins Tageslimit passt — was darüber hinaus in der Schlange
-  stünde, überlebte den Tag und bräche morgen die Score-Reihenfolge.
-- **`max_versuche` (Vorgabe 3) wird beim `retry` durchgesetzt.** Die Zahl stand
-  seit jeher in der Konfiguration und wirkte nirgends: Jeder Aufruf holte
-  dieselbe Gruppe zurück, die aus einem *dauerhaften* Grund scheitert.
-  „Erlaubt keine Links" geht beim vierten Mal nicht anders aus als beim ersten,
-  kostet aber jedes Mal einen Platz im Tageslimit, den eine erreichbare Gruppe
-  gebraucht hätte. Die Aufgegebenen verschwinden nicht — `store.aufgegeben`
-  listet sie, und `retry --alle` übergeht die Grenze. Sie warten auf eine
-  Entscheidung (anderer Text, Gruppe ausschließen), nicht auf einen vierten
-  gleichen Versuch.
-- **`POST /kampagnen/{id}/queue` steuert die Warteschlange aus der Übersicht.**
-  Hinter `_nur_lokal` wie jeder schreibende Weg. Wer einen Lauf anhalten will,
-  sitzt selten vor dem Fenster, in dem er gestartet wurde. Die Antwort nennt,
-  wie viele Jobs ein `gestoppt` zurückgestellt hat — „gestoppt" allein ließe
-  offen, ob das 3 oder 300 Beiträge waren.
+Ebenfalls entfernt: `worker.py` (die Schleife, die Beiträge nacheinander
+absetzte), das Paket `veroeffentlicher/` samt Adapter `assistiert`, die
+Befehle `campaign worker`, `campaign tageslauf` und `campaign zeitplan`, die
+Wartezeit zwischen zwei Beiträgen samt Countdown auf der Sperrseite
+(`pause_sekunden_min/max`, `startzeit`, `max_pro_lauf`) und
+`store.letzter_versuch`.
+
+- **Die Warteschlange bleibt, der Taktgeber geht.** Reihenfolge nach Score,
+  `JobStatus`, Freigabe, Einreihen, `pause`/`resume`/`stop`, `retry` — alles
+  unverändert. Was fehlt, ist die Uhr: Nach einem gemeldeten Ausgang kommt
+  **sofort** die nächste Gruppe (303 auf `/arbeit/{kampagne}`, und die holt
+  den nächsten Auftrag).
+- **Warum die Wartezeit weg ist.** Sie zog drei bis sieben Minuten zwischen
+  zwei Beiträge und sollte einen menschlichen Takt nachbilden. Sie hat den
+  Ablauf mehr aufgehalten als geschützt: Wer dreißig Gruppen abarbeitet, saß
+  damit drei Stunden vor einem Countdown — und der Takt entsteht ohnehin von
+  selbst, weil jeder Beitrag von Hand eingefügt und abgesendet wird.
+- **Auch das Tageslimit ist weg** (27.08.2026: `max_pro_tag`,
+  `arbeit.Grenzen`, `lade_grenzen`, `Grund.TAGESLIMIT`,
+  `store.versuche_heute`). Es war die letzte Bremse aus der Zeit des Arbeiters:
+  zwanzig Beiträge am Tag, ab örtlicher Mitternacht, über alle Kampagnen. Gegen
+  eine Schleife, die selbst abschickt, war das eine Bremse; gegen einen
+  Menschen, der jeden Beitrag von Hand einfügt, war es eine Sperre, die
+  ausgerechnet den traf, der gerade arbeitet — wer dreißig Gruppen vor sich
+  hatte, stand vor der einundzwanzigsten. **Damit gibt es keine gezählte Grenze
+  mehr**; was bleibt, ist `pause`/`stop` je Kampagne, also ein Entschluss statt
+  einer Zahl. Wer eine Obergrenze zurückholt, holt sie an genau dieser einen
+  Stelle zurück (`melde_vorschlag`); der Test
+  `test_es_gibt_keine_gezaehlte_tagesgrenze_mehr` hält den Zustand fest.
+- **`Ergebnis` steht jetzt in `arbeit.py`.** Es war der Rückgabewert eines
+  Adapters; die gibt es nicht mehr, gemeldet wird von Hand.
 
 ### Arbeiten auf dem Server (`arbeit.py`, `arbeitsseite.py`)
 
 ```
 https://go.b-tarikak.de → Übersicht → Kampagne → [Arbeiten]
-   → /arbeit/{kampagne}   ein Beitrag, ein Bildschirm, drei Knöpfe
+   → /arbeit/{kampagne}          bereitet selbst vor, dann der laufende Beitrag
+   → /arbeit/{kampagne}?nr=N     der N-te - nur ansehen, nichts wird begonnen
 ```
 
-- **Der Bestand lebt auf dem Server, `campaign worker` braucht einen
-  Arbeitsplatz.** Zwischenablage und Browser gibt es auf einem Debian-Server
-  nicht; den Worker auf den Arbeitsrechner zu holen hieße, in eine **zweite**
+- **Der Bestand lebt auf dem Server, Zwischenablage und Browser stehen auf
+  dem Arbeitsrechner.** Die Arbeit dorthin zu holen hieße, in eine **zweite**
   Datenbank zu schreiben — genau davor warnt `docs/plan-go-subdomain.md`.
   Aufgelöst wird das, indem die *Arbeit* dorthin kommt, wo der Bestand steht:
   Der Server bereitet vor und zählt, der Browser des Menschen kopiert und
@@ -639,38 +808,158 @@ https://go.b-tarikak.de → Übersicht → Kampagne → [Arbeiten]
 - **`arbeit.py` hält den Schritt, den beide Wege teilen.** Die Schleife des
   Arbeiters ist nur *eine* Art, `hole_auftrag`/`melde_ergebnis` aufzurufen; die
   Weboberfläche ist die andere. Eine zweite Fassung der Regeln für das Web wäre
-  ein zweites Tageslimit, das vom ersten abweicht — und niemand bemerkte es,
-  bis vierzig Beiträge an einem Tag hinausgegangen wären.
-- **Die Wartezeit kommt aus dem Bestand, nicht aus dem Ablauf.** Zwischen zwei
-  Beiträgen steht im Web keine Schleife, die schlafen könnte, sondern ein
-  Mensch, der eine Seite neu lädt — ein `sleep` wäre mit F5 umgangen.
-  `store.letzter_versuch` lässt sich nicht neu laden. Wie das Tageslimit gilt
-  sie über **alle** Kampagnen: Der Takt gehört zum Konto.
+  eine zweite Zählweise für dieselben Beiträge.
+- **Es wird nicht gewartet und nichts gezählt.** Nach einem gemeldeten Ausgang
+  kommt sofort die nächste Gruppe. Wartezeit *und* Tageslimit sind entfernt —
+  siehe „Kein Arbeiter, keine Wartezeit". Was den Ausgang noch anhalten kann,
+  ist allein `pause`/`stop` an der Kampagne.
 - **Der Auftrag ist begonnen, wenn er herausgeht.** `hole_auftrag` setzt
   `processing` und schreibt die Protokollzeile, *bevor* jemand den Text sieht.
   Wer den Reiter schließt, bekommt beim nächsten Aufruf **denselben** Auftrag
   zurück, statt dass ein zweiter angefangen wird — ohne das blutete die
   Warteschlange bei jedem geschlossenen Fenster einen Beitrag aus. Ein
-  zurückgegebener Auftrag löst deshalb auch keine Wartezeit aus: Er ist kein
-  neuer Beitrag.
-- **Eine Sperre fasst nichts an.** Pausiert, Tageslimit, Wartezeit, leer — in
-  keinem dieser Fälle entsteht ein Versuch. Sonst zählte Nachsehen als Arbeit.
+  zurückgegebener Auftrag ist derselbe Auftrag - kein zweiter Versuch.
+- **Eine Sperre fasst nichts an.** Pausiert, gestoppt, leer — in keinem dieser
+  Fälle entsteht ein Versuch. Sonst zählte Nachsehen als Arbeit.
   Die Reihenfolge der Prüfungen ist dabei nicht beliebig: Wer pausiert hat,
-  will lesen, dass er pausiert hat, und nicht, dass die Wartezeit noch läuft.
+  will lesen, dass er pausiert hat, und nicht, dass die Schlange leer ist.
 - **Der Text geht nur hinaus, nie zurück.** Das Formular meldet den Ausgang und
   die `versuch_id`; der Beitragstext ist kein Feld darin. Ein manipuliertes
   Formular kann damit keinen anderen Text in einen Beitrag bringen als den, den
   der Server vorbereitet hat. Die Antwort ist **303** — ein Neuladen soll den
   Ausgang nicht ein zweites Mal melden.
+- **Vier Knöpfe, eine Reihe, zwei Ausgänge.** Kopieren, Gruppe öffnen,
+  „Veröffentlicht", „Fehlgeschlagen" stehen zusammen unter dem Beitrag — es ist
+  **ein** Handgriff, und getrennt lagen seine beiden Hälften eine halbe Seite
+  auseinander: Wer den Beitrag abgesetzt hatte, scrollte an „Text anpassen"
+  vorbei, um den Ausgang zu melden. „Passt nicht" und „Schluss für heute"
+  haben deshalb keinen Knopf mehr — für das Urteil über eine Gruppe ist die
+  Übersicht der Ort, und wer aufhört, schließt die Seite. `POST
+  /arbeit/{k}/ergebnis` nimmt beide Ausgänge **weiterhin** an: Ein Job, den ein
+  Skript zurückgelegt hat, wäre sonst nicht mehr zu melden. Damit steht das
+  Textfeld für den Fehlergrund jetzt vor den Absendeknöpfen, und Enter darin
+  sendete mit dem **ersten** ab — „Veröffentlicht". Wer gerade den Fehlergrund
+  tippt, meldete so das Gegenteil dessen, was er meint; ein `keydown`-Handler
+  leitet Enter auf „Fehlgeschlagen".
 - **Kein `python-multipart`.** Das Formular trägt vier kurze Textfelder und
   keine Datei; `parse_qsl` aus der Standardbibliothek genügt. `request.form()`
   verlangte ein Paket mehr, und das `[web]`-Extra soll klein bleiben — dieselbe
   Überlegung wie bei `webbrowser` und der Zwischenablage in `beitrag.py`.
+- **„Zurueckholen" ist der Ausgang aus „Passt nicht".** Ohne ihn war der Knopf
+  eine Sackgasse mit Ansage: `uebersprungen` setzt `job_status` auf
+  `cancelled`, und ein `cancelled` **mit Text** fällt durch jeden Schritt der
+  Werkbank — die Textschritte nehmen nur Textlose, `approve` nur
+  draft/ai_generated/pending_review, `enqueue` nur approved. Wer sich
+  verklickte, sah vier Knöpfe, von denen keiner etwas tat, und nichts sagte
+  ihm warum; der einzige Weg zurück war `campaign reset` auf der
+  Kommandozeile — ausgerechnet ein Befehl, um eine Fehlbedienung der
+  Oberfläche zu heilen. Ziel ist `draft`, und nicht aus Bequemlichkeit: Es ist
+  laut `UEBERGAENGE` der einzige erlaubte Ausgang aus `cancelled`. **Der Text
+  bleibt stehen** — „Passt nicht" ist ein Urteil über die Gruppe, nicht über
+  den Text, und ihn beiläufig zu löschen nähme ein zweites Urteil vorweg, das
+  niemand gefällt hat. Wer doch den Text meinte, überschreibt ihn im
+  Textfeld darunter. Der Knopf trägt bewusst **keine
+  Nummer**: Er gehört nicht in die Kette, er nimmt eine Fehlbedienung zurück.
+  Seit „Passt nicht" keinen Knopf mehr hat, kommt ein `cancelled` nur noch von
+  der Kommandozeile — der Weg zurück bleibt trotzdem, denn die Bestandsdaten
+  bleiben.
 - **`/arbeit/…` steht hinter `_nur_lokal`** wie jeder schreibende Weg, und der
   Knopf „Arbeiten" erscheint nur im bedienbaren Zugang. Anders als die übrigen
   Knöpfe wird er **entfernt** statt per CSS versteckt: Er ist ein einfacher
   Link, den das Skript nicht sucht — die Begründung fürs Verstecken
   (mehrere Knöpfe werden beim Start gesucht) trifft auf ihn nicht zu.
+- **`?nr=N` blättert, ohne etwas anzufangen.** `hole_vorschau` liest nur; kein
+  `processing` und keine Protokollzeile. Vorher war der
+  einzige Weg zum übernächsten Beitrag, den nächsten zu **melden** — und
+  „veröffentlicht" oder „passt nicht" sind Aussagen über einen Beitrag, den es
+  in dem Moment noch gar nicht gibt. `Vorschau` ist deshalb ein eigener Typ
+  neben `Auftrag` und hat **keine `versuch_id`**: Ohne sie lässt sich kein
+  Ausgang melden, und die Seite kann die Knöpfe gar nicht erst zeigen.
+  Gezählt wird ab 1, und 1 ist der laufende Beitrag — eine Zählweise, nicht
+  zwei. Test: `test_blaettern_faengt_keinen_versuch_an`.
+- **Ein Schieber, keine 300 Nummern.** Er springt bei `change`, nicht bei
+  `input`: Sonst lädt die Seite auf dem Weg von 1 nach 40 neununddreißig Mal.
+  Hinter das Ende geblättert führt auf den laufenden Beitrag (303) statt auf
+  eine Fehlerseite — die Schlange wird kürzer, während man darin liest.
+- **Die Merkmale stehen über dem Beitrag.** Stadt, Zielgruppe, Kategorie,
+  Score, Vorlage, Textquelle. Wer 300 Beiträge hintereinander schreibt, sieht
+  sonst immer denselben Bildschirm und muss in einem anderen Fenster
+  nachsehen, um wen es diesmal geht — dabei steht alles davon im Bestand.
+  `config` geht nur für die Beschriftungen hinein: `audience_tags` hält
+  Kennungen, und „syrians" ist keine Auskunft.
+- **Der Editor ist die eine Ausnahme von „der Text geht nur hinaus".** Und er
+  ist ein **eigener Weg** (`POST /arbeit/{k}/text`), kein Feld im
+  Ergebnisformular — genau darin liegt die Begründung: Das Formular, das einen
+  Beitrag abschließt, trägt weiterhin nur Ausgang und `versuch_id`; ein
+  Textfeld darin wäre ein Kanal, den niemand geöffnet haben wollte. Hier ist
+  das Ändern die Handlung selbst, ausdrücklich und hinter `_nur_lokal`. Test:
+  `test_das_ergebnisformular_traegt_weiterhin_keinen_text`.
+- **Das Textfeld steht offen, nicht zugeklappt.** Solange der Regelfall aus
+  der Vorlage kam und ein Modell den Rest machte, war „Text von Hand
+  bearbeiten" hinter einem `<details>` richtig. Seit der Mensch den Text hier
+  **schreibt**, ist Zuklappen ein Weg mehr zu dem, was ohnehin die Hauptsache
+  ist. Es liegt **außerhalb** des Ergebnisformulars, in derselben Karte wie
+  der Text, den es ändert.
+- **Der Editor zeigt den gespeicherten Text mit `{link}`,** nicht den
+  angezeigten mit eingesetztem Link, und geht durch **dieselbe**
+  `vorlagen.pruefe_platzhalter` wie jeder andere Text: genau ein `{link}`,
+  keine ausgeschriebene Adresse, kein codeähnliches Muster. Ein von Hand
+  hineingeschriebener Link ergäbe einen Beitrag, der richtig aussieht und
+  dessen Gruppe nie einen Klick gutgeschrieben bekommt.
+- **„Arbeiten" bereitet selbst vor.** Ist die Warteschlange leer, laufen
+  `text`, `approve` und `enqueue` beim Aufruf von `/arbeit/{k}` **ohne
+  Rückfrage** — vorher stand dort eine Knopfreihe, die nacheinander zu drücken
+  kein Entschluss war, sondern eine Wegstrecke. Zulässig ist das, weil keiner
+  der drei etwas veröffentlicht und keiner einen vorhandenen Text
+  überschreibt; das Schlimmste, was ein überflüssiger Lauf anrichtet, ist ein
+  Eintrag im Protokoll. Bleibt die Schlange danach leer, steht der **Bericht**
+  auf der Seite (`0 Texte · 3 freigegeben · 0 eingereiht`) — die Zahl vorn,
+  nicht der Satz: „Freigegeben." lässt offen, ob es zwölf waren oder keine,
+  und genau das ist dann die Frage. Der häufigste Fall bekommt Klartext:
+  *„Diese Kampagne hat keine Gruppen zugeordnet."*
+- **Nach dem automatischen Lauf fehlen die drei nummerierten Knöpfe.** Übrig
+  bleiben die Schritte, die die Kette *nicht* enthält: ein „Passt nicht"
+  zurücknehmen, vorhandene Texte neu erzeugen. Die drei noch
+  einmal anzubieten wäre eine Einladung, etwas zu wiederholen, das gerade
+  nachweislich nichts bewirkt hat.
+- **Zwei Texte, eine Seite.** Unter dem Beitrag steht der Kommentar derselben
+  Gruppe — eigene Vorlagenzeile, eigener Kopierknopf (`data-kopieren`) und
+  ein **offenes Textfeld**. Es ist dieselbe Gruppe und derselbe Handgriff; sie
+  auf zwei Seiten zu verteilen hieße, zweimal durch die Warteschlange zu
+  blättern. Die Kommentarkarte steht **auch ohne Text**: Sie ist die Stelle,
+  an der ein Kommentar entsteht, und eine Stelle, die es nur gibt, wenn schon
+  etwas dasteht, ist keine. Das **Ergebnisformular bleibt beim Beitrag**: Der
+  Kommentar hat keinen Ausgang zu melden. Woher ein Text stammt, steht seit dieser Trennung über dem jeweiligen
+  Text und nicht mehr in der Merkmalszeile — eine gemeinsame Zeile ließe offen,
+  welcher von beiden gemeint ist.
+- **Kopiert wird der angezeigte Text.** Er trägt den eingesetzten
+  Tracking-Link; `{link}` bekommt der Mensch nie zu sehen und damit auch nie in
+  die Zwischenablage.
+- **Die Beitragsspalte der Übersicht zeigt den Stand, sonst nichts.** Zuerst
+  fielen „Gruppe", „steht" und „ging nicht", am 27.08.2026 auch „Text": Alle
+  vier stammen aus der Zeit vor der Arbeitsseite und boten denselben Ablauf ein
+  zweites Mal an — nur schmaler und ohne die Merkmale der Gruppe. Zwei Wege zum
+  selben Beitrag heißen zwei Zählweisen. Gearbeitet wird unter
+  `/arbeit/{kampagne}`; `POST /beitrag` bleibt als programmatischer Weg
+  bestehen, hat aber keinen Knopf mehr. **Der fertige Beitragstext steht damit
+  nicht mehr in der Nutzlast** der Übersicht: Er lag dort nur, damit der
+  Kopierknopf ohne zweiten Aufruf auskam — bei 310 Gruppen sind das 310 Texte
+  im Dokument für einen Knopf, den es nicht mehr gibt.
+- **Die Tabelle blättert ab 25 Zeilen** (10/25/50/100/alle wählbar). Bei 314
+  Zeilen lag die Kampagnenliste hinter dreihundert Zeilen. Gefiltert und
+  sortiert wird über den **ganzen** Bestand, geschnitten erst danach —
+  andersherum zeigte Seite 1 die ersten fünfundzwanzig Zeilen der Datei statt
+  die fünfundzwanzig besten. Ein Filterwechsel springt auf Seite 1: Seite 7
+  eines anderen Ergebnisses ist keine sinnvolle Fortsetzung.
+- **Die Übersicht merkt sich, wo man war** (`sessionStorage`, Filter + Sortierung
+  + Seite + Seitengröße + Scrollposition). Jede Änderung an einer Gruppe lädt die Seite neu; bei 314
+  Zeilen hieß das vorher: Stadt neu wählen, Haken neu setzen, die Zeile
+  wiederfinden — nach jedem einzelnen Klick. Gefiltert wird im Browser, also
+  weiß nur der Browser, wo man war. `sessionStorage` und nicht `localStorage`:
+  Der Stand gehört zu dieser Sitzung; wer morgen neu öffnet, will die
+  Übersicht sehen und nicht den Filter von gestern. Jeder Zugriff ist in
+  `try`/`catch` — in einem privaten Fenster wirft schon das Lesen, und eine
+  Bequemlichkeit darf die Seite nicht mitreißen.
 
 ### Der Trichter und seine Zuordnung
 

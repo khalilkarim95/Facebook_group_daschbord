@@ -1,0 +1,408 @@
+# Textvorlagen je Sprache und Einsatzzweck. Die fachliche Wahrheit steht in der
+# Konfiguration, nicht im Programm - wie Zielgruppen, Staedte und Gewichte.
+#
+# WOFUER DAS DA IST
+#
+# Ohne diese Datei bekamen alle Gruppen einer Kampagne denselben Text, und der
+# einzige Unterschied zwischen 310 Beitraegen war der Tracking-Link. Genau
+# gleichlautende Beitraege in vielen Gruppen sind das Muster, nach dem
+# Facebooks Spam-Erkennung sucht. Der Tonfall soll deshalb aus der Vorlage
+# kommen und die Abwechslung aus der Zahl der Vorlagen - nicht aus einem
+# Sprachmodell, das bei jedem Aufruf etwas anderes erfindet. Die KI ist ein
+# Editor fuer einen fertigen Text, keine Quelle fuer Vielfalt.
+#
+# ZWEI EINSATZZWECKE - UND SIE TEILEN SICH KEINE VORLAGE
+#
+#   post        Ein eigenstaendiger Beitrag. Darf Aufmerksamkeit erzeugen, die
+#               Zielgruppe ansprechen, kurz erklaeren und mit einem Aufruf
+#               enden.
+#   kommentar   Eine Antwort unter einem Beitrag, den jemand anderes
+#               geschrieben hat. Er reagiert, er eroeffnet nicht: kurz,
+#               hilfreich, ohne Begruessung an "alle", ohne Werbeeinstieg.
+#
+# Ein Post als Kommentar gelesen wirkt wie Spam unter einem fremden Beitrag -
+# und ein Kommentar als Post gelesen wie ein Satz ohne Anlass. Deshalb zwei
+# getrennte Toepfe und nicht ein gekuerzter Post.
+#
+# ZWEI TOEPFE JE ZWECK
+#
+# 152 von 313 Gruppen im Bestand haben keine erkannte Stadt und 115 keine
+# Zielgruppe. Eine Vorlage mit "in {stadt}" zerbricht bei der Haelfte des
+# Bestands. Deshalb "mit_stadt" und "ohne_stadt" als getrennte Toepfe statt
+# eines Platzhalters, der manchmal leer bleibt.
+#
+# PLATZHALTER
+#
+#   {zielgruppe}  Anrede aus audiences.yaml - label_ar bzw. label_kurz_de
+#   {stadt}       Stadtname aus cities.yaml - name_ar bzw. name_de
+#   {gruppe}      Der Name der Facebook-Gruppe. Sparsam verwenden: Er steht
+#                 ohnehin ueber dem Beitrag, und wer ihn nennt, klingt schnell
+#                 wie ein Serienbrief.
+#
+#                 ARABISCH: label_ar traegt den bestimmten Artikel und steht
+#                 im Genitiv/Akkusativ ("السوريين"). Es gibt nur EINE Form, und
+#                 daraus folgt eine Regel fuer jede Vorlage: Vor {zielgruppe}
+#                 gehoert ein eigenes Wort (مِن، إلى، أهلنا، مجتمع) - nie ein
+#                 angehaengtes Praefix und nie "يا". "لـ" verschmilzt mit dem
+#                 Artikel ("لـالسوريين" gibt es nicht), und "يا" vertraegt
+#                 keinen Artikel. Wer eine sechste Fassung schreibt, prueft
+#                 das zuerst.
+#                 DEUTSCH: label_kurz_de steht im Nominativ Plural ("Syrer").
+#                 "Wer von euch {zielgruppe}" waere Dativ und damit falsch.
+#   {link}        Der Tracking-Link. WIRD HIER NICHT ERSETZT: Er kommt erst
+#                 beim Lesen in "beitrag.beitragstext" hinein, damit kein
+#                 Sprachmodell je einen Tracking-Code zu sehen bekommt.
+#                 Jede Vorlage MUSS ihn enthalten - eine Vorlage ohne {link}
+#                 ergaebe einen Beitrag, dessen Gruppe nie einen Klick
+#                 gutgeschrieben bekommt. "vorlagen.pruefe" weist das ab,
+#                 statt es durchgehen zu lassen.
+#
+# Ein anderer Platzhalter als diese sechs ist ein Fehler und keine Freiheit:
+# Er bliebe in geschweiften Klammern im Beitrag stehen. "vorlagen.pruefe"
+# meldet ihn, und das Fuellen bricht fuer diese eine Gruppe ab.
+#
+# DIE KENNUNG IST BEDEUTUNGSTRAGEND, DIE REIHENFOLGE NICHT MEHR
+#
+# Der Schluessel einer Fassung ist "sprache/zweck/topf/kennung"
+# (z. B. "ar/post/mit_stadt/alltag") und wird je Gruppe gespeichert. Damit ist
+# Umsortieren gefahrlos geworden - frueher stand dort eine laufende Nummer,
+# und wer eine Vorlage in der Mitte einfuegte, verschob alle folgenden.
+# Eine KENNUNG zu aendern ist dagegen dasselbe wie die Vorlage zu loeschen:
+# Die Gruppen, die sie tragen, waehlen beim naechsten Fuellen neu.
+#
+# Wer den Bestand nach einer Aenderung neu fuellen will:
+#   fbgroups campaign text <kampagne> --aus-vorlage --ueberschreiben --ja
+# oder in der Uebersicht "Texte neu erzeugen". Bereits veroeffentlichte
+# Beitraege beruehrt das nicht mehr.
+#
+# DER TEXT SELBST IST VORLAEUFIG.
+# Die Mechanik steht; die Formulierungen gehoeren durchgesehen, bevor damit
+# 300 Beitraege hinausgehen.
+
+# Die Anrede, wenn weder die Gruppe noch die Kampagne eine Zielgruppe nennt.
+# 115 von 313 Gruppen tragen keinen Zielgruppen-Tag. Ohne diesen Rueckfall
+# stuende mitten im Satz ein Loch.
+anrede_allgemein:
+  ar: الأصدقاء
+  de: Freunde
+
+vorlagen:
+
+  ar:
+
+    # ----------------------------------------------------------------- POST
+    post:
+      mit_stadt:
+        - id: frage
+          text: |
+            مَن مِن {zielgruppe} في {stadt} مسافر إلى بلده قريبًا؟
+
+            كثيرون هنا يريدون إرسال أمانة صغيرة إلى أهلهم، وكثير من المسافرين
+            عندهم متّسع في الحقيبة. تطبيق «بطريقك» (B-Tarikak) يجمع الطرفين.
+
+            {link}
+
+        - id: einladung
+          text: |
+            أهلًا بأهلنا {zielgruppe} في {stadt} 👋
+
+            أنشأنا «بطريقك» (B-Tarikak) لسبب بسيط: أن يجد المسافرُ مَن يوصّل له
+            أمانته، وأن يجد صاحبُ الأمانة مسافرًا يثق به.
+
+            انضمّوا إلينا من هنا:
+            {link}
+
+        - id: alltag
+          text: |
+            أمانة صغيرة بقيت في الدرج شهورًا، وأنت تنتظر مسافرًا إلى هناك.
+
+            هذا بالضبط ما يحلّه «بطريقك» (B-Tarikak): مسافرون من {stadt} وإليها،
+            وأمانات تنتظر مَن يحملها. ومجتمع {zielgruppe} أولى الناس بها.
+
+            {link}
+
+        - id: kurz
+          text: |
+            إلى {zielgruppe} في {stadt}: مسافر، أو تريد إرسال أمانة؟
+            «بطريقك» (B-Tarikak) يجمع بينكما.
+
+            {link}
+
+        - id: ablauf
+          text: |
+            إلى {zielgruppe} في {stadt} — كيف يعمل «بطريقك» (B-Tarikak)؟
+
+            • المسافر يسجّل رحلته والمساحة المتاحة عنده
+            • صاحب الأمانة يبحث عن رحلة تناسبه
+            • تتّفقون على التفاصيل بينكم مباشرة
+
+            {link}
+
+      ohne_stadt:
+        - id: frage
+          text: |
+            مَن مِن {zielgruppe} في ألمانيا مسافر إلى بلده قريبًا؟
+
+            كثيرون هنا يريدون إرسال أمانة صغيرة إلى أهلهم، وكثير من المسافرين
+            عندهم متّسع في الحقيبة. تطبيق «بطريقك» (B-Tarikak) يجمع الطرفين.
+
+            {link}
+
+        - id: einladung
+          text: |
+            أهلًا بأهلنا {zielgruppe} في ألمانيا 👋
+
+            أنشأنا «بطريقك» (B-Tarikak) لسبب بسيط: أن يجد المسافرُ مَن يوصّل له
+            أمانته، وأن يجد صاحبُ الأمانة مسافرًا يثق به.
+
+            انضمّوا إلينا من هنا:
+            {link}
+
+        - id: alltag
+          text: |
+            أمانة صغيرة بقيت في الدرج شهورًا، وأنت تنتظر مسافرًا إلى هناك.
+
+            هذا بالضبط ما يحلّه «بطريقك» (B-Tarikak): رحلات تنطلق كلّ أسبوع،
+            وأمانات تنتظر مَن يحملها.
+
+            {link}
+
+        - id: kurz
+          text: |
+            إلى {zielgruppe}: مسافر، أو تريد إرسال أمانة؟
+            «بطريقك» (B-Tarikak) يجمع بينكما.
+
+            {link}
+
+        - id: ablauf
+          text: |
+            كيف يعمل «بطريقك» (B-Tarikak)؟
+
+            • المسافر يسجّل رحلته والمساحة المتاحة عنده
+            • صاحب الأمانة يبحث عن رحلة تناسبه
+            • تتّفقون على التفاصيل بينكم مباشرة
+
+            {link}
+
+    # ------------------------------------------------------------ KOMMENTAR
+    # Kurz, reagierend, ohne Begruessung: Der Beitrag darueber hat schon einen
+    # Anlass; ein zweiter Anlass daneben liest sich wie eingeworfene Werbung.
+    kommentar:
+      mit_stadt:
+        - id: hilfreich
+          text: |
+            إن كان أحد هنا في {stadt} يريد إرسال أمانة إلى أهله، فهناك تطبيق
+            يجمع المسافرين بأصحاب الأمانات:
+            {link}
+
+        - id: direkt
+          text: |
+            لمن يبحث عن مسافر من {stadt} إلى بلده: «بطريقك» (B-Tarikak).
+            {link}
+
+        - id: empfehlung
+          text: |
+            فكرة «بطريقك» (B-Tarikak) بسيطة: مسافر من {stadt} عنده متّسع في
+            الحقيبة، وأمانة تنتظر مَن يحملها. ربما تنفعكم:
+            {link}
+
+        - id: frage
+          text: |
+            هل تبحث عن مسافر من {stadt} إلى بلدك هذا الشهر؟ هنا تجد مَن سجّل
+            رحلته:
+            {link}
+
+        - id: kurz
+          text: |
+            ربما يفيد أهلنا {zielgruppe} في {stadt}:
+            {link}
+
+      ohne_stadt:
+        - id: hilfreich
+          text: |
+            إن كان أحدكم يريد إرسال أمانة إلى أهله، فهناك تطبيق يجمع المسافرين
+            بأصحاب الأمانات:
+            {link}
+
+        - id: direkt
+          text: |
+            لمن يبحث عن مسافر إلى بلده: «بطريقك» (B-Tarikak).
+            {link}
+
+        - id: empfehlung
+          text: |
+            فكرة «بطريقك» (B-Tarikak) بسيطة: مسافر عنده متّسع في الحقيبة،
+            وأمانة تنتظر مَن يحملها. ربما تنفعكم:
+            {link}
+
+        - id: frage
+          text: |
+            هل تبحث عن مسافر إلى بلدك هذا الشهر؟ هنا تجد مَن سجّل رحلته:
+            {link}
+
+        - id: kurz
+          text: |
+            ربما يفيد أهلنا {zielgruppe}:
+            {link}
+
+  de:
+
+    # ----------------------------------------------------------------- POST
+    post:
+      mit_stadt:
+        - id: frage
+          text: |
+            {zielgruppe} in {stadt}: Wer von euch fliegt demnaechst in die Heimat?
+
+            Viele hier moechten eine Kleinigkeit mitschicken, und viele Reisende
+            haben noch Platz im Koffer. Genau dafuer gibt es B-Tarikak (بطريقك).
+
+            {link}
+
+        - id: einladung
+          text: |
+            Hallo liebe {zielgruppe} in {stadt} 👋
+
+            B-Tarikak (بطريقك) ist aus einem einfachen Gedanken entstanden: Wer
+            reist, findet jemanden, dem er etwas mitnehmen kann - und wer etwas
+            schicken moechte, findet jemanden, dem er vertraut.
+
+            Hier entlang:
+            {link}
+
+        - id: alltag
+          text: |
+            Das kleine Paket liegt seit Monaten in der Schublade, und du wartest
+            auf jemanden, der ohnehin hinfliegt.
+
+            Genau das loest B-Tarikak (بطريقك): Reisende von und nach {stadt} -
+            und Sendungen, die auf jemanden warten. Fuer {zielgruppe} gemacht.
+
+            {link}
+
+        - id: kurz
+          text: |
+            {zielgruppe} in {stadt}: Du reist - oder du moechtest etwas mitgeben?
+            B-Tarikak (بطريقك) bringt euch zusammen.
+
+            {link}
+
+        - id: ablauf
+          text: |
+            Fuer {zielgruppe} in {stadt} - so funktioniert B-Tarikak (بطريقك):
+
+            • Reisende tragen ihre Reise und den freien Platz ein
+            • Wer etwas schicken moechte, sucht eine passende Reise
+            • Die Details klaert ihr direkt miteinander
+
+            {link}
+
+      ohne_stadt:
+        - id: frage
+          text: |
+            {zielgruppe}: Wer von euch fliegt demnaechst in die Heimat?
+
+            Viele hier moechten eine Kleinigkeit mitschicken, und viele Reisende
+            haben noch Platz im Koffer. Genau dafuer gibt es B-Tarikak (بطريقك).
+
+            {link}
+
+        - id: einladung
+          text: |
+            Hallo liebe {zielgruppe} 👋
+
+            B-Tarikak (بطريقك) ist aus einem einfachen Gedanken entstanden: Wer
+            reist, findet jemanden, dem er etwas mitnehmen kann - und wer etwas
+            schicken moechte, findet jemanden, dem er vertraut.
+
+            Hier entlang:
+            {link}
+
+        - id: alltag
+          text: |
+            Das kleine Paket liegt seit Monaten in der Schublade, und du wartest
+            auf jemanden, der ohnehin hinfliegt.
+
+            Genau das loest B-Tarikak (بطريقك): jede Woche neue Reisen - und
+            Sendungen, die auf jemanden warten.
+
+            {link}
+
+        - id: kurz
+          text: |
+            {zielgruppe}: Du reist - oder du moechtest etwas mitgeben?
+            B-Tarikak (بطريقك) bringt euch zusammen.
+
+            {link}
+
+        - id: ablauf
+          text: |
+            So funktioniert B-Tarikak (بطريقك):
+
+            • Reisende tragen ihre Reise und den freien Platz ein
+            • Wer etwas schicken moechte, sucht eine passende Reise
+            • Die Details klaert ihr direkt miteinander
+
+            {link}
+
+    # ------------------------------------------------------------ KOMMENTAR
+    kommentar:
+      mit_stadt:
+        - id: hilfreich
+          text: |
+            Falls hier jemand aus {stadt} etwas in die Heimat schicken moechte:
+            Bei B-Tarikak (بطريقك) findet man Reisende, die noch Platz im Koffer
+            haben.
+            {link}
+
+        - id: direkt
+          text: |
+            Fuer {zielgruppe} in {stadt} vielleicht interessant:
+            {link}
+
+        - id: empfehlung
+          text: |
+            Wer aus {stadt} fliegt, hat oft Platz - und wer etwas schicken
+            moechte, findet niemanden. Genau dafuer gibt es B-Tarikak (بطريقك):
+            {link}
+
+        - id: frage
+          text: |
+            Suchst du gerade jemanden, der von {stadt} aus fliegt? Hier tragen
+            Reisende ihre Reise ein:
+            {link}
+
+        - id: kurz
+          text: |
+            Falls du in {stadt} etwas mitgeben moechtest, koennte das passen:
+            {link}
+
+      ohne_stadt:
+        - id: hilfreich
+          text: |
+            Falls hier jemand etwas in die Heimat schicken moechte: Bei
+            B-Tarikak (بطريقك) findet man Reisende, die noch Platz im Koffer
+            haben.
+            {link}
+
+        - id: direkt
+          text: |
+            Fuer {zielgruppe} vielleicht interessant:
+            {link}
+
+        - id: empfehlung
+          text: |
+            Wer fliegt, hat oft Platz - und wer etwas schicken moechte, findet
+            niemanden. Genau dafuer gibt es B-Tarikak (بطريقك):
+            {link}
+
+        - id: frage
+          text: |
+            Suchst du gerade jemanden, der demnaechst fliegt? Hier tragen
+            Reisende ihre Reise ein:
+            {link}
+
+        - id: kurz
+          text: |
+            Falls du etwas mitgeben moechtest, koennte das passen:
+            {link}

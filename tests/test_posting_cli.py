@@ -1,9 +1,8 @@
 """Tests fuer die Befehle der Beitrags-Warteschlange.
 
 Gegen die echte Kommandozeile, gegen eine eigene Datenbank im tmp-Verzeichnis.
-Kein Aufruf an Claude: ``campaign draft`` wird nur mit ``--dry-run`` geprueft
-oder mit einem eingesetzten Modell - ein Test, der Geld kostet, wird nicht
-ausgefuehrt, und ein Test, der ohne Netz scheitert, sagt nichts ueber den Code.
+Kein Netz und kein Modell: Texte kommen aus den Vorlagen oder aus der Hand des
+Menschen, und beides laeuft hier ohne jede Verbindung nach draussen.
 
 Die Frage, um die es geht: Kommt ein Beitrag ohne Freigabe eines Menschen bis
 in die Warteschlange? Die Antwort muss in jedem einzelnen Fall nein sein.
@@ -20,7 +19,6 @@ from typer.testing import CliRunner
 from fbgroups import cli
 from fbgroups.config import load_config
 from fbgroups.marketing import cli as marketing_cli
-from fbgroups.marketing.ki import PLATZHALTER
 from fbgroups.marketing.models import (
     Campaign,
     CampaignGroup,
@@ -30,6 +28,7 @@ from fbgroups.marketing.models import (
     TextQuelle,
 )
 from fbgroups.marketing.store import MarketingStore
+from fbgroups.marketing.vorlagen import PLATZHALTER_LINK as PLATZHALTER
 from fbgroups.models import Group
 from fbgroups.storage import SqliteStore
 
@@ -97,13 +96,13 @@ def projekt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def mit_text(pfad: Path, *group_ids: str) -> None:
-    """Gibt den genannten Gruppen einen Text und den Stand ``ai_generated``."""
+    """Gibt den genannten Gruppen einen Text und den Stand ``pending_review``."""
     with MarketingStore(pfad) as store:
         for gid in group_ids:
             store.set_post_text(
-                "batreeq", gid, f"Ein Text fuer {gid} {PLATZHALTER}", TextQuelle.KI
+                "batreeq", gid, f"Ein Text fuer {gid} {PLATZHALTER}", TextQuelle.HAND
             )
-            store.set_job_status("batreeq", gid, JobStatus.AI_GENERATED)
+            store.set_job_status("batreeq", gid, JobStatus.PENDING_REVIEW)
 
 
 def stand(pfad: Path, group_id: str) -> JobStatus:
@@ -122,7 +121,7 @@ def test_ohne_freigabe_kommt_nichts_in_die_warteschlange(projekt: Path) -> None:
     ergebnis = runner.invoke(cli.app, ["campaign", "enqueue", "batreeq"])
 
     assert "Nichts freigegeben" in ergebnis.stdout
-    assert stand(projekt, GID_GUT) is JobStatus.AI_GENERATED
+    assert stand(projekt, GID_GUT) is JobStatus.PENDING_REVIEW
 
 
 def test_freigeben_dann_einreihen(projekt: Path) -> None:
@@ -275,82 +274,6 @@ def test_retry_holt_uebersprungene_nicht_zurueck(projekt: Path) -> None:
     assert stand(projekt, GID_GUT) is JobStatus.CANCELLED
 
 
-# --- draft ---------------------------------------------------------------
-
-def test_dry_run_ruft_nichts_ab(projekt: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Nichts wird erzeugt - weder lokal Rechenzeit noch anderswo Geld.
-
-    Bei 310 Gruppen will man die Zahl vorher kennen, und bei einem lokalen
-    Modell ist die Zeit der Preis: 310 Beitraege sind Stunden.
-    """
-    def platzt(*args: object, **kwargs: object) -> None:
-        raise AssertionError("Es haette kein Modell gebaut werden duerfen")
-
-    monkeypatch.setattr(marketing_cli, "baue_modell", platzt)
-
-    ergebnis = runner.invoke(cli.app, ["campaign", "draft", "batreeq", "--dry-run"])
-
-    assert ergebnis.exit_code == 0
-    assert "Wuerde erzeugen" in ergebnis.stdout
-    assert "3 Gruppen" in ergebnis.stdout
-
-
-def test_dry_run_zeigt_die_besten_zuerst(projekt: Path) -> None:
-    ergebnis = runner.invoke(
-        cli.app, ["campaign", "draft", "batreeq", "--dry-run", "--top", "1"],
-        env={"COLUMNS": "200"},
-    )
-
-    assert "Syrer in Koeln" in ergebnis.stdout
-    assert "Syrer in Berlin" not in ergebnis.stdout
-
-
-def test_draft_ueberspringt_gruppen_mit_text(projekt: Path) -> None:
-    """Ein zweiter Lauf soll nicht 310 Aufrufe wiederholen."""
-    mit_text(projekt, GID_GUT)
-
-    ergebnis = runner.invoke(
-        cli.app, ["campaign", "draft", "batreeq", "--dry-run"], env={"COLUMNS": "200"}
-    )
-
-    assert "2 Gruppen" in ergebnis.stdout
-    assert "Syrer in Koeln" not in ergebnis.stdout
-
-
-def test_ohne_anthropic_schluessel_laeuft_der_entwurf_trotzdem(
-    projekt: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Der Kern der Umstellung: Ein fehlender Anthropic-Schluessel blockiert nichts.
-
-    Ohne Schluessel und ohne das Paket muss der Weg trotzdem bis zum lokalen
-    Modell durchlaufen. Dass Ollama hier auch nicht laeuft, ist ein anderer
-    Fehler - und er darf nicht mit einem fehlenden Schluessel verwechselt
-    werden, denn der wird gar nicht mehr gebraucht.
-    """
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
-    monkeypatch.setenv("AI_PROVIDER", "")
-
-    ergebnis = runner.invoke(cli.app, ["campaign", "draft", "batreeq", "--dry-run"])
-
-    assert ergebnis.exit_code == 0
-    assert "ollama" in ergebnis.stdout
-    assert "ANTHROPIC_API_KEY" not in ergebnis.stdout
-
-
-def test_ohne_laufendes_ollama_ein_verstaendlicher_hinweis(
-    projekt: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Connection refused darf nichts zum Absturz bringen."""
-    monkeypatch.setenv("AI_PROVIDER", "ollama")
-    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:1")   # dort horcht nichts
-
-    ergebnis = runner.invoke(cli.app, ["campaign", "draft", "batreeq"])
-
-    # Der Lauf endet geordnet und sagt, was zu tun ist.
-    assert "nicht erreichbar" in ergebnis.stdout or "ollama" in ergebnis.stdout.lower()
-    assert ergebnis.exception is None or isinstance(ergebnis.exception, SystemExit)
-
-
 # --- jobs -----------------------------------------------------------------
 
 def test_jobs_zeigt_die_zaehler(projekt: Path) -> None:
@@ -369,7 +292,7 @@ def test_jobs_filtert_nach_stand(projekt: Path) -> None:
     # Breite Ausgabe: Rich kuerzt sonst die Namensspalte, und der Test
     # pruefte dann die Terminalbreite statt des Filters.
     ergebnis = runner.invoke(
-        cli.app, ["campaign", "jobs", "batreeq", "--status", "ai_generated"],
+        cli.app, ["campaign", "jobs", "batreeq", "--status", "pending_review"],
         env={"COLUMNS": "200"},
     )
 
@@ -382,3 +305,60 @@ def test_unbekannter_stand_nennt_die_moeglichen(projekt: Path) -> None:
 
     assert ergebnis.exit_code == 1
     assert "pending_review" in ergebnis.stdout
+
+
+# --- Beitrag und Kommentar auf der Kommandozeile -------------------------
+
+
+def test_campaign_text_schreibt_nur_beitraege(projekt: Path) -> None:
+    """Ohne Angabe folgt der Befehl der Kampagne - und die fuehrt keine."""
+    ergebnis = runner.invoke(
+        cli.app, ["campaign", "text", "batreeq", "--aus-vorlage", "--ja"]
+    )
+    assert ergebnis.exit_code == 0, ergebnis.stdout
+
+    with MarketingStore(projekt) as store:
+        for link in store.links_for_campaign("batreeq"):
+            assert link.post_text.strip()
+            assert link.kommentar_text == ""
+
+
+def test_campaign_text_mit_typ_beide(projekt: Path) -> None:
+    """``--typ`` ueberstimmt die Kampagne fuer diesen einen Lauf."""
+    ergebnis = runner.invoke(
+        cli.app,
+        ["campaign", "text", "batreeq", "--aus-vorlage", "--typ", "beide", "--ja"],
+    )
+    assert ergebnis.exit_code == 0, ergebnis.stdout
+
+    with MarketingStore(projekt) as store:
+        link = store.link_for("batreeq", GID_GUT)
+    assert link is not None
+    # Die eigene Vorlage der Kampagne gilt nur fuer den Beitrag; der Kommentar
+    # kommt aus dem Vorrat und ist deshalb ein anderer Text.
+    assert link.vorlage_key == "kampagne"
+    assert link.kommentar_vorlage_key.startswith("ar/kommentar/")
+    assert link.kommentar_text != link.post_text
+    assert PLATZHALTER in link.kommentar_text
+
+
+def test_campaign_text_weist_einen_erfundenen_typ_ab(projekt: Path) -> None:
+    ergebnis = runner.invoke(
+        cli.app,
+        ["campaign", "text", "batreeq", "--aus-vorlage", "--typ", "plakat", "--ja"],
+    )
+    assert ergebnis.exit_code == 2
+    assert "Unbekannter Texttyp" in ergebnis.stdout
+
+
+def test_campaign_message_zeigt_beide_texte(projekt: Path) -> None:
+    runner.invoke(
+        cli.app,
+        ["campaign", "text", "batreeq", "--aus-vorlage", "--typ", "beide", "--ja"],
+    )
+    ergebnis = runner.invoke(cli.app, ["campaign", "message", "batreeq", GID_GUT])
+
+    assert "POST" in ergebnis.stdout
+    assert "KOMMENTAR" in ergebnis.stdout
+    # Der Code steht im ausgegebenen Text - hier wird er eingesetzt, sonst nie.
+    assert CODE_GUT in ergebnis.stdout

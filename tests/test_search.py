@@ -135,7 +135,7 @@ def test_treffer_wird_zu_gruppe() -> None:
     assert group.group_id == "482910573829104"
     assert group.url_canonical == "https://www.facebook.com/groups/482910573829104"
     assert group.name == "Syrer in Berlin"
-    assert group.member_count_hint == 12400
+    assert group.member_count == 12400
     assert group.privacy_hint is PrivacyHint.PUBLIC
     assert group.sources[0].source_ref == "brave:cp_02__berlin"
 
@@ -190,7 +190,7 @@ def test_geteilter_text_verhindert_falsche_mitgliederzahl(config, provider, cach
     """Die Wirkung im Lauf: keine fremde Mitgliederzahl im Datensatz."""
     groups, _ = run_search(config, provider, PROVIDER_CONFIG, cache=cache)
     berlin = next(g for g in groups if g.group_id == "482910573829104")
-    assert berlin.member_count_hint == 12400   # eigener Text, bleibt erhalten
+    assert berlin.member_count == 12400   # eigener Text, bleibt erhalten
 
 
 def test_metadaten_werden_nicht_erfunden() -> None:
@@ -199,7 +199,7 @@ def test_metadaten_werden_nicht_erfunden() -> None:
     group = hit_to_group(hit, "q1", "fixture")
 
     assert group.name == ""
-    assert group.member_count_hint is None
+    assert group.member_count is None
     assert group.privacy_hint is PrivacyHint.UNKNOWN
 
 
@@ -221,7 +221,7 @@ def test_beitragstitel_wird_nicht_zum_gruppennamen() -> None:
     assert group.group_id == "1222823522802063"          # die Gruppe bleibt im Bestand
     assert group.name == ""
     assert group.description_snippet is None
-    assert group.member_count_hint is None
+    assert group.member_count is None
     assert group.privacy_hint is PrivacyHint.UNKNOWN
 
 

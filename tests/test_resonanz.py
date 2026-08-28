@@ -5,10 +5,11 @@ ist etwas anderes als **wirkungslos**. Eine Gruppe, in der noch nie ein Beitrag
 stand, darf nicht neben einer stehen, deren Beitrag niemand angeklickt hat -
 die eine ist unbearbeitet, die andere beantwortet.
 
-Mitgliederzahl, Beitraege je Woche und aktive Poster kommen hier nicht vor: Sie
-stehen ausschliesslich auf facebook.com, und dorthin greift dieses Projekt
-nicht. Die Meta Groups API, die sie geliefert haette, wurde am 22.04.2024
-abgeschaltet.
+Die Resonanz ist seit dem 27.08.2026 kein eigener Bewertungsblock mehr,
+sondern eine **Quelle des Bestandteils ``activity``** - neben der
+Beitragsliste der Gruppenseite und den Datumsangaben der Suchtreffer. Zwei
+Bloecke waeren zweimal dieselbe Frage gewesen. Die Rechnung darin ist
+unveraendert; was sich geaendert hat, ist, wohin ihr Ergebnis fliesst.
 """
 
 from __future__ import annotations
@@ -65,14 +66,15 @@ def resonanz_an(config):
         "scoring": {
             **config.settings.get("scoring", {}),
             "weights": {
-                "member_count": 0,
-                "audience_match": 45,
-                "city_match": 27,
-                "category_match": 16,
-                "name_quality": 12,
-                "resonanz_engagement": 50,
-                "resonanz_reichweite": 15,
-                "resonanz_aktualitaet": 10,
+                # Die Mitgliederzahl bleibt hier aus: Diese Datei prueft die
+                # Resonanzrechnung, nicht die Groessenklassen. Waere sie an,
+                # senkte ihr Fehlen score_max in jedem Test um 25.
+                "members": 0,
+                "activity": 25,
+                "category": 20,
+                "location": 15,
+                "target_audience": 15,
+                "name_quality": 0,
             },
             "resonanz": {
                 "ziel_quote": 0.15,
@@ -80,6 +82,11 @@ def resonanz_an(config):
                 "ziel_klicks_je_beitrag": 25,
                 "aktualitaet_tage": 30,
                 "schonfrist_tage": 3,
+                "anteile": {
+                    "engagement": 0.60,
+                    "reichweite": 0.25,
+                    "aktualitaet": 0.15,
+                },
             },
         },
     }
@@ -96,15 +103,15 @@ def test_ohne_beitrag_bleibt_die_resonanz_unbekannt(resonanz_an) -> None:
     """Null Klicks ohne Beitrag sagen etwas ueber uns, nicht ueber die Gruppe."""
     ohne = score_group(_gruppe(), resonanz_an, Resonanz(beitraege=0))
 
-    assert ohne.score_max == 100.0          # nur die Passung ist erreichbar
-    assert "Resonanz unbekannt" in ohne.score_reason
-    assert ohne.score_breakdown.resonanz_engagement == 0.0
+    assert ohne.score_max == 50.0          # nur die Passung ist erreichbar
+    assert "Aktivitaet unbekannt" in ohne.score_reason
+    assert ohne.score_breakdown.activity == 0.0
 
 
 def test_beitrag_ohne_klicks_ist_ein_ergebnis(resonanz_an) -> None:
     """Hier wurde gemessen - und es kam nichts dabei heraus.
 
-    Der Unterschied zum Fall oben steht in score_max: 175 statt 100. Die
+    Der Unterschied zum Fall oben steht in score_max: 75 statt 50. Die
     Gruppe hatte ihre Gelegenheit.
     """
     gemessen = score_group(
@@ -113,9 +120,12 @@ def test_beitrag_ohne_klicks_ist_ein_ergebnis(resonanz_an) -> None:
         Resonanz(beitraege=1, klicks=0, erster_beitrag_am=_vor(20)),
     )
 
-    assert gemessen.score_max == 175.0
-    assert gemessen.score == 100.0
-    assert "Resonanz unbekannt" not in gemessen.score_reason
+    assert gemessen.score_max == 75.0
+    # Die Passung ist voll, die Aktivitaet steuert nichts bei - aber sie
+    # wurde gemessen, und genau das steht in score_max.
+    assert gemessen.score == 50.0
+    assert gemessen.score_breakdown.activity == 0.0
+    assert "Aktivitaet unbekannt" not in gemessen.score_reason
 
 
 def test_frischer_beitrag_zaehlt_noch_nicht(resonanz_an) -> None:
@@ -129,8 +139,8 @@ def test_frischer_beitrag_zaehlt_noch_nicht(resonanz_an) -> None:
         Resonanz(beitraege=1, klicks=0, erster_beitrag_am=_vor(0.1)),
     )
 
-    assert frisch.score_max == 100.0
-    assert "Resonanz unbekannt" in frisch.score_reason
+    assert frisch.score_max == 50.0
+    assert "Aktivitaet unbekannt" in frisch.score_reason
 
 
 # --- Der Score bewegt sich mit den Daten ------------------------------------
@@ -147,7 +157,7 @@ def test_mehr_registrierungen_heben_den_score(resonanz_an) -> None:
     assert schwach.score < mittel.score < stark.score
     # Die Passung ist in allen drei Faellen dieselbe - der Unterschied kommt
     # ausschliesslich aus der gemessenen Resonanz.
-    assert schwach.score_breakdown.audience_match == stark.score_breakdown.audience_match
+    assert schwach.score_breakdown.target_audience == stark.score_breakdown.target_audience
 
 
 def test_kleine_aktive_gruppe_schlaegt_grosse_stille(resonanz_an) -> None:
@@ -184,9 +194,13 @@ def test_alte_regung_senkt_die_aktualitaet(resonanz_an) -> None:
     alt = score_group(_gruppe(), resonanz_an, Resonanz(**basis, letzte_regung=_vor(200)))
 
     assert frisch.score > alt.score
-    assert alt.score_breakdown.resonanz_aktualitaet == 0.0
-    # Die anderen Bestandteile bleiben unberuehrt.
-    assert frisch.score_breakdown.resonanz_engagement == alt.score_breakdown.resonanz_engagement
+    # Die Aktualitaet steckt jetzt mit im EINEN Aktivitaetsfaktor. Sichtbar
+    # bleibt sie an der Differenz: dieselben Klicks, dieselbe Quote, nur
+    # aelter - und damit weniger Punkte, aber nicht null.
+    assert alt.score_breakdown.activity < frisch.score_breakdown.activity
+    assert alt.score_breakdown.activity > 0.0
+    # Die Passung bleibt unberuehrt.
+    assert frisch.score_breakdown.category == alt.score_breakdown.category
 
 
 def test_ein_klick_mit_einer_registrierung_ist_nicht_die_beste_gruppe(resonanz_an) -> None:
@@ -226,7 +240,7 @@ def test_reichweite_zaehlt_je_beitrag_nicht_absolut(resonanz_an) -> None:
                  erster_beitrag_am=_vor(20), letzte_regung=_vor(1)),
     )
 
-    assert einmal.score_breakdown.resonanz_reichweite > fuenfmal.score_breakdown.resonanz_reichweite
+    assert einmal.score_breakdown.activity > fuenfmal.score_breakdown.activity
 
 
 def test_score_bleibt_in_der_spanne(resonanz_an) -> None:
@@ -238,7 +252,7 @@ def test_score_bleibt_in_der_spanne(resonanz_an) -> None:
                  erster_beitrag_am=_vor(5), letzte_regung=datetime.now(UTC)),
     )
 
-    assert 0 <= extrem.score <= extrem.score_max == 175.0
+    assert 0 <= extrem.score <= extrem.score_max == 75.0
 
 
 # --- Abschaltbar wie jedes andere Gewicht -----------------------------------
@@ -254,10 +268,8 @@ def test_gewicht_null_schaltet_die_resonanz_ganz_ab(config) -> None:
         "scoring": {
             **config.settings.get("scoring", {}),
             "weights": {
-                "member_count": 0, "audience_match": 45, "city_match": 27,
-                "category_match": 16, "name_quality": 12,
-                "resonanz_engagement": 0, "resonanz_reichweite": 0,
-                "resonanz_aktualitaet": 0,
+                "members": 0, "activity": 0, "name_quality": 0,
+                "category": 20, "location": 15, "target_audience": 15,
             },
         },
     })
@@ -267,8 +279,8 @@ def test_gewicht_null_schaltet_die_resonanz_ganz_ab(config) -> None:
         Resonanz(beitraege=1, klicks=100, registrierungen=50, letzte_regung=_vor(1)),
     )
 
-    assert ergebnis.score_max == 100.0
-    assert "Resonanz" not in ergebnis.score_reason
+    assert ergebnis.score_max == 50.0
+    assert "Aktivitaet" not in ergebnis.score_reason
 
 
 # --- Die Zahlen kommen aus der Datenbank ------------------------------------
@@ -393,20 +405,35 @@ def test_uebersicht_belegt_den_score_mit_zahlen(bestand: Path, config) -> None:
     assert gemessen["resonanz"]["quote"] == 10.0
     assert gemessen["resonanz"]["beitraege"] == 1
     # Die Einzelteile des Scores stehen als Zahlen daneben.
-    assert "audience_match" in gemessen["punkte"]
+    assert "target_audience" in gemessen["punkte"]
 
     # Ohne veroeffentlichten Beitrag gibt es nichts zu zeigen - und ausdruecklich
     # keine Null, die als "geprueft und wertlos" gelesen werden koennte.
     assert ohne["resonanz"] is None
 
 
-def test_die_seite_traegt_die_resonanzspalte(bestand: Path, config) -> None:
+def test_die_resonanz_hat_keine_eigene_spalte_mehr(bestand: Path, config) -> None:
+    """Die Spalte ist weg, die gemessene Resonanz ist es nicht.
+
+    Sie stand mit Quote, Verhaeltnis, Beitragszahl und letzter Regung in jeder
+    der 300 Zeilen und war damit die breiteste Spalte der Tabelle - fuer eine
+    Angabe, die man je Gruppe einmal nachschlaegt. Ihre Zahlen stehen weiter
+    daneben: Klicks und Registrierungen haben eigene Spalten, und ihr Anteil
+    am Score steht in der Aufschluesselung am Score selbst.
+
+    Der Unterschied, auf den es ankommt: Sie ist aus der *Anzeige* verschwunden,
+    nicht aus der Bewertung. Waere sie aus `punkte` verschwunden, hiesse das,
+    dass sie nicht mehr zaehlt - und das ist etwas voellig anderes. Dass die
+    Zahlen weiterhin in den Daten der Seite stehen, prueft der Test darueber.
+    """
     from fbgroups.marketing.dashboard import render, sammle_daten
 
     seite = render(sammle_daten(config, bestand))
 
-    assert "resonanzZelle" in seite
-    # Die Aufschluesselung steht seit dem Aufraeumen im Tooltip statt als
-    # Liste in jeder Zeile - vorhanden ist sie weiterhin.
+    assert "resonanzZelle" not in seite
+    assert ">Resonanz</th>" not in seite
+
+    # Die Aufschluesselung des Scores steht im Tooltip - und nennt die
+    # Resonanzbestandteile weiterhin beim Namen.
     assert "punkteText" in seite
-    assert "noch nicht gemessen" in seite
+    assert "activity" in seite

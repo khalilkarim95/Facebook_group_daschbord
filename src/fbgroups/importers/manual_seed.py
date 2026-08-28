@@ -123,7 +123,7 @@ def _build_group(
         url_variants=([parsed.original_url] if parsed.original_url != parsed.canonical_url else []),
         name=name,
         description_snippet=(row.get("description") or "").strip() or None,
-        member_count_hint=parse_member_count(row.get("member_count")),
+        member_count=parse_member_count(row.get("member_count")),
         privacy_hint=_PRIVACY_VALUES.get(privacy_raw, PrivacyHint.UNKNOWN),
         notes=(row.get("notes") or "").strip(),
         sources=[

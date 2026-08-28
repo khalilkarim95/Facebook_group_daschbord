@@ -45,7 +45,7 @@ def test_import_mit_semikolon(config, tmp_path: Path) -> None:
     assert run.rows_total == 1
     assert run.rows_valid == 1
     assert groups[0].name == "Syrer in Berlin"
-    assert groups[0].member_count_hint == 12000
+    assert groups[0].member_count == 12000
 
 
 def test_import_mit_komma(config, tmp_path: Path) -> None:
@@ -67,7 +67,7 @@ def test_import_deutsche_spaltennamen(config, tmp_path: Path) -> None:
     groups, run = import_seeds(config, paths=[path])
     assert run.rows_valid == 1
     assert groups[0].name == "Test Gruppe"
-    assert groups[0].member_count_hint == 500
+    assert groups[0].member_count == 500
 
 
 def test_import_txt_mit_kommentaren(config, tmp_path: Path) -> None:

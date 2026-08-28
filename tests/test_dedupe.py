@@ -31,11 +31,11 @@ def test_verschiedene_gruppen_bleiben_getrennt() -> None:
 def test_merge_ergaenzt_fehlende_angaben() -> None:
     first = make_group("111", "")
     second = make_group("111", "Syrer Berlin")
-    second.member_count_hint = 5000
+    second.member_count = 5000
 
     unique, _ = deduplicate_exact([first, second])
     assert unique[0].name == "Syrer Berlin"
-    assert unique[0].member_count_hint == 5000
+    assert unique[0].member_count == 5000
 
 
 def test_merge_sammelt_url_varianten() -> None:

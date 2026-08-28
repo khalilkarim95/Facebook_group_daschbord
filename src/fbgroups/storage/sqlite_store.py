@@ -12,15 +12,27 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from fbgroups.marketing.store import SCHEMA as MARKETING_SCHEMA
 from fbgroups.marketing.store import SCHEMA_IDENTITAETEN as MARKETING_IDENTITAETEN_SCHEMA
 from fbgroups.marketing.store import SCHEMA_POSTING as MARKETING_POSTING_SCHEMA
 from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEMA
+from fbgroups.marketing.store import SCHEMA_VORSCHLAEGE as MARKETING_VORSCHLAEGE_SCHEMA
 from fbgroups.models import Group, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 16
+
+
+def _iso_oder_none(zeitpunkt: datetime | None) -> str | None:
+    """Zeitpunkt als ISO-Text - ``None`` bleibt ``None``.
+
+    Ohne die Unterscheidung stuende in einer Spalte, die "noch nie geprueft"
+    bedeutet, der Text "None" - und die Frage "welche Gruppen fehlen noch?"
+    haette keine Antwort mehr.
+    """
+    return zeitpunkt.isoformat() if zeitpunkt is not None else None
 
 # Schritte, die eine aeltere Datei nachholt, ohne dass der Bestand neu
 # aufgebaut werden muss. Handgepflegte Notizen bleiben so erhalten.
@@ -147,6 +159,126 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
     # wirkungslos, und das faellt erst auf, wenn keine Installation mehr
     # zugeordnet wird.
     11: ("ALTER TABLE campaigns ADD COLUMN ziel TEXT NOT NULL DEFAULT ''",),
+    # Der erzeugte Text und die Vorlage, aus der er stammt - neben dem Text,
+    # der wirklich hinausgeht. Bis hierher gab es nur ``post_text``, und damit
+    # war nach einer Ueberarbeitung nicht mehr feststellbar, was die Vorlage
+    # eigentlich ergeben hatte; ein Weg zurueck bestand nicht.
+    #
+    # Rein additiv. Bestehende Zuordnungen bekommen einen leeren
+    # ``generated_text`` und KEINE Abschrift aus ``post_text``: Was dort steht,
+    # ist moeglicherweise von Hand geschrieben oder von einem Modell, und es
+    # als "erzeugt" auszugeben waere eine Behauptung ueber seine Herkunft.
+    # Beim naechsten Fuellen entsteht der Wert ohnehin - und dann stimmt er.
+    12: (
+        "ALTER TABLE campaign_groups ADD COLUMN generated_text TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE campaign_groups ADD COLUMN vorlage_key TEXT NOT NULL DEFAULT ''",
+    ),
+    # Der Kommentar als zweiter Einsatzzweck neben dem Beitrag. Ein Post und
+    # ein Kommentar haben verschiedene sprachliche Anforderungen und deshalb
+    # getrennte Vorlagen, getrennte Texte und getrennte Prompts.
+    #
+    # Rein additiv, und die Vorgabe ist ueberall die leere: Eine bestehende
+    # Zuordnung bekommt KEINEN Kommentartext und keine Abschrift des
+    # Beitrags. Ein Beitrag, als Kommentar unter einen fremden Beitrag
+    # gesetzt, ist genau das, was hier vermieden werden soll - ihn dorthin zu
+    # kopieren waere eine Behauptung, er tauge dafuer.
+    #
+    # ``campaigns.kommentare`` startet auf 0: Eine laufende Kampagne aendert
+    # ihre Arbeitsweise nicht dadurch, dass jemand eine neue Fassung
+    # ausrollt. Wer Kommentare will, schaltet sie ein.
+    13: (
+        "ALTER TABLE campaign_groups ADD COLUMN kommentar_text TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE campaign_groups ADD COLUMN kommentar_generated TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE campaign_groups ADD COLUMN kommentar_vorlage_key TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE campaign_groups ADD COLUMN kommentar_quelle TEXT NOT NULL DEFAULT 'vorlage'",
+        "ALTER TABLE campaign_groups ADD COLUMN kommentar_generiert_am TEXT",
+        "ALTER TABLE campaigns ADD COLUMN kommentare INTEGER NOT NULL DEFAULT 0",
+    ),
+    # Mehrere Fassungen je Gruppe und Zweck statt genau einer.
+    #
+    # Bis hierher trug das Paar aus Kampagne und Gruppe einen Beitragstext und
+    # einen Kommentartext. Wer eine andere Fassung wollte, musste die
+    # vorhandene ueberschreiben - die verworfene war weg, und "welche der
+    # fuenf?" war gar keine Frage, die sich stellen liess.
+    #
+    # Rein additiv: eine neue Tabelle, keine Spalte an ``campaign_groups``
+    # geaendert, keine geloescht. Die vorhandenen Texte werden als **Fassung 1**
+    # uebernommen, nicht kopiert-und-vergessen: Ein Bestand, der bis hierher
+    # gelaufen ist, findet nach dem Schritt genau seine Texte an Platz 1
+    # wieder - mit ihrer Vorlage, ihrer Quelle und ihrem Zeitpunkt. Ohne die
+    # Uebernahme stuenden 310 von Hand ueberarbeitete Texte in der alten
+    # Spalte und die Arbeitsseite zeigte fuenf leere Felder daneben.
+    #
+    # Der Stand der uebernommenen Fassung wird aus ``post_status``
+    # abgeleitet - dieselbe Richtung wie in Schritt 10: Was veroeffentlicht
+    # ist, war veroeffentlicht; was schiefging, ging schief; alles Uebrige
+    # gilt als gespeichert, denn ein Text steht ja da. Ein Kommentar hat
+    # keinen eigenen Ergebnisstand und startet deshalb als 'gespeichert'.
+    #
+    # Die Fassungen 2 bis 5 entstehen NICHT hier, sondern beim naechsten
+    # Fuellen aus ``config/textvorlagen.yaml``. Eine Migration, die Texte
+    # erfindet, waere eine Migration, die Inhalte schreibt.
+    14: (
+        MARKETING_VORSCHLAEGE_SCHEMA,
+        """
+        INSERT INTO campaign_group_texte (
+            campaign_id, group_id, texttyp, nummer, text, generated_text,
+            vorlage_key, quelle, status, generiert_am, veroeffentlicht_am,
+            versuche, fehler)
+        SELECT campaign_id, group_id, 'post', 1, post_text, generated_text,
+               vorlage_key, text_quelle,
+               CASE post_status
+                   WHEN 'veroeffentlicht' THEN 'veroeffentlicht'
+                   WHEN 'fehlgeschlagen'  THEN 'fehlgeschlagen'
+                   ELSE 'gespeichert' END,
+               generiert_am,
+               CASE WHEN post_status = 'veroeffentlicht' THEN posted_at END,
+               post_attempts, post_error
+        FROM campaign_groups WHERE TRIM(post_text) <> ''
+        ON CONFLICT DO NOTHING
+        """,
+        """
+        INSERT INTO campaign_group_texte (
+            campaign_id, group_id, texttyp, nummer, text, generated_text,
+            vorlage_key, quelle, status, generiert_am)
+        SELECT campaign_id, group_id, 'kommentar', 1, kommentar_text,
+               kommentar_generated, kommentar_vorlage_key, kommentar_quelle,
+               'gespeichert', kommentar_generiert_am
+        FROM campaign_groups WHERE TRIM(kommentar_text) <> ''
+        ON CONFLICT DO NOTHING
+        """,
+    ),
+    # Der Score wird auf 100 Punkte umgestellt: Groesse und Betrieb tragen
+    # zusammen die Haelfte, statt dass die Mitgliederzahl abgeschaltet ist und
+    # die Aktivitaet als drei getrennte Resonanzbloecke daneben steht.
+    #
+    # Rein additiv - dreizehn Spalten, keine geaendert, keine geloescht. Die
+    # vorhandenen Werte werden ausdruecklich NICHT umgerechnet: Ein alter
+    # Score aus den alten Gewichten ist keine Zahl, die sich in die neuen
+    # uebersetzen laesst, und ein geratener Umrechnungsfaktor stuende
+    # hinterher in der Rangliste, nach der entschieden wird, wo die naechsten
+    # dreihundert Beitraege hingehen. Neu bewertet wird mit "fbgroups rescore" -
+    # das ist ein Befehl und damit eine Entscheidung.
+    #
+    # ``member_count_source`` bleibt fuer Bestandszahlen leer statt auf
+    # 'search' gesetzt zu werden: Die vorhandenen Zahlen stammen zwar aus
+    # Suchtreffern, aber das WEISS diese Migration nicht - sie liest eine
+    # Spalte, in der auch eine von Hand gepflegte Zahl stehen koennte. Eine
+    # Migration, die Herkunft behauptet, ist eine Migration, die Daten erfindet.
+    15: (
+        "ALTER TABLE groups ADD COLUMN member_count_source TEXT",
+        "ALTER TABLE groups ADD COLUMN member_count_checked_at TEXT",
+        "ALTER TABLE groups ADD COLUMN posts_per_day REAL",
+        "ALTER TABLE groups ADD COLUMN last_post_at TEXT",
+        "ALTER TABLE groups ADD COLUMN activity_factor REAL",
+        "ALTER TABLE groups ADD COLUMN activity_confidence REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE groups ADD COLUMN activity_source TEXT",
+        "ALTER TABLE groups ADD COLUMN activity_checked_at TEXT",
+        "ALTER TABLE groups ADD COLUMN country TEXT",
+        "ALTER TABLE groups ADD COLUMN secondary_categories TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE groups ADD COLUMN data_confidence REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE groups ADD COLUMN last_checked_at TEXT",
+    ),
 }
 
 SCHEMA = """
@@ -156,15 +288,36 @@ CREATE TABLE IF NOT EXISTS groups (
     url_variants        TEXT NOT NULL DEFAULT '[]',
     name                TEXT NOT NULL DEFAULT '',
     description_snippet TEXT,
+    -- Der Spaltenname traegt noch das alte "hint"; das Modellfeld heisst
+    -- member_count. Umbenannt wird die Spalte nicht: Migrationen sind hier
+    -- ausschliesslich additiv, und ein RENAME ist keine additive Aenderung.
     member_count_hint   INTEGER,
+    -- Herkunft und Zeitpunkt gehoeren zur Zahl. Dieselbe Zahl bedeutet etwas
+    -- anderes, je nachdem ob sie auf der Gruppenseite stand oder aus einem
+    -- Suchtreffer stammt; checked_at wird auch bei einem erfolglosen Versuch
+    -- gesetzt, sonst liefe der Abruf jedes Mal erneut.
+    member_count_source     TEXT,
+    member_count_checked_at TEXT,
+    -- Aktivitaet. posts_per_day bleibt NULL, solange keine Zahl belegt ist;
+    -- activity_factor (0-1) ist die daraus abgeleitete Bewertung und steht
+    -- getrennt, weil es Quellen gibt, die einen Betriebseindruck liefern,
+    -- ohne eine Beitragszahl zu nennen.
+    posts_per_day       REAL,
+    last_post_at        TEXT,
+    activity_factor     REAL,
+    activity_confidence REAL NOT NULL DEFAULT 0,
+    activity_source     TEXT,
+    activity_checked_at TEXT,
     privacy_hint        TEXT NOT NULL DEFAULT 'unknown',
     language_hint       TEXT,
     audience_tags       TEXT NOT NULL DEFAULT '[]',
     audience_confidence REAL NOT NULL DEFAULT 0,
     city                TEXT,
     bundesland          TEXT,
+    country             TEXT,
     city_confidence     REAL NOT NULL DEFAULT 0,
     category            TEXT,
+    secondary_categories TEXT NOT NULL DEFAULT '[]',
     category_confidence REAL NOT NULL DEFAULT 0,
     -- NULL ist ein gueltiger Wert: nicht bewertbar. Kein DEFAULT 0.
     score               REAL,
@@ -172,6 +325,10 @@ CREATE TABLE IF NOT EXISTS groups (
     score_max           REAL,
     score_reason        TEXT NOT NULL DEFAULT '',
     score_breakdown     TEXT NOT NULL DEFAULT '{}',
+    -- Neben dem Score, nie darin: "wie sicher?" und "wie gut?" sind zwei
+    -- Fragen, und sie zu verrechnen machte beide Antworten unlesbar.
+    data_confidence     REAL NOT NULL DEFAULT 0,
+    last_checked_at     TEXT,
     validation_status   TEXT NOT NULL DEFAULT 'valid',
     data_quality        TEXT NOT NULL DEFAULT 'none',
     status              TEXT NOT NULL DEFAULT 'new',
@@ -254,6 +411,7 @@ class SqliteStore:
         self.conn.executescript(MARKETING_TRACKING_SCHEMA)
         self.conn.executescript(MARKETING_IDENTITAETEN_SCHEMA)
         self.conn.executescript(MARKETING_POSTING_SCHEMA)
+        self.conn.executescript(MARKETING_VORSCHLAEGE_SCHEMA)
         self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self.conn.commit()
 
@@ -335,12 +493,17 @@ class SqliteStore:
                 """
                 INSERT INTO groups (
                     group_id, url_canonical, url_variants, name, description_snippet,
-                    member_count_hint, privacy_hint, language_hint, audience_tags,
-                    audience_confidence, city, bundesland, city_confidence, category,
-                    category_confidence, score, score_max, score_reason, score_breakdown,
-                    validation_status, data_quality, status, notes,
+                    member_count_hint, member_count_source, member_count_checked_at,
+                    posts_per_day, last_post_at, activity_factor, activity_confidence,
+                    activity_source, activity_checked_at,
+                    privacy_hint, language_hint, audience_tags,
+                    audience_confidence, city, bundesland, country, city_confidence,
+                    category, secondary_categories, category_confidence,
+                    score, score_max, score_reason, score_breakdown, data_confidence,
+                    last_checked_at, validation_status, data_quality, status, notes,
                     first_seen_at, last_seen_at, times_seen
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                          ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(group_id) DO UPDATE SET
                     url_canonical       = excluded.url_canonical,
                     url_variants        = excluded.url_variants,
@@ -348,20 +511,48 @@ class SqliteStore:
                                                ELSE groups.name END,
                     description_snippet = COALESCE(excluded.description_snippet,
                                                    groups.description_snippet),
+                    -- Eine erhobene Zahl geht einer fehlenden vor, und die
+                    -- Herkunft wandert mit: Eine Zahl ohne Quellenangabe
+                    -- liesse sich spaeter nicht mehr einordnen.
                     member_count_hint   = COALESCE(excluded.member_count_hint,
                                                    groups.member_count_hint),
+                    member_count_source = COALESCE(excluded.member_count_source,
+                                                   groups.member_count_source),
+                    member_count_checked_at = COALESCE(excluded.member_count_checked_at,
+                                                       groups.member_count_checked_at),
+                    -- Dasselbe fuer die Aktivitaet. Ein Suchlauf bringt sie
+                    -- nicht mit; ohne COALESCE loeschte er, was
+                    -- "fbgroups enrich" erhoben hat.
+                    posts_per_day       = COALESCE(excluded.posts_per_day,
+                                                   groups.posts_per_day),
+                    last_post_at        = COALESCE(excluded.last_post_at,
+                                                   groups.last_post_at),
+                    activity_factor     = COALESCE(excluded.activity_factor,
+                                                   groups.activity_factor),
+                    activity_confidence = CASE WHEN excluded.activity_factor IS NOT NULL
+                                               THEN excluded.activity_confidence
+                                               ELSE groups.activity_confidence END,
+                    activity_source     = COALESCE(excluded.activity_source,
+                                                   groups.activity_source),
+                    activity_checked_at = COALESCE(excluded.activity_checked_at,
+                                                   groups.activity_checked_at),
                     privacy_hint        = excluded.privacy_hint,
                     audience_tags       = excluded.audience_tags,
                     audience_confidence = excluded.audience_confidence,
                     city                = excluded.city,
                     bundesland          = excluded.bundesland,
+                    country             = excluded.country,
                     city_confidence     = excluded.city_confidence,
                     category            = excluded.category,
+                    secondary_categories = excluded.secondary_categories,
                     category_confidence = excluded.category_confidence,
                     score               = excluded.score,
                     score_max           = excluded.score_max,
                     score_reason        = excluded.score_reason,
                     score_breakdown     = excluded.score_breakdown,
+                    data_confidence     = excluded.data_confidence,
+                    last_checked_at     = COALESCE(excluded.last_checked_at,
+                                                   groups.last_checked_at),
                     validation_status   = excluded.validation_status,
                     data_quality        = excluded.data_quality,
                     status              = excluded.status,
@@ -375,20 +566,32 @@ class SqliteStore:
                     json.dumps(group.url_variants, ensure_ascii=False),
                     group.name,
                     group.description_snippet,
-                    group.member_count_hint,
+                    group.member_count,
+                    group.member_count_source.value if group.member_count_source else None,
+                    _iso_oder_none(group.member_count_checked_at),
+                    group.posts_per_day,
+                    _iso_oder_none(group.last_post_at),
+                    group.activity_factor,
+                    group.activity_confidence,
+                    group.activity_source.value if group.activity_source else None,
+                    _iso_oder_none(group.activity_checked_at),
                     group.privacy_hint.value,
                     group.language_hint,
                     json.dumps(group.audience_tags, ensure_ascii=False),
                     group.audience_confidence,
                     group.city,
                     group.bundesland,
+                    group.country,
                     group.city_confidence,
                     group.category,
+                    json.dumps(group.secondary_categories, ensure_ascii=False),
                     group.category_confidence,
                     group.score,
                     group.score_max,
                     group.score_reason,
                     group.score_breakdown.model_dump_json(),
+                    group.data_confidence,
+                    _iso_oder_none(group.last_checked_at),
                     validation_status,
                     group.data_quality.value,
                     group.status.value,
@@ -549,20 +752,32 @@ class SqliteStore:
             url_variants=json.loads(row["url_variants"]),
             name=row["name"],
             description_snippet=row["description_snippet"],
-            member_count_hint=row["member_count_hint"],
+            member_count=row["member_count_hint"],
+            member_count_source=row["member_count_source"],
+            member_count_checked_at=row["member_count_checked_at"],
+            posts_per_day=row["posts_per_day"],
+            last_post_at=row["last_post_at"],
+            activity_factor=row["activity_factor"],
+            activity_confidence=row["activity_confidence"],
+            activity_source=row["activity_source"],
+            activity_checked_at=row["activity_checked_at"],
             privacy_hint=row["privacy_hint"],
             language_hint=row["language_hint"],
             audience_tags=json.loads(row["audience_tags"]),
             audience_confidence=row["audience_confidence"],
             city=row["city"],
             bundesland=row["bundesland"],
+            country=row["country"],
             city_confidence=row["city_confidence"],
             category=row["category"],
+            secondary_categories=json.loads(row["secondary_categories"] or "[]"),
             category_confidence=row["category_confidence"],
             score=row["score"],
             score_max=row["score_max"],
             score_reason=row["score_reason"],
             score_breakdown=ScoreBreakdown.model_validate_json(row["score_breakdown"]),
+            data_confidence=row["data_confidence"],
+            last_checked_at=row["last_checked_at"],
             validation_status=row["validation_status"],
             data_quality=row["data_quality"],
             status=row["status"],

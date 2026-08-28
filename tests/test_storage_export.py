@@ -30,7 +30,7 @@ def make_group(group_id: str = REAL_ID_A, name: str = "Syrer in Berlin") -> Grou
         bundesland="Berlin",
         city_confidence=1.0,
         category="community",
-        member_count_hint=12000,
+        member_count=12000,
         score=77.5,
         score_reason="berechnet aus: audience_match, category_match, city_match, member_count",
         data_quality=DataQuality.COMPLETE,

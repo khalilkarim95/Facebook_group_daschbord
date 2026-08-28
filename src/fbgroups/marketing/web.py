@@ -23,7 +23,6 @@ meldet dann, was fehlt.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import hmac
 import os
@@ -31,13 +30,22 @@ import secrets
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, quote, urlparse
+from urllib.parse import quote, urlparse
 
 from pydantic import BaseModel, Field
 
 from fbgroups.config import AppConfig, load_config
-from fbgroups.marketing.arbeit import Sperre, hole_auftrag, melde_ergebnis
-from fbgroups.marketing.arbeitsseite import render_auftrag, render_sperre
+from fbgroups.marketing.arbeit import (
+    Ergebnis,
+    Grund,
+    Sperre,
+    arbeitsreihenfolge,
+    auswahlliste,
+    hole_gruppenarbeit,
+    melde_vorschlag,
+    stelle_texte_bereit,
+)
+from fbgroups.marketing.arbeitsseite import render_gruppenarbeit, render_sperre
 from fbgroups.marketing.dashboard import (
     _beitrag_gesamtstand,
     regel_kurzfassung,
@@ -56,6 +64,8 @@ from fbgroups.marketing.models import (
     PostStatus,
     QueueZustand,
     ReferralStatus,
+    TextQuelle,
+    Texttyp,
     TrackingEvent,
 )
 from fbgroups.marketing.referral import code_fuer_benutzer, lege_empfehlung_an, setze_status
@@ -63,8 +73,6 @@ from fbgroups.marketing.rewards import bewerte_benutzer, load_reward_rules
 from fbgroups.marketing.selection import auswahl_der_kampagne, baue_plan, synchronisiere
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.marketing.tracking import slug
-from fbgroups.marketing.veroeffentlicher import Ergebnis
-from fbgroups.marketing.worker import lade_grenzen
 from fbgroups.models import RecordStatus
 from fbgroups.storage import SqliteStore
 
@@ -83,14 +91,6 @@ except ImportError:  # pragma: no cover - haengt von der Installation ab
 
 SALT_SCHLUESSEL = "visitor_salt"
 
-# Wie viele Gruppen ein Klick auf "Text von der KI" hoechstens bearbeitet.
-#
-# Klein, weil ein lokales Modell je Fassung bis zu einer Minute braucht: Drei
-# Fassungen sind schon drei Minuten, und laenger haelt kaum eine Kette aus
-# Browser, Reverse Proxy und Modell durch. Fuer den ganzen
-# Bestand gibt es ``fbgroups campaign draft`` - dort darf ein Lauf Stunden
-# dauern, und man sieht ihm dabei zu.
-JE_KLICK = 1
 
 # Absenderadressen, die als "derselbe Rechner" gelten. Der Dienst steht
 # oeffentlich - die Tracking-Links zeigen auf ihn -, die Arbeitsliste darf aber
@@ -139,10 +139,25 @@ class KampagneNeu(BaseModel):
     language: str = Field(default="", max_length=16)
     message_template: str = Field(default="", max_length=2000)
     landing_page: str = Field(default="", max_length=300)
+    # Braucht die Kampagne neben dem Beitrag auch Kommentartexte? Vorgabe aus:
+    # Ein Text, den niemand braucht, ist ein Text, den jemand durchliest.
+    kommentare: bool = False
 
 
 class KampagneStatusMeldung(BaseModel):
     status: CampaignStatus
+
+
+class TextartenMeldung(BaseModel):
+    """Welche Textarten diese Kampagne fuehrt.
+
+    Nur der Kommentar ist eine Frage: Ohne Beitrag gaebe es nichts
+    einzureihen, nichts freizugeben und nichts zu melden - der Ablauf haengt
+    an ihm. Der Kommentar ist der Zusatz, und ein Zusatz, den niemand
+    braucht, ist ein Text, den jemand durchlesen muss.
+    """
+
+    kommentare: bool
 
 
 class VorbereitenMeldung(BaseModel):
@@ -154,9 +169,22 @@ class VorbereitenMeldung(BaseModel):
     weiterer Weg, der ``_nur_lokal`` und die Kampagnenpruefung wiederholt.
     """
 
-    schritt: str = Field(pattern="^(text|draft|approve|enqueue|reset)$")
+    schritt: str = Field(pattern="^(text|text_neu|draft|approve|enqueue|reset|zurueckholen)$")
     #: Nur bei ``reset``: auch die gemessene Resonanz loeschen.
     auch_ereignisse: bool = False
+
+
+class SammelZuordnenMeldung(BaseModel):
+    """Mehrere angehakte Gruppen in einem Zug einer Kampagne zuordnen.
+
+    Eine **Liste** und nicht ein Weg je Gruppe - dieselbe Ueberlegung wie bei
+    ``POST /bearbeiten``: Zwoelf ausgewaehlte Zeilen sind ein Zug, keine zwoelf
+    Klicks. Und nur so entstehen die Codes aus **einem** ``CodeAllocator``;
+    zwoelf Aufrufe bauten zwoelf davon, jeder muesste den Bestand neu lesen,
+    und zwei gleichzeitige koennten dieselbe Nummer zweimal ausgeben.
+    """
+
+    group_ids: list[str]
 
 
 class LoeschMeldung(BaseModel):
@@ -246,6 +274,70 @@ class BearbeitenMeldung(BaseModel):
     group_ids: list[str] = Field(min_length=1, max_length=2000)
     bearbeiten: bool
     grund: str = Field(default="", max_length=200)
+
+
+class GruppeMeldung(BaseModel):
+    """Eine Gruppenkennung - und wofuer der Text gedacht ist.
+
+    ``texttyp`` mit Vorgabe ``post``: Jeder Aufruf aus der Zeit vor den
+    Kommentaren meint einen Beitrag und bleibt damit gueltig. Er steht schon
+    hier und nicht erst in den abgeleiteten Meldungen, weil ihn **alle** vier
+    Wege brauchen - ueberarbeiten, uebernehmen, von Hand schreiben,
+    zuruecksetzen. Ohne ihn landete ein ueberarbeiteter Kommentar im Beitrag,
+    und das faellt erst auf, wenn er in der Gruppe steht.
+    """
+
+    group_id: str = Field(min_length=1, max_length=200)
+    texttyp: Texttyp = Texttyp.POST
+
+
+class TextMeldung(GruppeMeldung):
+    """Ein von Hand geschriebener Text - Beitrag oder Kommentar.
+
+    Die Ausnahme von "der Text geht nur hinaus, nie zurueck" - und sie ist
+    bewusst ein **eigener** Weg. Das Ergebnisformular bleibt textfrei; hier
+    ist das Aendern die Handlung, nicht ein Nebeneffekt davon. 8000 Zeichen
+    sind grosszuegig: Ein Facebook-Beitrag ist kuerzer, und eine Obergrenze
+    schuetzt vor einem versehentlich eingefuegten Dokument.
+    """
+
+    text: str = Field(min_length=1, max_length=8000)
+
+
+class VorschlagMeldung(GruppeMeldung):
+    """Welche der fuenf Fassungen gemeint ist.
+
+    ``nummer`` ist der Unterschied zwischen "der Text dieser Gruppe" und
+    "dieser Text dieser Gruppe" - und damit die Zusicherung, dass ein
+    Speichern die vier Nachbarn nicht anfasst. Sie faehrt bei **jedem** der
+    drei Wege mit; ohne sie landete ein Text im falschen Vorschlag, und das
+    faellt erst auf, wenn er in der Gruppe steht.
+
+    Die Obergrenze ist grosszuegiger als ``MAX_VORSCHLAEGE``: Ein Vorrat, der
+    einmal groesser war, hat Fassungen mit hoeherer Nummer hinterlassen, und
+    die muessen weiter zu lesen und zu melden sein.
+    """
+
+    nummer: int = Field(default=1, ge=1, le=50)
+
+
+class VorschlagText(VorschlagMeldung):
+    """Der Text **einer** Fassung, von Hand geschrieben."""
+
+    text: str = Field(min_length=1, max_length=8000)
+
+
+class VorschlagErgebnis(VorschlagMeldung):
+    """Was aus **einer** Fassung geworden ist.
+
+    Bewusst ohne Textfeld. Was zurueckkommt, ist der Ausgang, die Fassung und
+    der Grund - der Beitrag selbst hat den Server nur in eine Richtung
+    verlassen, und ein manipuliertes Formular kann damit keinen anderen Text
+    in eine Gruppe bringen als den, den der Server vorbereitet hat.
+    """
+
+    ausgang: str = Field(pattern="^(veroeffentlicht|fehlgeschlagen)$")
+    fehler: str = Field(default="", max_length=300)
 
 
 class BeitragMeldung(BaseModel):
@@ -442,6 +534,55 @@ def _ziel_url(
     return (str(config.get("marketing", "fallback_url", default="")) or "/"), False
 
 
+def _kette_automatisch(
+    store: MarketingStore,
+    campaign: Campaign,
+    gruppen: dict[str, Any],
+    config: AppConfig,
+) -> str:
+    """Text, Freigabe, Warteschlange - in einem Zug. Returns: was dabei geschah.
+
+    Der Weg fuer "Arbeiten" bei leerer Warteschlange. Die drei Schritte sind
+    dieselben wie auf der Kommandozeile und in der Knopfreihe; hier laufen sie
+    nur ohne Rueckfrage, weil keiner von ihnen etwas veroeffentlicht und keiner
+    einen vorhandenen Text ueberschreibt.
+
+    Der Bericht wird zurueckgegeben und nicht verschluckt: Bleibt die
+    Warteschlange danach leer, ist er die einzige Auskunft darueber, woran es
+    lag - "0 Texte gefuellt" bei einer Kampagne ohne Zuordnungen sagt etwas
+    ganz anderes als "12 gefuellt, 0 freigegeben".
+
+    Ein Schritt, der an der Zustandsmaschine scheitert, beendet die Kette
+    nicht: Die drei sind unabhaengig voneinander, und ein ``approve``, das
+    nichts findet, ist kein Grund, das ``enqueue`` ausfallen zu lassen.
+    """
+    from fbgroups.marketing.queue import UngueltigerUebergang
+
+    # Die haeufigste Ursache zuerst und im Klartext. "0 Texte gefuellt,
+    # freigegeben, eingereiht" ist zwar richtig, beantwortet aber nicht, woran
+    # es liegt - und ohne Zuordnungen liegt es nie an der Kette.
+    if not store.links_for_campaign(campaign.campaign_id):
+        return (
+            "Diese Kampagne hat keine Gruppen zugeordnet. Zuordnen in der "
+            "Uebersicht (Spalte 'Kampagne') oder mit: fbgroups campaign sync "
+            f"{campaign.campaign_id}"
+        )
+
+    benennung = {"text": "Texte", "approve": "freigegeben", "enqueue": "eingereiht"}
+    teile: list[str] = []
+    for schritt in ("text", "approve", "enqueue"):
+        try:
+            getan, hinweis = _vorbereiten(store, campaign, gruppen, schritt, False, config)
+        except (UngueltigerUebergang, ValueError) as exc:
+            getan, hinweis = 0, str(exc)
+        # Die Zahl steht vorn, nicht der Satz: "Freigegeben." laesst offen, ob
+        # es zwoelf waren oder keine - und genau das ist die Frage, wenn die
+        # Warteschlange danach immer noch leer ist.
+        teile.append(f"{getan} {benennung[schritt]}")
+        store.audit("arbeiten_" + schritt, campaign.campaign_id, f"{getan}: {hinweis}")
+    return " · ".join(teile)
+
+
 def _vorbereiten(
     store: MarketingStore,
     campaign: Campaign,
@@ -460,7 +601,6 @@ def _vorbereiten(
     zweite Fassung der Regeln fuer die Oberflaeche waere eine zweite Wahrheit
     ueber denselben Ablauf.
     """
-    from fbgroups.marketing.models import TextQuelle
     from fbgroups.marketing.queue import UngueltigerUebergang
 
     campaign_id = campaign.campaign_id
@@ -473,105 +613,66 @@ def _vorbereiten(
             hinweis += f", {zahlen['ereignisse']} Ereignisse geloescht"
         return zahlen["zuordnungen"], hinweis
 
-    if schritt == "text":
-        if not campaign.message_template.strip():
-            return 0, "Diese Kampagne hat keine Textvorlage."
-        if "{link}" not in campaign.message_template:
-            return 0, "Die Vorlage enthaelt kein {link} - der Beitrag haette keinen Link."
-        betroffen = [
-            link
-            for link in links
-            if not link.post_text.strip()
-            and link.job_status not in (JobStatus.PUBLISHED, JobStatus.PROCESSING)
-        ]
-        for link in betroffen:
-            store.set_post_text(
-                campaign_id, link.group_id, campaign.message_template, TextQuelle.VORLAGE
+    if schritt in ("text", "text_neu"):
+        from fbgroups.marketing import vorlagen
+
+        # Die eigene Vorlage der Kampagne ist optional. Ohne sie kommt der Text
+        # aus dem Vorrat in textvorlagen.yaml - der Normalfall, seit die
+        # Abwechslung von dort und nicht aus einem Sprachmodell kommt.
+        eigene = campaign.message_template.strip()
+        if eigene and vorlagen.PLATZHALTER_LINK not in eigene:
+            return 0, (
+                "Die eigene Vorlage der Kampagne enthaelt kein {link} - "
+                "die Gruppen bekaemen nie einen Klick gutgeschrieben."
             )
-        return len(betroffen), "Vorlage eingetragen, wo noch kein Text stand."
 
-    if schritt == "draft":
-        # Die KI ist ein Aufsatz: Laeuft sie nicht, ist das eine Auskunft und
-        # kein Fehler des Dienstes. Deshalb eine Meldung statt einer Ausnahme -
-        # der Rest der Kette (Vorlage, Freigabe, Warteschlange) bleibt gangbar.
-        from fbgroups.marketing.ki import KINichtVerfuegbar, baue_modell
-        from fbgroups.marketing.ki.basis import (
-            UngueltigerVorschlag,
-            auftrag_aus_gruppe,
-            erzeuge_entwuerfe,
-        )
+        # "text_neu" schreibt auch dort, wo schon etwas steht. Der Weg fuer
+        # geaenderte Vorlagen; er verwirft Handarbeit, deshalb ein eigener
+        # Schritt und nicht eine stillere Vorgabe.
+        neu_schreiben = schritt == "text_neu"
 
-        ohne_text = [
-            link
-            for link in links
-            if not link.post_text.strip()
-            and link.job_status not in (JobStatus.PUBLISHED, JobStatus.PROCESSING)
-        ]
-        if not ohne_text:
-            return 0, "Alle haben schon einen Text."
-        try:
-            modell = baue_modell(config)
-        except KINichtVerfuegbar as exc:
-            return 0, str(exc)
-
-        # Nur ein Haeppchen je Klick. Siehe oben: Ein lokales Modell braucht je
-        # Fassung bis zu einer Minute, und eine HTTP-Anfrage ueber den ganzen
-        # Bestand liefe in jede Zeitgrenze zwischen Browser und Modell.
-        offen_gesamt = len(ohne_text)
-        ohne_text = ohne_text[:JE_KLICK]
-
-        varianten = int(config.get("marketing", "posting", "ki", "varianten", default=3))
-        fertig = 0
-        # Die Gruende werden gesammelt, nicht verschluckt. Ein Knopf, der "0
-        # betroffen" meldet und den Grund fuer sich behaelt, laesst den
-        # Benutzer raten - und die haeufigsten Gruende (Modell haelt den
-        # Platzhalter nicht ein, Ollama antwortet nicht) sind behebbar, sobald
-        # man sie kennt.
+        gefuellt = 0
+        kommentare = 0
+        beruehrte = 0
         gruende: list[str] = []
-        for link in ohne_text:
+        for link in links:
+            # Was veroeffentlicht ist oder gerade abgesetzt wird, bleibt
+            # unangetastet - der Text steht dort schon in der Gruppe.
+            if link.job_status in (JobStatus.PUBLISHED, JobStatus.PROCESSING):
+                continue
             group = gruppen.get(link.group_id)
             if group is None:
                 gruende.append(f"{link.group_id}: nicht im Bestand")
                 continue
-            auftrag = auftrag_aus_gruppe(group, campaign, config, varianten=varianten)
-            auftrag.bisherige_texte = [
-                e.text for e in store.entwuerfe_for(campaign_id, link.group_id)
-            ]
-            try:
-                entwuerfe, verworfen = erzeuge_entwuerfe(
-                    modell, auftrag, campaign_id=campaign_id, group_id=link.group_id
-                )
-            except (UngueltigerVorschlag, KINichtVerfuegbar) as exc:
-                gruende.append(f"{group.name or link.group_id}: {exc}")
-                continue
-            if not entwuerfe:
-                gruende.append(
-                    f"{group.name or link.group_id}: keine brauchbare Fassung"
-                    + (f" ({verworfen[0]})" if verworfen else "")
-                )
-                continue
-            for entwurf in entwuerfe:
-                store.add_entwurf(entwurf)
-            store.set_post_text(
-                campaign_id, link.group_id, entwuerfe[0].text, TextQuelle.KI
-            )
-            # Der Stand darf hier scheitern, ohne den Lauf zu beenden: Der Text
-            # steht schon, und eine Gruppe mehr in der Freigabe kostet einen
-            # Blick - eine abgebrochene Erzeugung kostet alle uebrigen Gruppen.
-            with contextlib.suppress(UngueltigerUebergang):
-                store.set_job_status(campaign_id, link.group_id, JobStatus.AI_GENERATED)
-            fertig += 1
 
-        if fertig:
-            rest = offen_gesamt - fertig
-            hinweis = "Fassungen erzeugt."
-            if rest > 0:
-                hinweis += f" Noch {rest} ohne Text - nochmal klicken."
-            if gruende:
-                hinweis += f" {len(gruende)} ohne Ergebnis: {gruende[0]}"
-            return fertig, hinweis
-        # Nichts entstanden - dann ist der Grund die ganze Auskunft.
-        return 0, gruende[0] if gruende else "Kein Vorschlag entstanden."
+            try:
+                # Dieselbe Stelle, die auch die Arbeitsseite aufruft. Eine
+                # zweite Fassung der Fuellregeln waere eine zweite Wahrheit
+                # darueber, welche Vorlage eine Gruppe bekommt.
+                entstanden = stelle_texte_bereit(
+                    store, campaign, group, config, ueberschreiben=neu_schreiben
+                )
+            except vorlagen.VorlageFehlt as exc:
+                if str(exc) not in gruende:
+                    gruende.append(str(exc))
+                continue
+
+            gefuellt += entstanden.get(Texttyp.POST, 0)
+            kommentare += entstanden.get(Texttyp.KOMMENTAR, 0)
+            beruehrte += 1
+
+        teile = [f"{gefuellt} Beitragsfassungen"]
+        if campaign.kommentare:
+            teile.append(f"{kommentare} Kommentarfassungen")
+        teile.append(f"in {beruehrte} Gruppen")
+        if gruende:
+            teile.append("; ".join(gruende[:3]))
+        # Gezaehlt werden die **Fassungen**, nicht die Gruppen: Seit eine
+        # Gruppe fuenf davon bekommt, ist "12 Texte" bei zwoelf Gruppen eine
+        # andere Auskunft als bei zwei. Der Rueckgabewert steuert ausserdem,
+        # ob die Werkbank die Seite neu laedt - und neu zu laden lohnt sich
+        # genau dann, wenn etwas entstanden ist.
+        return gefuellt + kommentare, ", ".join(teile) + "."
 
     if schritt == "approve":
         # Ohne Text weist ``pruefe_uebergang`` ohnehin ab - solche Zuordnungen
@@ -623,6 +724,45 @@ def _vorbereiten(
             except UngueltigerUebergang:
                 continue
         return fertig, "Nach Score eingereiht - die besten zuerst."
+
+    if schritt == "zurueckholen":
+        # Die Gegenrichtung zu "Passt nicht" auf der Arbeitsseite.
+        #
+        # Sie fehlte, und das war eine Sackgasse mit Ansage: Ein
+        # ``cancelled`` mit Text faellt durch **jede** Zeile dieser Kette -
+        # die Textschritte nehmen nur Textlose, ``approve`` nur draft,
+        # ai_generated und pending_review, ``enqueue`` nur approved. Wer sich
+        # verklickt hatte, sah vier Knoepfe, von denen keiner etwas tat, und
+        # nichts sagte ihm warum. Der einzige Weg zurueck war ``campaign
+        # reset`` auf der Kommandozeile - also ausgerechnet ein Befehl, um
+        # eine Fehlbedienung der Oberflaeche zu heilen.
+        #
+        # Ziel ist ``draft``, und nicht, weil es bequem waere: Es ist laut
+        # ``UEBERGAENGE`` der einzige erlaubte Ausgang aus ``cancelled``. Von
+        # dort geht es mit Text ueber "Freigeben" weiter und ohne Text ueber
+        # "Text von der KI" - beide Wege stehen danach offen.
+        beiseite = [link for link in links if link.job_status is JobStatus.CANCELLED]
+        fertig = 0
+        for link in beiseite:
+            try:
+                store.set_job_status(campaign_id, link.group_id, JobStatus.DRAFT)
+                fertig += 1
+            except UngueltigerUebergang:
+                continue
+        if not fertig:
+            return 0, "Nichts beiseitegelegt - hier ist kein 'Passt nicht' zurueckzunehmen."
+        # Der Text bleibt stehen. "Passt nicht" ist ein Urteil ueber die
+        # Gruppe, nicht ueber den Text; ihn beilaeufig zu loeschen naehme ein
+        # zweites Urteil vorweg, das niemand gefaellt hat.
+        mit_text = sum(1 for link in beiseite if link.post_text.strip())
+        hinweis = f"{fertig} zurueckgeholt - Stand: Entwurf."
+        if mit_text:
+            hinweis += (
+                f" {mit_text} davon haben noch ihren Text und koennen gleich"
+                " freigegeben werden; ein neuer Text entsteht im Textfeld"
+                " auf der Arbeitsseite."
+            )
+        return fertig, hinweis
 
     return 0, f"Unbekannter Schritt: {schritt}"
 
@@ -754,17 +894,31 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         return HTMLResponse(render(sammle_daten(cfg, pfad), nur_lesen=nur_lesen))
 
     @app.get("/arbeit/{campaign_id}", response_class=HTMLResponse)
-    def arbeit(campaign_id: str, request: Request):  # noqa: ANN202
-        """Ein Beitrag, ein Bildschirm - die Arbeitsliste auf dem Server.
+    def arbeit(  # noqa: ANN202
+        campaign_id: str, request: Request, gruppe: int = 1, group_id: str = ""
+    ):
+        """Eine Gruppe, zwei Spalten, zehn Fassungen - die Arbeitsseite.
 
-        Der Bestand lebt hier, aber ``campaign worker`` braucht Zwischenablage
-        und Browser, die es auf einem Server nicht gibt. Beides auf den
-        Arbeitsrechner zu holen hiesse, in eine zweite Datenbank zu schreiben.
-        Also kommt die Arbeit dorthin, wo der Bestand steht: Der Server bereitet
-        vor und zaehlt, der Browser des Menschen kopiert und oeffnet.
+        Der Bestand lebt hier, Zwischenablage und Browser aber auf dem
+        Arbeitsrechner. Die Arbeit dorthin zu holen hiesse, in eine zweite
+        Datenbank zu schreiben. Also kommt die Arbeit dorthin, wo der Bestand
+        steht: Der Server bereitet vor und zaehlt, der Browser des Menschen
+        schreibt, kopiert und oeffnet.
 
-        ``_nur_lokal`` wie jeder schreibende Weg - der Aufruf **beginnt** einen
-        Versuch (``processing`` plus Protokollzeile) und ist damit kein Lesen.
+        **Der Aufruf beginnt nichts.** Er setzt keinen Stand und schreibt
+        keine Protokollzeile - das tut erst eine gemeldete Veroeffentlichung.
+        Vorher war das anders und musste es auch sein: Die Seite nahm einen
+        Beitrag aus der Warteschlange und
+        haette ihn bei einem geschlossenen Reiter verloren. Eine Seite, die
+        nichts herausnimmt, kann auch nichts verlieren.
+
+        Er steht trotzdem hinter ``_nur_lokal``: Von hier aus wird
+        veroeffentlicht, und die Knoepfe dafuer stehen auf dieser Seite.
+
+        ``?gruppe=N`` blaettert, ``?group_id=...`` springt eine bestimmte
+        Gruppe an. Die Kennung geht vor: Wer eine bestimmte Gruppe meint,
+        meint sie auch dann noch, wenn sich die Rangfolge zwischendurch
+        geaendert hat.
         """
         _nur_lokal(request)
         with SqliteStore(pfad) as gruppen_store:
@@ -773,69 +927,225 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             campaign = store.load_campaign(campaign_id)
             if campaign is None:
                 raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
-            ergebnis = hole_auftrag(
-                store,
-                campaign,
-                gruppen,
-                lade_grenzen(cfg),
-                ausgeloest_von="uebersicht",
-                sitzung="browser",
+
+            reihe = arbeitsreihenfolge(store, campaign_id, gruppen)
+            if not reihe:
+                # Der einzige verbliebene Grund, die Seite zu verschliessen.
+                # Pausiert und gestoppt halten nur noch das Veroeffentlichen
+                # an - Texte vorbereiten geht weiter.
+                bericht = _kette_automatisch(store, campaign, gruppen, cfg)
+                reihe = arbeitsreihenfolge(store, campaign_id, gruppen)
+                if not reihe:
+                    return HTMLResponse(
+                        render_sperre(Sperre(Grund.KEINE_GRUPPEN), campaign_id, bericht)
+                    )
+
+            # Hinter das Ende geblaettert: zurueck auf die erste Gruppe statt
+            # auf eine Fehlerseite. Die Liste wird kuerzer, waehrend man
+            # darin liest - eine ausgeschlossene Gruppe verschwindet daraus.
+            if not group_id and not 1 <= gruppe <= len(reihe):
+                return RedirectResponse(f"/arbeit/{campaign_id}", status_code=303)
+
+            stand = hole_gruppenarbeit(
+                store, campaign, gruppen,
+                nummer=gruppe, group_id=group_id, reihe=reihe,
             )
-        if isinstance(ergebnis, Sperre):
-            return HTMLResponse(render_sperre(ergebnis, campaign_id))
-        return HTMLResponse(render_auftrag(ergebnis, campaign_id))
+            if stand is None:
+                return RedirectResponse(f"/arbeit/{campaign_id}", status_code=303)
 
-    @app.post("/arbeit/{campaign_id}/ergebnis")
-    async def arbeit_ergebnis(campaign_id: str, request: Request):  # noqa: ANN202
-        """Traegt den Ausgang ein und schickt weiter zur naechsten Gruppe.
+            # Fehlen die Fassungen dieser Gruppe, entstehen sie beim Oeffnen -
+            # ohne Rueckfrage, wie die Vorbereitungskette. Zulaessig ist das,
+            # weil nichts davon veroeffentlicht und nichts einen vorhandenen
+            # Text ueberschreibt; das Schlimmste, was ein ueberfluessiger Lauf
+            # anrichtet, sind fuenf Zeilen in einer Tabelle. Eine Knopfreihe
+            # zu drueckten, bevor ueberhaupt ein Text dasteht, waere kein
+            # Entschluss, sondern eine Wegstrecke.
+            if not stand.posts or (campaign.kommentare and not stand.kommentare):
+                gruppe_datensatz = gruppen.get(stand.link.group_id)
+                if gruppe_datensatz is not None:
+                    from fbgroups.marketing.vorlagen import VorlageFehlt
 
-        Ein Formular statt JSON: Wer hier arbeitet, hat gerade in einem anderen
-        Reiter einen Beitrag abgesetzt und kommt mit einem Klick zurueck. Die
-        Weiterleitung nach dem POST ist Absicht (303) - ein Neuladen soll den
-        Ausgang nicht ein zweites Mal melden.
+                    try:
+                        stelle_texte_bereit(store, campaign, gruppe_datensatz, cfg)
+                    except VorlageFehlt:
+                        # Eine Luecke in textvorlagen.yaml haelt die Seite
+                        # nicht an: Der Mensch kann hier selbst schreiben, und
+                        # ``config-check`` nennt die Luecke beim Namen.
+                        pass
+                    else:
+                        stand = hole_gruppenarbeit(
+                            store, campaign, gruppen,
+                            nummer=stand.nummer, reihe=reihe,
+                        )
+                        if stand is None:  # pragma: no cover - Reihe unveraendert
+                            return RedirectResponse(
+                                f"/arbeit/{campaign_id}", status_code=303
+                            )
 
-        Der Text kommt **nicht** aus dem Formular zurueck. Was zurueckkommt,
-        ist der Ausgang und die ``versuch_id``; der Beitrag selbst hat den
-        Server nur in eine Richtung verlassen.
+            eintraege = auswahlliste(store, campaign_id, reihe, gruppen)
+
+        return HTMLResponse(
+            render_gruppenarbeit(stand, campaign_id, eintraege, cfg)
+        )
+
+    def _vorschlag_oder_404(  # noqa: ANN202
+        store: MarketingStore, campaign_id: str, group_id: str
+    ):
+        """Kampagne und Zuordnung nachschlagen - fuer alle drei Vorschlagswege.
+
+        Dreimal dasselbe zu schreiben hiesse, dass die dritte Kopie irgendwann
+        die laxere ist. Ein Vorschlag ohne Zuordnung hat keinen Tracking-Code
+        und damit keinen Link - er duerfte gar nicht entstehen.
+        """
+        campaign = store.load_campaign(campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
+        link = store.link_for(campaign_id, group_id)
+        if link is None:
+            raise HTTPException(status_code=404, detail="Keine Zuordnung")
+        return campaign, link
+
+    @app.post("/arbeit/{campaign_id}/vorschlag/text")
+    def vorschlag_text(  # noqa: ANN202
+        campaign_id: str, meldung: VorschlagText, request: Request
+    ):
+        """Speichert **genau eine** Fassung - nicht die vier daneben.
+
+        Die einzige Stelle, an der ein Text zum Server zurueckwandert, und sie
+        ist ein eigener Weg statt eines Feldes im Ergebnisformular. Der
+        Unterschied ist die ganze Begruendung: Das Formular, das einen
+        Ausgang meldet, traegt weiterhin nur Kennung, Zweck, Nummer und Grund;
+        ein Textfeld darin waere ein Kanal, den niemand geoeffnet haben wollte.
+
+        Geprueft wird mit **derselben** ``pruefe_platzhalter`` wie jeder
+        andere Text: genau ein ``{link}``, keine ausgeschriebene Adresse, kein
+        codeaehnliches Muster. Wer hier eine Adresse hineinschriebe, haette
+        einen Beitrag, der richtig aussieht und dessen Gruppe nie einen Klick
+        gutgeschrieben bekommt - der Fehler, den niemand bemerkt.
+
+        Zurueck kommt der gespeicherte Text **und** die angezeigte Fassung mit
+        eingesetztem Link. Der Browser rechnet das eine nicht in das andere
+        um: Die Ersetzung geschieht in ``beitrag.mit_link`` und nirgends
+        sonst.
         """
         _nur_lokal(request)
-        # ``request.form()`` verlangt ``python-multipart``. Das Formular hier
-        # traegt vier kurze Textfelder und keine Datei - dafuer genuegt
-        # ``parse_qsl`` aus der Standardbibliothek. Ein Paket mehr waere fuer
-        # vier Felder zu viel, und ``[web]`` soll klein bleiben.
-        rumpf = (await request.body()).decode("utf-8", errors="replace")
-        formular = dict(parse_qsl(rumpf, keep_blank_values=True))
-        ausgang = formular.get("ausgang", "")
-        group_id = formular.get("group_id", "")
-        fehler = formular.get("fehler", "").strip()
+        from fbgroups.marketing.beitrag import mit_link
+        from fbgroups.marketing.vorlagen import UngueltigerText, pruefe_platzhalter
+
+        text = meldung.text.strip()
         try:
-            versuch_id = int(formular.get("versuch_id", "0"))
-        except ValueError:
-            versuch_id = 0
-
-        if not group_id or not versuch_id:
-            raise HTTPException(status_code=400, detail="Unvollstaendige Meldung")
-
-        ergebnis = {
-            "veroeffentlicht": Ergebnis(erfolg=True),
-            "fehlgeschlagen": Ergebnis(erfolg=False, fehler=fehler or "ohne Angabe"),
-            "uebersprungen": Ergebnis(erfolg=False, uebersprungen=True),
-            "schluss": Ergebnis(erfolg=False, abbrechen=True),
-        }.get(ausgang)
-        if ergebnis is None:
-            raise HTTPException(status_code=400, detail=f"Unbekannter Ausgang: {ausgang}")
+            pruefe_platzhalter(text)
+        except UngueltigerText as exc:
+            return JSONResponse({"ok": False, "meldung": str(exc)})
 
         with _store() as store:
-            if store.load_campaign(campaign_id) is None:
-                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
-            melde_ergebnis(store, campaign_id, group_id, versuch_id, ergebnis)
-            store.audit("beitrag_" + ausgang, f"{campaign_id}/{group_id}", fehler)
+            campaign, link = _vorschlag_oder_404(store, campaign_id, meldung.group_id)
+            vorschlag = store.setze_vorschlag_text(
+                campaign_id, meldung.group_id, meldung.texttyp,
+                meldung.nummer, text, TextQuelle.HAND,
+            )
+            store.audit(
+                "vorschlag_von_hand",
+                f"{campaign_id}/{meldung.group_id}",
+                f"{meldung.texttyp.value} {meldung.nummer}",
+            )
+            return JSONResponse({
+                "ok": True,
+                "nummer": vorschlag.nummer,
+                "text": vorschlag.text,
+                "angezeigt": mit_link(campaign, link, vorschlag.text),
+                "stand": vorschlag.status.value,
+            })
 
-        # Nach "Schluss" zurueck zur Uebersicht: Der naechste Auftrag laege
-        # sonst sofort wieder auf dem Bildschirm, und "Schluss" haette nichts
-        # bewirkt.
-        ziel = "/" if ausgang == "schluss" else f"/arbeit/{campaign_id}"
-        return RedirectResponse(ziel, status_code=303)
+    @app.post("/arbeit/{campaign_id}/vorschlag/zuruecksetzen")
+    def vorschlag_zuruecksetzen(  # noqa: ANN202
+        campaign_id: str, meldung: VorschlagMeldung, request: Request
+    ):
+        """Holt den erzeugten Text **dieser** Fassung zurueck.
+
+        Genau dafuer steht ``generated_text`` neben ``text``. Ohne ihn waere
+        jede Ueberarbeitung endgueltig, und der einzige Weg zurueck fuehrte
+        ueber die Kommandozeile.
+        """
+        _nur_lokal(request)
+        from fbgroups.marketing.beitrag import mit_link
+
+        with _store() as store:
+            campaign, link = _vorschlag_oder_404(store, campaign_id, meldung.group_id)
+            vorhanden = store.vorschlag(
+                campaign_id, meldung.group_id, meldung.texttyp, meldung.nummer
+            )
+            if vorhanden is None or not vorhanden.generated_text.strip():
+                return JSONResponse({
+                    "ok": False,
+                    "meldung": "Fuer diese Fassung wurde nie ein Text erzeugt.",
+                })
+            vorschlag = store.vorschlag_zuruecksetzen(
+                campaign_id, meldung.group_id, meldung.texttyp, meldung.nummer
+            )
+            store.audit(
+                "vorschlag_zurueckgesetzt",
+                f"{campaign_id}/{meldung.group_id}",
+                f"{meldung.texttyp.value} {meldung.nummer}",
+            )
+            return JSONResponse({
+                "ok": True,
+                "nummer": vorschlag.nummer,
+                "text": vorschlag.text,
+                "angezeigt": mit_link(campaign, link, vorschlag.text),
+                "stand": vorschlag.status.value,
+            })
+
+    @app.post("/arbeit/{campaign_id}/vorschlag/ergebnis")
+    def vorschlag_ergebnis(  # noqa: ANN202
+        campaign_id: str, meldung: VorschlagErgebnis, request: Request
+    ):
+        """Traegt den Ausgang **einer** Fassung ein - und schaltet nichts weiter.
+
+        Der Kern der gruppenweisen Arbeitsweise. Frueher endete dieser Weg in
+        einer 303 auf dieselbe Adresse, und die holte den naechsten Beitrag:
+        Wer veroeffentlichte, bekam damit die naechste Gruppe, ob er wollte
+        oder nicht. Jetzt antwortet er mit dem neuen Stand **dieser** Fassung,
+        und der Browser aendert genau die eine Stelle, um die es geht - die
+        Gruppe bleibt, der gewaehlte Vorschlag bleibt, die andere Spalte
+        bleibt unberuehrt.
+
+        Kein Formular, sondern JSON, und das ist die Folge davon: Ein
+        Formular fuehrt zu einer neuen Seite; hier soll gerade keine neue
+        Seite entstehen.
+
+        Die Regeln liegen unveraendert in ``arbeit.melde_vorschlag`` - eine
+        zweite Fassung fuer den Dienst waere eine zweite Zaehlweise fuer
+        dieselben Beitraege.
+        """
+        _nur_lokal(request)
+        with _store() as store:
+            campaign, link = _vorschlag_oder_404(store, campaign_id, meldung.group_id)
+            erfolg = meldung.ausgang == "veroeffentlicht"
+            ergebnis = melde_vorschlag(
+                store,
+                campaign,
+                link,
+                meldung.texttyp,
+                meldung.nummer,
+                Ergebnis(erfolg=erfolg, fehler=meldung.fehler.strip()),
+                ausgeloest_von="arbeitsseite",
+                sitzung="browser",
+            )
+            if isinstance(ergebnis, Sperre):
+                return JSONResponse({"ok": False, "meldung": ergebnis.grund})
+
+            store.audit(
+                "vorschlag_" + meldung.ausgang,
+                f"{campaign_id}/{meldung.group_id}",
+                f"{meldung.texttyp.value} {meldung.nummer}: {meldung.fehler}",
+            )
+            return JSONResponse({
+                "ok": True,
+                "nummer": ergebnis.nummer,
+                "stand": ergebnis.status.value,
+                "fehler": ergebnis.fehler,
+            })
 
     @app.post("/stand")
     def stand_setzen(meldung: StandMeldung, request: Request):  # noqa: ANN202
@@ -964,6 +1274,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     language=meldung.language,
                     message_template=meldung.message_template,
                     landing_page=meldung.landing_page,
+                    kommentare=meldung.kommentare,
                     target_audiences=list(meldung.audiences),
                     target_cities=list(meldung.cities),
                 )
@@ -993,6 +1304,36 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             store.save_campaign(campaign)
             store.audit("kampagne_status", campaign_id, meldung.status.value)
         return JSONResponse({"campaign_id": campaign_id, "status": meldung.status.value})
+
+    @app.post("/kampagnen/{campaign_id}/texte")
+    def kampagne_textarten(  # noqa: ANN202
+        campaign_id: str, meldung: TextartenMeldung, request: Request
+    ):
+        """Schaltet die Kommentartexte einer Kampagne an oder aus.
+
+        **Es entsteht dabei nichts und es verschwindet nichts.** Die Texte
+        kommen beim naechsten "Texte erzeugen", und ein bereits geschriebener
+        Kommentar bleibt stehen, auch wenn der Haken faellt: Er koennte von
+        Hand ueberarbeitet sein, und ein Schalter, der beilaeufig Texte
+        loescht, ist ein Schalter mit unumkehrbarer Wirkung.
+
+        Der Weg steht neben ``/status`` und nicht in ``/auswahl``: Die
+        Auswahlregel sagt, **welche Gruppen** die Kampagne erfasst; dies sagt,
+        **was fuer Texte** sie braucht. Beides in ein Formular zu legen hiesse,
+        zwei Fragen zu einer zu machen.
+        """
+        _nur_lokal(request)
+        with _store() as store:
+            campaign = store.load_campaign(campaign_id)
+            if campaign is None:
+                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
+            campaign.kommentare = meldung.kommentare
+            campaign.updated_at = datetime.now(UTC)
+            store.save_campaign(campaign)
+            store.audit(
+                "kampagne_textarten", campaign_id, f"kommentare={meldung.kommentare}"
+            )
+        return JSONResponse({"campaign_id": campaign_id, "kommentare": campaign.kommentare})
 
     @app.post("/kampagnen/{campaign_id}/vorbereiten")
     def kampagne_vorbereiten(  # noqa: ANN202
@@ -1113,6 +1454,77 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         return JSONResponse(
             {"group_id": group_id, "zugeordnet": True, "code": code,
              "kampagne": meldung.campaign_id}
+        )
+
+    @app.post("/kampagnen/{campaign_id}/gruppen")
+    def kampagne_gruppen_zuordnen(  # noqa: ANN202
+        campaign_id: str, meldung: SammelZuordnenMeldung, request: Request
+    ):
+        """Ordnet die angehakten Gruppen einer Kampagne zu.
+
+        Der dritte Weg neben Regel und Einzelfall, und er schliesst eine
+        Luecke: ``campaign sync`` beschreibt die Auswahl als **Regel** - wer
+        aber genau diese zwoelf Gruppen meint, muesste sie erst als Regel
+        formulieren, und eine Regel, die zwoelf Gruppen trifft und keine
+        dreizehnte, ist meist gar nicht formulierbar.
+
+        **Es wird nur hinzugefuegt.** Eine bestehende Zuordnung bleibt
+        unangetastet und zaehlt als ``schon_zugeordnet``; ihr Code steht
+        moeglicherweise in einem veroeffentlichten Beitrag. Unbekannte
+        Kennungen brechen den Zug nicht ab - sie werden gezaehlt und genannt.
+
+        Die Reihenfolge kommt aus ``selection.vergabereihenfolge``, nicht aus
+        der Reihenfolge der Haken: Sonst bekaeme dieselbe Gruppe eine andere
+        Nummer, je nachdem, in welcher Sortierung die Tabelle gerade stand.
+        """
+        _nur_lokal(request)
+        from fbgroups.marketing.selection import vergabereihenfolge
+        from fbgroups.marketing.tracking import CodeAllocator, tracking_url
+
+        gewuenscht = list(dict.fromkeys(meldung.group_ids))   # Reihenfolge egal, Dubletten weg
+        with SqliteStore(pfad) as gruppen_store:
+            bekannt = {g.group_id: g for g in gruppen_store.load_groups()}
+
+        gefunden = [bekannt[gid] for gid in gewuenscht if gid in bekannt]
+        unbekannt = [gid for gid in gewuenscht if gid not in bekannt]
+
+        with _store() as store:
+            campaign = store.load_campaign(campaign_id)
+            if campaign is None:
+                raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
+
+            schon = [g for g in gefunden if store.link_for(campaign_id, g.group_id) is not None]
+            offen = sorted(
+                (g for g in gefunden if store.link_for(campaign_id, g.group_id) is None),
+                key=vergabereihenfolge,
+            )
+
+            # Ein Allocator fuer den ganzen Zug - er zaehlt je Kuerzelpaar
+            # weiter, statt den Bestand je Gruppe neu zu befragen.
+            allocator = CodeAllocator(cfg, store.assigned_codes())
+            codes: dict[str, str] = {}
+            for gruppe in offen:
+                code = allocator.next_for(gruppe)
+                store.add_link(
+                    CampaignGroup(
+                        campaign_id=campaign_id,
+                        group_id=gruppe.group_id,
+                        tracking_code=code,
+                        tracking_url=tracking_url(code, cfg),
+                    )
+                )
+                codes[gruppe.group_id] = code
+            if codes:
+                store.audit("zuordnung_sammel", campaign_id, f"{len(codes)} Gruppen")
+
+        return JSONResponse(
+            {
+                "campaign_id": campaign_id,
+                "neu": len(codes),
+                "schon_zugeordnet": len(schon),
+                "unbekannt": unbekannt,
+                "codes": codes,
+            }
         )
 
     @app.post("/kampagnen/{campaign_id}/loeschen")
@@ -1359,26 +1771,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             {"anzahl": len(meldung.group_ids), "bearbeiten": meldung.bearbeiten,
              "grund": "" if meldung.bearbeiten else meldung.grund}
         )
-
-    @app.post("/ki/test")
-    def ki_testen(request: Request):  # noqa: ANN202
-        """Schickt eine sehr kurze echte Anfrage an den eingestellten Anbieter.
-
-        Hinter ``_nur_lokal`` wie jeder schreibende Weg: Der Aufruf erzeugt
-        wirklich etwas - bei Ollama Sekunden Rechenzeit, bei Anthropic Geld.
-        Ein Weg, den jeder von aussen ausloesen koennte, waere bei einem
-        lokalen Modell eine Einladung, den Rechner lahmzulegen.
-
-        Antwortet immer mit 200 und einem ``ok``-Feld, nie mit einem
-        Fehlercode: Der Aufruf hat seine Auskunft gegeben, auch wenn die
-        Auskunft "laeuft nicht" lautet. Ein 500 saehe aus wie ein Fehler des
-        Dienstes und nicht wie ein abgeschaltetes Ollama.
-        """
-        _nur_lokal(request)
-        from fbgroups.marketing.ki import teste as ki_teste
-
-        geklappt, text = ki_teste(cfg)
-        return JSONResponse({"ok": geklappt, "text": text})
 
     @app.get("/r/{tracking_code}")
     def redirect(tracking_code: str, request: Request):  # noqa: ANN202

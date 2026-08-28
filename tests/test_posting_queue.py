@@ -21,7 +21,6 @@ from fbgroups.marketing.models import (
     Campaign,
     CampaignGroup,
     JobStatus,
-    PostEntwurf,
     PostStatus,
     PostVersuch,
     QueueZustand,
@@ -30,7 +29,6 @@ from fbgroups.marketing.models import (
 from fbgroups.marketing.queue import (
     UEBERGAENGE,
     UngueltigerUebergang,
-    ist_verwaist,
     pruefe_uebergang,
     uebergang_erlaubt,
 )
@@ -128,19 +126,6 @@ def test_fehlermeldung_nennt_die_moeglichen_wege() -> None:
     with pytest.raises(UngueltigerUebergang, match="approved"):
         pruefe_uebergang(JobStatus.PENDING_REVIEW, JobStatus.PUBLISHED, hat_text=True)
 
-
-def test_verwaist_erst_nach_der_frist() -> None:
-    from datetime import UTC, datetime, timedelta
-
-    gerade_eben = datetime.now(UTC) - timedelta(minutes=5)
-    lange_her = datetime.now(UTC) - timedelta(minutes=90)
-
-    assert not ist_verwaist(gerade_eben, 30)
-    assert ist_verwaist(lange_her, 30)
-    assert ist_verwaist(None, 30)      # ohne Zeitpunkt: im Zweifel melden
-
-
-# --- Der Job im Bestand -------------------------------------------------
 
 def test_neue_zuordnung_beginnt_als_entwurf(bestand: Path) -> None:
     with MarketingStore(bestand) as store:
@@ -364,57 +349,6 @@ def test_eine_pausierte_kampagne_haelt_keine_andere_an(bestand: Path) -> None:
         assert store.queue_zustand("zweite") is QueueZustand.LAUFEND
 
 
-# --- Entwuerfe ----------------------------------------------------------
-
-def test_varianten_zaehlen_je_gruppe_hoch(bestand: Path) -> None:
-    """Mehrere Fassungen zur Auswahl - sonst klingen 310 Beitraege gleich."""
-    with MarketingStore(bestand) as store:
-        for text in ("Fassung A", "Fassung B", "Fassung C"):
-            store.add_entwurf(
-                PostEntwurf(campaign_id="batreeq", group_id=GID, variante=0, text=text)
-            )
-        entwuerfe = store.entwuerfe_for("batreeq", GID)
-
-    assert [e.variante for e in entwuerfe] == [1, 2, 3]
-    assert [e.text for e in entwuerfe] == ["Fassung A", "Fassung B", "Fassung C"]
-
-
-def test_gewaehlte_fassung_wird_zum_beitragstext(bestand: Path) -> None:
-    with MarketingStore(bestand) as store:
-        store.add_entwurf(
-            PostEntwurf(campaign_id="batreeq", group_id=GID, variante=0, text="Fassung A")
-        )
-        zweite = store.add_entwurf(
-            PostEntwurf(campaign_id="batreeq", group_id=GID, variante=0, text="Fassung B")
-        )
-
-        store.waehle_entwurf(zweite)
-        link = store.link_for("batreeq", GID)
-        entwuerfe = store.entwuerfe_for("batreeq", GID)
-
-    assert link is not None
-    assert link.post_text == "Fassung B"
-    # Die verworfene bleibt stehen - sie beantwortet, wogegen entschieden wurde.
-    assert [e.gewaehlt for e in entwuerfe] == [False, True]
-
-
-def test_eine_zweite_wahl_hebt_die_erste_auf(bestand: Path) -> None:
-    with MarketingStore(bestand) as store:
-        erste = store.add_entwurf(
-            PostEntwurf(campaign_id="batreeq", group_id=GID, variante=0, text="A")
-        )
-        zweite = store.add_entwurf(
-            PostEntwurf(campaign_id="batreeq", group_id=GID, variante=0, text="B")
-        )
-        store.waehle_entwurf(zweite)
-        store.waehle_entwurf(erste)
-
-        gewaehlt = [e for e in store.entwuerfe_for("batreeq", GID) if e.gewaehlt]
-
-    assert len(gewaehlt) == 1
-    assert gewaehlt[0].text == "A"
-
-
 # --- Versuchsprotokoll --------------------------------------------------
 
 def test_jeder_versuch_bekommt_seine_eigene_zeile(bestand: Path) -> None:
@@ -480,7 +414,6 @@ def test_migration_leitet_den_job_aus_dem_ergebnis_ab(bestand: Path) -> None:
     conn = sqlite3.connect(bestand)
     conn.executescript(
         """
-        DROP TABLE post_entwuerfe;
         DROP TABLE post_versuche;
         UPDATE campaign_groups SET job_status = 'draft';
         PRAGMA user_version = 10;
@@ -506,7 +439,10 @@ def test_migration_leitet_den_job_aus_dem_ergebnis_ab(bestand: Path) -> None:
     # Die Tracking-Codes bleiben unberuehrt - sie stehen in Beitraegen.
     assert veroeffentlicht.tracking_code == CODE
     assert gescheitert.tracking_code == CODE_B
-    assert {"post_entwuerfe", "post_versuche"} <= tabellen
+    assert "post_versuche" in tabellen
+    # ``post_entwuerfe`` legt der Schritt nicht mehr an: Die KI-Schicht ist
+    # entfernt, und niemand schreibt oder liest die Tabelle noch.
+    assert "post_entwuerfe" not in tabellen
 
 
 def test_die_beiden_achsen_koennen_nicht_auseinanderlaufen(bestand: Path) -> None:

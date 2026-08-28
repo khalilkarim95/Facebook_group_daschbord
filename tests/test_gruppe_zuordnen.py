@@ -278,6 +278,30 @@ def test_eine_pausierte_kampagne_schlaegt_nichts_vor(bestand: Path, config) -> N
         assert "zweite" not in [k["id"] for k in zeile["passt_zu"]]
 
 
+def test_das_auswahlfeld_spart_die_vorschlaege_nicht_aus(bestand: Path, config) -> None:
+    """Das Feld nennt jede Kampagne, in der die Gruppe noch nicht steht.
+
+    Vorher zog es die vorgeschlagenen Kampagnen ab, weil fuer die schon ein
+    Knopf danebenstand. Bei **einer** Kampagne, der die Gruppe bereits
+    zugeordnet ist, blieb damit nichts uebrig: Die Spalte zeigte nur noch eine
+    Marke, und in der Spalte, die es fuer die Frage "wohin gehoert diese
+    Gruppe?" gibt, liess sich nichts mehr waehlen.
+
+    Geprueft wird an der Quelle des Skripts, weil die Zeile im Browser entsteht
+    - wie bei den uebrigen Tests dieser Datei. Entscheidend ist, dass die Liste
+    allein an den **bestehenden Zuordnungen** haengt (``drin``) und nicht
+    zusaetzlich an den Vorschlaegen.
+    """
+    from fbgroups.marketing.dashboard import render, sammle_daten
+
+    seite = render(sammle_daten(config, bestand))
+
+    assert "waehlbar = (DATEN.kampagnen || []).filter((k) => !drin.has(k.id))" in seite
+    # Der Filter, der den Fehler verursacht hat. Sein Verschwinden ist die
+    # eigentliche Aussage dieses Tests.
+    assert "vorgeschlagen.has" not in seite
+
+
 def test_die_seite_unterscheidet_marke_und_vorschlag(bestand: Path, config) -> None:
     from fbgroups.marketing.dashboard import render, sammle_daten
     from fbgroups.marketing.models import CampaignStatus
@@ -292,3 +316,135 @@ def test_die_seite_unterscheidet_marke_und_vorschlag(bestand: Path, config) -> N
     assert "k-marke" in seite        # zugeordnet
     assert "k-vorschlag" in seite    # passt zur Regel
     assert "k-zuordnen" in seite     # alles uebrige
+
+
+# --- Sammelzuordnung ------------------------------------------------------
+#
+# Der dritte Weg neben Regel und Einzelfall. Die Regel beschreibt die Auswahl
+# als Bedingung; wer genau diese zwoelf Gruppen meint, muesste sie erst als
+# Regel formulieren - und eine Regel, die zwoelf trifft und keine dreizehnte,
+# ist meist gar nicht formulierbar.
+
+def test_mehrere_gruppen_in_einem_zug(client: TestClient, bestand: Path) -> None:
+    antwort = client.post(
+        "/kampagnen/zweite/gruppen", json={"group_ids": [GID, GID_B]}
+    )
+
+    assert antwort.status_code == 200
+    assert antwort.json()["neu"] == 2
+    with MarketingStore(bestand) as store:
+        assert len(store.links_for_campaign("zweite")) == 2
+
+
+def test_bereits_zugeordnete_bleiben_unberuehrt(client: TestClient, bestand: Path) -> None:
+    """Ihr Code steht moeglicherweise in einem veroeffentlichten Beitrag."""
+    antwort = client.post(
+        "/kampagnen/erste/gruppen", json={"group_ids": [GID, GID_B]}
+    )
+    daten = antwort.json()
+
+    assert daten["neu"] == 1                 # nur GID_B kommt dazu
+    assert daten["schon_zugeordnet"] == 1
+    with MarketingStore(bestand) as store:
+        assert store.link_for("erste", GID).tracking_code == "FB-SYR-KLN-001"
+
+
+def test_unbekannte_kennungen_brechen_den_zug_nicht_ab(client: TestClient) -> None:
+    """Eine Zeile aus einem alten Fenster darf nicht elf andere kosten."""
+    antwort = client.post(
+        "/kampagnen/zweite/gruppen", json={"group_ids": [GID, "gibtesnicht"]}
+    )
+    daten = antwort.json()
+
+    assert daten["neu"] == 1
+    assert daten["unbekannt"] == ["gibtesnicht"]
+
+
+def test_dubletten_zaehlen_einmal(client: TestClient) -> None:
+    antwort = client.post(
+        "/kampagnen/zweite/gruppen", json={"group_ids": [GID, GID, GID]}
+    )
+
+    assert antwort.json()["neu"] == 1
+
+
+def test_die_codes_folgen_der_vergabereihenfolge(tmp_path: Path, config) -> None:
+    """Nicht der Reihenfolge der Haken.
+
+    Sonst bekaeme dieselbe Gruppe eine andere Nummer, je nachdem, wie die
+    Tabelle gerade sortiert war - und "gleiche Eingabe, gleiche Codes" waere
+    eine Zusage, die nur zufaellig gilt.
+    """
+    from datetime import UTC, datetime
+
+    frueh = "111111111111111"
+    spaet = "222222222222222"
+    pfad = tmp_path / "groups.sqlite"
+    with SqliteStore(pfad) as store:
+        store.upsert_groups(
+            [
+                Group(
+                    group_id=spaet,
+                    url_canonical=f"https://www.facebook.com/groups/{spaet}",
+                    name="Syrer in Koeln spaet",
+                    city="koeln",
+                    audience_tags=["syrians"],
+                    score=50.0,
+                    score_max=100.0,
+                    first_seen_at=datetime(2026, 5, 1, tzinfo=UTC),
+                ),
+                Group(
+                    group_id=frueh,
+                    url_canonical=f"https://www.facebook.com/groups/{frueh}",
+                    name="Syrer in Koeln frueh",
+                    city="koeln",
+                    audience_tags=["syrians"],
+                    score=99.0,          # besserer Score - darf nichts entscheiden
+                    score_max=100.0,
+                    first_seen_at=datetime(2026, 1, 1, tzinfo=UTC),
+                ),
+            ]
+        )
+    with MarketingStore(pfad) as store:
+        store.save_campaign(
+            Campaign(campaign_id="k", name="K", landing_page="https://b-tarikak.de/")
+        )
+
+    client = TestClient(create_app(config=config, db_path=pfad))
+    # Absichtlich verkehrt herum uebergeben.
+    client.post("/kampagnen/k/gruppen", json={"group_ids": [spaet, frueh]})
+
+    with MarketingStore(pfad) as store:
+        assert store.link_for("k", frueh).tracking_code.endswith("001")
+        assert store.link_for("k", spaet).tracking_code.endswith("002")
+
+
+def test_eine_unbekannte_kampagne_ist_ein_404(client: TestClient) -> None:
+    antwort = client.post(
+        "/kampagnen/gibtesnicht/gruppen", json={"group_ids": [GID]}
+    )
+
+    assert antwort.status_code == 404
+
+
+def test_der_sammelweg_ist_von_aussen_nicht_bedienbar(bestand: Path, config) -> None:
+    """Er vergibt Tracking-Codes - wie jeder schreibende Weg hinter _nur_lokal."""
+    fremd = TestClient(
+        create_app(config=config, db_path=bestand), client=("203.0.113.7", 44321)
+    )
+
+    antwort = fremd.post("/kampagnen/zweite/gruppen", json={"group_ids": [GID]})
+
+    assert antwort.status_code == 404
+
+
+def test_die_sammelleiste_traegt_das_kampagnenfeld(bestand: Path, config) -> None:
+    """Ohne Bedienelement nuetzt der Weg niemandem."""
+    from fbgroups.marketing.dashboard import render, sammle_daten
+
+    seite = render(sammle_daten(config, bestand))
+
+    assert 'id="sammel-kampagne"' in seite
+    assert 'id="sammel-zuordnen"' in seite
+    # Und die Leiste ist im Lesezugang ohnehin ausgeblendet.
+    assert "body.nur-lesen .sammel" in seite

@@ -118,7 +118,7 @@ def present_fields(group: Group) -> list[str]:
     present: list[str] = []
     if group.name.strip():
         present.append("name")
-    if group.member_count_hint is not None:
+    if group.member_count is not None:
         present.append("member_count")
     if group.description_snippet:
         present.append("description")
@@ -152,7 +152,7 @@ def has_sufficient_data(group: Group) -> bool:
     """
     if not group.name.strip():
         return False
-    return bool(group.audience_tags or group.city or group.member_count_hint is not None)
+    return bool(group.audience_tags or group.city or group.member_count is not None)
 
 
 def determine_status(group: Group) -> RecordStatus:
