@@ -671,12 +671,16 @@ def _knopfreihe(kennung: str, zweck: str, url: str) -> str:
         if url
         else ""
     )
+    auto_text = "Automatisch posten" if kennung == "post" else "Automatisch kommentieren"
     return (
         "<div class='knoepfe' style='margin-top:.7rem'>"
         f"<button type='button' class='haupt' id='speichern-{kennung}'>"
         "Speichern</button>"
         f"<button type='button' id='kopieren-{kennung}'>"
         f"{escape(zweck)} kopieren</button>"
+        f"<button type='button' id='auto-{kennung}' class='haupt' "
+        f"style='background:#7e22ce;border-color:#9333ea'>"
+        f"{auto_text}</button>"
         + oeffnen
         + "</div>"
         f"<div class='meldung' id='meldung-{kennung}'></div>"
@@ -988,6 +992,44 @@ def _skript(campaign_id: str, arbeit: Gruppenarbeit) -> str:
     zeichneStand(typ);
   }};
 
+  const automatisch = async (typ) => {{
+    const knopf = id('auto', typ);
+    const meldung = id('meldung', typ);
+    if (schmutzig(typ) && !(await speichere(typ))) return;
+    const fassung = finde(typ, gewaehlt[typ]);
+    if (!fassung) return;
+    
+    const vorher = knopf.textContent;
+    knopf.disabled = true;
+    knopf.textContent = 'Laeuft im Browser ...';
+    meldung.className = 'meldung';
+    meldung.textContent = 'Oeffne Browser und fuehre Aktion aus ...';
+    
+    try {{
+      const daten = await sende('/vorschlag/auto', {{
+        group_id: GRUPPE, texttyp: typ, nummer: gewaehlt[typ]
+      }});
+      if (!daten.ok) {{
+        meldung.className = 'meldung schlecht-text';
+        meldung.textContent = daten.meldung || 'Automatisierung fehlgeschlagen.';
+      }} else {{
+        meldung.className = 'meldung gut-text';
+        meldung.textContent = daten.meldung || 'Erfolgreich veroeffentlicht!';
+        if (fassung) {{
+          fassung.stand = daten.stand;
+          fassung.fehler = daten.fehler || '';
+        }}
+        zeichneStand(typ);
+      }}
+    }} catch (e) {{
+      meldung.className = 'meldung schlecht-text';
+      meldung.textContent = 'Verbindungsfehler zur Automatisierung.';
+    }} finally {{
+      knopf.disabled = false;
+      knopf.textContent = vorher;
+    }}
+  }};
+
   ['post', 'kommentar'].forEach((typ) => {{
     if (!(FASSUNGEN[typ] || []).length) return;
 
@@ -1013,6 +1055,8 @@ def _skript(campaign_id: str, arbeit: Gruppenarbeit) -> str:
       try {{ await speichere(typ); }} finally {{ e.target.disabled = false; }}
     }});
     id('kopieren', typ).addEventListener('click', () => kopiere(typ));
+    const autoknopf = id('auto', typ);
+    if (autoknopf) autoknopf.addEventListener('click', () => automatisch(typ));
 
     const gut = id('gut', typ);
     if (gut && !gut.disabled) gut.addEventListener('click', () => melde(typ, true));

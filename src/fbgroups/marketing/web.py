@@ -1130,6 +1130,63 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 "fehler": ergebnis.fehler,
             })
 
+    @app.post("/arbeit/{campaign_id}/vorschlag/auto")
+    def vorschlag_auto(  # noqa: ANN202
+        campaign_id: str, meldung: VorschlagMeldung, request: Request
+    ):
+        """Fuehrt den Post oder Kommentar direkt per Browser-Automatisierung aus."""
+        _nur_lokal(request)
+        with _store() as store:
+            campaign, link = _vorschlag_oder_404(store, campaign_id, meldung.group_id)
+            
+            # Hole Gruppen-URL
+            with SqliteStore(pfad) as gruppen_store:
+                group = gruppen_store.load_group(meldung.group_id)
+            if not group or not group.url_canonical:
+                return JSONResponse({"ok": False, "meldung": "Keine URL fuer Gruppe gefunden"})
+            
+            vorschlag = store.vorschlag(
+                campaign_id, meldung.group_id, meldung.texttyp, meldung.nummer
+            )
+            if not vorschlag or not vorschlag.text.strip():
+                return JSONResponse({"ok": False, "meldung": "Fassung oder Text nicht gefunden"})
+                
+            from fbgroups.marketing.beitrag import mit_link
+            text = mit_link(campaign, link, vorschlag.text, config=cfg)
+            
+            from fbgroups.automation.actions import comment_on_post, post_to_group
+            from fbgroups.automation.browser import get_browser_context
+            
+            erfolg = False
+            try:
+                # Kopfzeilen-Browser (headless=False), damit der Benutzer sehen kann, was passiert
+                with get_browser_context(cfg, headless=False) as context:
+                    if meldung.texttyp == Texttyp.POST:
+                        erfolg = post_to_group(context, group.url_canonical, text)
+                    else:
+                        erfolg = comment_on_post(context, group.url_canonical, text)
+            except Exception as exc:
+                return JSONResponse({"ok": False, "meldung": f"Fehler in Automatisierung: {exc}"})
+                
+            if erfolg:
+                ergebnis = melde_vorschlag(
+                    store, campaign, link, meldung.texttyp, meldung.nummer,
+                    Ergebnis(erfolg=True, fehler=""), ausgeloest_von="auto", sitzung="browser"
+                )
+                if not isinstance(ergebnis, Sperre):
+                    return JSONResponse({
+                        "ok": True,
+                        "nummer": ergebnis.nummer,
+                        "stand": ergebnis.status.value,
+                        "fehler": "",
+                        "meldung": "Automatisch veroeffentlicht!"
+                    })
+                    
+            return JSONResponse({
+                "ok": False,
+                "meldung": "Automatisierung fehlgeschlagen (Element nicht gefunden/blockiert)."
+            })
+
     @app.post("/stand")
     def stand_setzen(meldung: StandMeldung, request: Request):  # noqa: ANN202
         """Traegt den Arbeitsstand einer Gruppe ein - derselbe Weg wie die CLI.

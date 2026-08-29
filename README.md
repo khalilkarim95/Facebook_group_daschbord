@@ -16,16 +16,15 @@ Diese Grenzen sind bewusst gesetzt und im Code verankert:
   (Name, URL, Beschreibungsausschnitt, ungefähre Mitgliederzahl).
 - **Keine** Mitglieder- oder Admindaten, keine Profil-URLs, keine Beitragsinhalte,
   keine Kontaktdaten. Das Datenmodell hat dafür keine Felder.
-- **Kein** automatisches Posten, **kein** automatisches Messaging.
-- **Kein** Zugriff auf facebook.com – weder Scraping noch Login-Automatisierung.
-  Phase 1 liest ausschließlich lokale Dateien.
-- Die Kontaktaufnahme für Kooperationen erfolgt später manuell.
+- **NEU:** Automatisches Posten und Kommentieren wird über Playwright-Browser-Automatisierung unterstützt (Kommando `fbgroups post` / `fbgroups comment`).
+- Beitragsinhalte, Mitglieder- oder Admindaten werden beim regulären Import *nicht* erfasst.
 
 ## Installation
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\playwright install chromium
 ```
 
 ## Nutzung
@@ -41,6 +40,9 @@ $py = ".\.venv\Scripts\python.exe"
 & $py -m fbgroups.cli report --top 20              # Bestand auswerten
 & $py -m fbgroups.cli export --format both         # Excel + CSV
 & $py -m fbgroups.cli queries --all                # geplante Suchanfragen ansehen
+& $py -m fbgroups.cli auth login                   # Browser-Session fuer Automatisierung starten
+& $py -m fbgroups.cli post <url> <text>            # Beitrag in Gruppe posten
+& $py -m fbgroups.cli comment <url> <text>         # Kommentar auf Beitrag abgeben
 ```
 
 Nach `pip install -e .` steht zusätzlich der Befehl `fbgroups` direkt zur Verfügung.
