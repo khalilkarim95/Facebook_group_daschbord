@@ -258,3 +258,29 @@ scoring:
     - { min: 0.5, factor: 0.30 }
     - { min: 0.1, factor: 0.15 }
     - { min: 0,   factor: 0.02 }   # praktisch keine Aktivitaet
+
+# --- Kaltmodus: die Kampagne auf Tage verteilen ------------------------------
+# Dreihundert Beitraege an einem Tag sind dasselbe Muster, ob ein Programm sie
+# absetzt oder ein Mensch sie einfuegt - gezaehlt wird der Beitrag, nicht die
+# Hand. Der Takt ist deshalb kein Preis fuer Sicherheit, sondern die Bedingung
+# dafuer, dass die dreihundert ueberhaupt ankommen.
+#
+# Das ist NICHT das am 27.08.2026 entfernte Tageslimit. Jenes zeigte dreissig
+# Gruppen und sperrte bei zwanzig - es traf den, der gerade arbeitete. Der
+# Kaltmodus teilt vorher zu: Die Arbeitsliste enthaelt nur die heutigen, und
+# hinter ihnen steht keine Wand, gegen die man laufen koennte.
+kaltmodus:
+  # Voreingestellt aus: Ein Update soll das Verhalten von gestern nicht
+  # stillschweigend aendern. Einschalten ist eine Entscheidung.
+  aktiv: false
+
+  # Beitraege je Tag ueber alle Kampagnen. 25 bei 310 Gruppen sind knapp
+  # dreizehn Tage - die Zahl darf steigen, aber jede Erhoehung ist genau der
+  # Handel, den dieser Block beschreibt.
+  beitraege_pro_tag: 25
+
+  # Minuten zwischen zwei Beitraegen. Fuenfundzwanzig in zehn Minuten sind
+  # dasselbe Muster wie dreihundert an einem Tag, nur schneller. Bewusst
+  # gleichmaessig und nicht gestreut: Eine gestreute Pause waere der Anfang
+  # davon, unauffaellig aussehen zu wollen.
+  mindestabstand_minuten: 4

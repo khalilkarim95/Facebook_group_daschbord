@@ -940,6 +940,66 @@ def campaign_fortschritt(campaign_id: str = typer.Argument(...)) -> None:
     )
 
 
+@campaign_app.command("kaltmodus")
+def campaign_kaltmodus(campaign_id: str = typer.Argument(...)) -> None:
+    """Was heute ansteht - und wann die Kampagne bei diesem Takt durch ist."""
+    from datetime import UTC, datetime
+
+    from fbgroups.marketing import kaltmodus as km
+    from fbgroups.marketing.arbeit import arbeitsreihenfolge
+    from fbgroups.storage.sqlite_store import SqliteStore
+
+    config = _config()
+    aktiv, pro_tag, abstand = km.einstellungen(config)
+    if not aktiv:
+        console.print(
+            "[yellow]Kaltmodus ist aus.[/yellow] Einschalten in "
+            "config/settings.yaml: [bold]kaltmodus.aktiv: true[/bold]"
+        )
+        raise typer.Exit(code=0)
+
+    jetzt = datetime.now(UTC)
+    with SqliteStore(config.path("sqlite_path")) as bestand:
+        gruppen = {g.group_id: g for g in bestand.load_groups()}
+    with MarketingStore(config.path("sqlite_path")) as store:
+        campaign = _kampagne_oder_ende(store, campaign_id)
+        reihe = arbeitsreihenfolge(store, campaign_id, gruppen)
+        heute = store.versuche_heute(jetzt.date().isoformat())
+        roh = store.letzter_versuch()
+
+    portion = km.tagesportion(reihe, erledigt_heute=heute, grenze=pro_tag)
+    letzter = datetime.fromisoformat(roh) if roh else None
+    frei_ab = km.naechster_zeitpunkt(letzter, abstand_minuten=abstand, jetzt=jetzt)
+
+    console.print(
+        Panel(
+            f"Heute: [bold]{portion.erledigt}[/bold] von "
+            f"[bold]{portion.grenze}[/bold] - "
+            f"noch [bold]{portion.offen_heute}[/bold] vorgesehen",
+            title=campaign.name,
+        )
+    )
+    console.print(f"Offen insgesamt: [bold]{portion.verbleibend_gesamt}[/bold]")
+    fertig = portion.fertig_am(jetzt.date())
+    if fertig:
+        console.print(f"Bei diesem Takt fertig am: [bold]{fertig.isoformat()}[/bold]")
+    warte = km.wartezeit_text(frei_ab, jetzt=jetzt)
+    if warte:
+        console.print(f"Naechster Beitrag: [yellow]{warte}[/yellow]")
+
+    if portion.fertig_fuer_heute:
+        # Kein Fehler und kein roter Text: Die Portion ist abgearbeitet, das ist
+        # der Normalfall eines guten Tages und nicht eine Sperre.
+        console.print("\n[green]Fuer heute erledigt.[/green] Morgen geht es weiter.")
+        raise typer.Exit(code=0)
+
+    console.print("\n[bold]Heute an der Reihe:[/bold]")
+    for nummer, link in enumerate(portion.gruppen, start=1):
+        gruppe = gruppen.get(link.group_id)
+        name = (gruppe.name if gruppe else "") or link.group_id
+        console.print(f"  {nummer:>3}. {name}")
+
+
 @campaign_app.command("posted")
 def campaign_posted(
     campaign_id: str = typer.Argument(...),

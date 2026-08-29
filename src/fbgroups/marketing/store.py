@@ -1561,6 +1561,40 @@ class MarketingStore:
             )
         return self.vorschlag(campaign_id, group_id, texttyp, nummer)
 
+    def versuche_heute(self, tag: str) -> int:
+        """Wie viele Beitraege an diesem Tag hinausgingen - ueber **alle** Kampagnen.
+
+        Ueber alle, weil die Gegenseite kein Kampagnenmodell hat: Gesperrt wird
+        das Konto, und dem ist gleich, unter welcher Kampagne ein Beitrag stand.
+        Zwei Kampagnen mit je zwanzig Beitraegen sind vierzig Beitraege an einem
+        Tag.
+
+        Gezaehlt werden Versuche, nicht Erfolge. Ein fehlgeschlagener Beitrag
+        war trotzdem ein Beitrag, den die Gegenseite gesehen hat - ihn nicht
+        mitzuzaehlen hiesse, nach zwanzig Fehlschlaegen mit voller Portion
+        weiterzumachen.
+
+        ``tag`` ist ein ISO-Datum (``2026-08-29``); ``begonnen_am`` ist ein
+        ISO-Zeitstempel, dessen erste zehn Zeichen genau das sind. Der Index
+        ``idx_versuche_zeit`` traegt die Abfrage.
+        """
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM post_versuche WHERE substr(begonnen_am, 1, 10) = ?",
+            (tag,),
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def letzter_versuch(self) -> str:
+        """Zeitstempel des juengsten Beitragsversuchs, oder ''.
+
+        Grundlage des Mindestabstands. Auch hier ueber alle Kampagnen: Der
+        Abstand gilt dem Konto, nicht der Kampagne.
+        """
+        row = self.conn.execute(
+            "SELECT begonnen_am FROM post_versuche ORDER BY begonnen_am DESC LIMIT 1"
+        ).fetchone()
+        return str(row[0]) if row and row[0] else ""
+
     def staende_je_gruppe(
         self, campaign_id: str, texttyp: Texttyp = Texttyp.POST
     ) -> dict[str, set[str]]:

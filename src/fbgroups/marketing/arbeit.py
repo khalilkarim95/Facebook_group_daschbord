@@ -260,6 +260,37 @@ def arbeitsreihenfolge(
     return [*bekannt, *unbekannt]
 
 
+def heutige_reihe(
+    store: MarketingStore,
+    reihe: list[CampaignGroup],
+    config: AppConfig,
+    *,
+    jetzt: datetime | None = None,
+) -> tuple[list[CampaignGroup], object | None]:
+    """Die Reihe auf die heutige Portion gekuerzt. ``(reihe, portion | None)``.
+
+    Ist der Kaltmodus aus, kommt die Reihe unveraendert zurueck und ``None``
+    dazu - dann verhaelt sich alles wie vorher.
+
+    Diese eine Stelle kuerzt, und alle Aufrufer nehmen sie: Die Kommandozeile
+    und die Weboberflaeche muessen dieselbe Portion sehen, sonst zeigte die
+    eine Gruppen, die die andere fuer morgen haelt. Derselbe Gedanke wie bei
+    ``auswahlliste``, die die Reihe uebergeben bekommt statt sie neu zu rechnen.
+    """
+    from fbgroups.marketing import kaltmodus
+
+    aktiv, pro_tag, _abstand = kaltmodus.einstellungen(config)
+    if not aktiv:
+        return reihe, None
+    jetzt = jetzt or datetime.now(UTC)
+    portion = kaltmodus.tagesportion(
+        reihe,
+        erledigt_heute=store.versuche_heute(jetzt.date().isoformat()),
+        grenze=pro_tag,
+    )
+    return portion.gruppen, portion
+
+
 def stelle_texte_bereit(
     store: MarketingStore,
     campaign: Campaign,
