@@ -470,9 +470,10 @@ def play_store_url(tracking_code: str, config: AppConfig) -> str:
     sich aendern; ein ungeschuetztes ``&`` darin zerlegte die Adresse.
     """
     paket = str(config.get("marketing", "store", "android_package", default="")).strip()
-    vorlage = str(
-        config.get("marketing", "store", "play_url", default="")
-    ).strip() or "https://play.google.com/store/apps/details?id={package}&referrer={referrer}"
+    vorlage = (
+        str(config.get("marketing", "store", "play_url", default="")).strip()
+        or "https://play.google.com/store/apps/details?id={package}&referrer={referrer}"
+    )
     if not paket:
         return ""
     return vorlage.replace("{package}", quote(paket, safe="")).replace(
@@ -481,7 +482,7 @@ def play_store_url(tracking_code: str, config: AppConfig) -> str:
 
 
 def _ziel_gewaehlt(campaign: Campaign | None, config: AppConfig) -> str:
-    """"store" oder "landing" - die Kampagne entscheidet, sonst die Vorgabe.
+    """ "store" oder "landing" - die Kampagne entscheidet, sonst die Vorgabe.
 
     Leer an der Kampagne heisst ausdruecklich "die Vorgabe", nicht "landing":
     Sonst waere eine geaenderte Vorgabe fuer den Bestand wirkungslos, und das
@@ -492,9 +493,7 @@ def _ziel_gewaehlt(campaign: Campaign | None, config: AppConfig) -> str:
     return str(config.get("marketing", "ziel", default="landing")).strip().lower()
 
 
-def _ziel_url(
-    store: MarketingStore, tracking_code: str, config: AppConfig
-) -> tuple[str, bool]:
+def _ziel_url(store: MarketingStore, tracking_code: str, config: AppConfig) -> tuple[str, bool]:
     """Wohin ein Klick fuehrt. Returns: (Adresse, ist_store).
 
     ``ist_store`` gehoert dazu, weil der Aufrufer daran entscheidet, ob ein
@@ -664,8 +663,8 @@ def _vorbereiten(
             link
             for link in links
             if link.post_text.strip()
-            and link.job_status in (JobStatus.DRAFT, JobStatus.AI_GENERATED,
-                                    JobStatus.PENDING_REVIEW)
+            and link.job_status
+            in (JobStatus.DRAFT, JobStatus.AI_GENERATED, JobStatus.PENDING_REVIEW)
         ]
         fertig = 0
         for link in betroffen:
@@ -930,8 +929,13 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 return RedirectResponse(f"/arbeit/{campaign_id}", status_code=303)
 
             stand = hole_gruppenarbeit(
-                store, campaign, gruppen, cfg,
-                nummer=gruppe, group_id=group_id, reihe=reihe,
+                store,
+                campaign,
+                gruppen,
+                cfg,
+                nummer=gruppe,
+                group_id=group_id,
+                reihe=reihe,
             )
             if stand is None:
                 return RedirectResponse(f"/arbeit/{campaign_id}", status_code=303)
@@ -957,19 +961,19 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                         pass
                     else:
                         stand = hole_gruppenarbeit(
-                            store, campaign, gruppen, cfg,
-                            nummer=stand.nummer, reihe=reihe,
+                            store,
+                            campaign,
+                            gruppen,
+                            cfg,
+                            nummer=stand.nummer,
+                            reihe=reihe,
                         )
                         if stand is None:  # pragma: no cover - Reihe unveraendert
-                            return RedirectResponse(
-                                f"/arbeit/{campaign_id}", status_code=303
-                            )
+                            return RedirectResponse(f"/arbeit/{campaign_id}", status_code=303)
 
             eintraege = auswahlliste(store, campaign_id, reihe, gruppen)
 
-        return HTMLResponse(
-            render_gruppenarbeit(stand, campaign_id, eintraege, cfg)
-        )
+        return HTMLResponse(render_gruppenarbeit(stand, campaign_id, eintraege, cfg))
 
     def _vorschlag_oder_404(  # noqa: ANN202
         store: MarketingStore, campaign_id: str, group_id: str
@@ -1024,21 +1028,27 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         with _store() as store:
             campaign, link = _vorschlag_oder_404(store, campaign_id, meldung.group_id)
             vorschlag = store.setze_vorschlag_text(
-                campaign_id, meldung.group_id, meldung.texttyp,
-                meldung.nummer, text, TextQuelle.HAND,
+                campaign_id,
+                meldung.group_id,
+                meldung.texttyp,
+                meldung.nummer,
+                text,
+                TextQuelle.HAND,
             )
             store.audit(
                 "vorschlag_von_hand",
                 f"{campaign_id}/{meldung.group_id}",
                 f"{meldung.texttyp.value} {meldung.nummer}",
             )
-            return JSONResponse({
-                "ok": True,
-                "nummer": vorschlag.nummer,
-                "text": vorschlag.text,
-                "angezeigt": mit_link(campaign, link, vorschlag.text, config=cfg),
-                "stand": vorschlag.status.value,
-            })
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "nummer": vorschlag.nummer,
+                    "text": vorschlag.text,
+                    "angezeigt": mit_link(campaign, link, vorschlag.text, config=cfg),
+                    "stand": vorschlag.status.value,
+                }
+            )
 
     @app.post("/arbeit/{campaign_id}/vorschlag/zuruecksetzen")
     def vorschlag_zuruecksetzen(  # noqa: ANN202
@@ -1059,10 +1069,12 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 campaign_id, meldung.group_id, meldung.texttyp, meldung.nummer
             )
             if vorhanden is None or not vorhanden.generated_text.strip():
-                return JSONResponse({
-                    "ok": False,
-                    "meldung": "Fuer diese Fassung wurde nie ein Text erzeugt.",
-                })
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "meldung": "Fuer diese Fassung wurde nie ein Text erzeugt.",
+                    }
+                )
             vorschlag = store.vorschlag_zuruecksetzen(
                 campaign_id, meldung.group_id, meldung.texttyp, meldung.nummer
             )
@@ -1071,13 +1083,15 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 f"{campaign_id}/{meldung.group_id}",
                 f"{meldung.texttyp.value} {meldung.nummer}",
             )
-            return JSONResponse({
-                "ok": True,
-                "nummer": vorschlag.nummer,
-                "text": vorschlag.text,
-                "angezeigt": mit_link(campaign, link, vorschlag.text, config=cfg),
-                "stand": vorschlag.status.value,
-            })
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "nummer": vorschlag.nummer,
+                    "text": vorschlag.text,
+                    "angezeigt": mit_link(campaign, link, vorschlag.text, config=cfg),
+                    "stand": vorschlag.status.value,
+                }
+            )
 
     @app.post("/arbeit/{campaign_id}/vorschlag/ergebnis")
     def vorschlag_ergebnis(  # noqa: ANN202
@@ -1123,12 +1137,14 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 f"{campaign_id}/{meldung.group_id}",
                 f"{meldung.texttyp.value} {meldung.nummer}: {meldung.fehler}",
             )
-            return JSONResponse({
-                "ok": True,
-                "nummer": ergebnis.nummer,
-                "stand": ergebnis.status.value,
-                "fehler": ergebnis.fehler,
-            })
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "nummer": ergebnis.nummer,
+                    "stand": ergebnis.status.value,
+                    "fehler": ergebnis.fehler,
+                }
+            )
 
     @app.post("/arbeit/{campaign_id}/vorschlag/auto")
     def vorschlag_auto(  # noqa: ANN202
@@ -1136,56 +1152,125 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
     ):
         """Fuehrt den Post oder Kommentar direkt per Browser-Automatisierung aus."""
         _nur_lokal(request)
+
+        # 1. READ-Phase: Vorbereitungen treffen (Datenbank ist nur kurz offen)
         with _store() as store:
             campaign, link = _vorschlag_oder_404(store, campaign_id, meldung.group_id)
-            
-            # Hole Gruppen-URL
-            with SqliteStore(pfad) as gruppen_store:
-                group = gruppen_store.load_group(meldung.group_id)
-            if not group or not group.url_canonical:
-                return JSONResponse({"ok": False, "meldung": "Keine URL fuer Gruppe gefunden"})
-            
+
+            from fbgroups.marketing.models import QueueZustand
+
+            zustand = store.queue_zustand(campaign_id)
+            if zustand is QueueZustand.PAUSIERT:
+                return JSONResponse({"ok": False, "meldung": "Kampagne ist pausiert."})
+            if zustand is QueueZustand.GESTOPPT:
+                return JSONResponse({"ok": False, "meldung": "Kampagne ist gestoppt."})
+
+            from fbgroups.marketing import kaltmodus
+
+            aktiv, pro_tag, abstand = kaltmodus.einstellungen(cfg)
+            if aktiv:
+                jetzt = datetime.now(UTC)
+                heute = store.versuche_heute(jetzt.date().isoformat())
+                if heute >= pro_tag:
+                    return JSONResponse(
+                        {"ok": False, "meldung": f"Tageslimit von {pro_tag} erreicht (Kaltmodus)."}
+                    )
+
+                # Prüfen, ob der Abstand eingehalten ist
+                letzter_versuch = store.letzter_versuch()
+                letzter_dt = datetime.fromisoformat(letzter_versuch) if letzter_versuch else None
+                naechster = kaltmodus.naechster_zeitpunkt(
+                    letzter_dt, abstand_minuten=abstand, jetzt=jetzt
+                )
+                if naechster:
+                    wartezeit = kaltmodus.wartezeit_text(naechster, jetzt=jetzt)
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "meldung": f"Abstandsregel aktiv, {wartezeit} warten (Kaltmodus).",
+                        }
+                    )
+
             vorschlag = store.vorschlag(
                 campaign_id, meldung.group_id, meldung.texttyp, meldung.nummer
             )
             if not vorschlag or not vorschlag.text.strip():
                 return JSONResponse({"ok": False, "meldung": "Fassung oder Text nicht gefunden"})
-                
+
             from fbgroups.marketing.beitrag import mit_link
+
             text = mit_link(campaign, link, vorschlag.text, config=cfg)
-            
-            from fbgroups.automation.actions import comment_on_post, post_to_group
-            from fbgroups.automation.browser import get_browser_context
-            
+
+        with SqliteStore(pfad) as gruppen_store:
+            group = next(
+                (g for g in gruppen_store.load_groups() if g.group_id == meldung.group_id), None
+            )
+        if not group or not group.url_canonical:
+            return JSONResponse({"ok": False, "meldung": "Keine URL fuer Gruppe gefunden"})
+
+        # 2. BROWSER-Phase (Datenbank geschlossen, kann Minuten dauern)
+        from fbgroups.automation.actions import comment_on_post, post_to_group
+        from fbgroups.automation.browser import get_browser_context
+
+        erfolg = False
+        fehler_text = "Element nicht gefunden/blockiert"
+        try:
+            with get_browser_context(cfg, headless=False) as context:
+                if meldung.texttyp == Texttyp.POST:
+                    erfolg = post_to_group(context, group.url_canonical, text)
+                else:
+                    erfolg = comment_on_post(context, group.url_canonical, text)
+        except Exception as exc:
             erfolg = False
-            try:
-                # Kopfzeilen-Browser (headless=False), damit der Benutzer sehen kann, was passiert
-                with get_browser_context(cfg, headless=False) as context:
-                    if meldung.texttyp == Texttyp.POST:
-                        erfolg = post_to_group(context, group.url_canonical, text)
-                    else:
-                        erfolg = comment_on_post(context, group.url_canonical, text)
-            except Exception as exc:
-                return JSONResponse({"ok": False, "meldung": f"Fehler in Automatisierung: {exc}"})
-                
+            fehler_text = str(exc).split("\n")[0][:100]
+
+        # 3. WRITE-Phase: Ergebnis eintragen
+        with _store() as store:
+            ergebnis = melde_vorschlag(
+                store,
+                campaign,
+                link,
+                meldung.texttyp,
+                meldung.nummer,
+                Ergebnis(erfolg=erfolg, fehler="" if erfolg else fehler_text),
+                ausgeloest_von="auto",
+                sitzung="browser",
+            )
+
+            if isinstance(ergebnis, Sperre):
+                # Wenn in der Zwischenzeit pausiert wurde, aber es auf FB rauskam:
+                if erfolg:
+                    return JSONResponse(
+                        {
+                            "ok": True,
+                            "nummer": meldung.nummer,
+                            "stand": "veroeffentlicht",
+                            "fehler": "",
+                            "meldung": f"Gepostet, DB aber blockiert: {ergebnis.grund}",
+                        }
+                    )
+                return JSONResponse({"ok": False, "meldung": ergebnis.grund})
+
             if erfolg:
-                ergebnis = melde_vorschlag(
-                    store, campaign, link, meldung.texttyp, meldung.nummer,
-                    Ergebnis(erfolg=True, fehler=""), ausgeloest_von="auto", sitzung="browser"
-                )
-                if not isinstance(ergebnis, Sperre):
-                    return JSONResponse({
+                return JSONResponse(
+                    {
                         "ok": True,
                         "nummer": ergebnis.nummer,
                         "stand": ergebnis.status.value,
                         "fehler": "",
-                        "meldung": "Automatisch veroeffentlicht!"
-                    })
-                    
-            return JSONResponse({
-                "ok": False,
-                "meldung": "Automatisierung fehlgeschlagen (Element nicht gefunden/blockiert)."
-            })
+                        "meldung": "Automatisch veroeffentlicht!",
+                    }
+                )
+            else:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "nummer": ergebnis.nummer,
+                        "stand": ergebnis.status.value,
+                        "fehler": ergebnis.fehler,
+                        "meldung": f"Fehlgeschlagen: {ergebnis.fehler}",
+                    }
+                )
 
     @app.post("/stand")
     def stand_setzen(meldung: StandMeldung, request: Request):  # noqa: ANN202
@@ -1249,9 +1334,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             if link is None:
                 raise HTTPException(status_code=404, detail="Unbekannte Zuordnung")
 
-            store.audit(
-                "beitrag_" + meldung.status.value, meldung.group_id, link.tracking_code
-            )
+            store.audit("beitrag_" + meldung.status.value, meldung.group_id, link.tracking_code)
             # Der Gesamtstand der Gruppe aus derselben Funktion wie die
             # Uebersicht - eine zweite Fassung im JavaScript koennte abweichen,
             # und die Zeile zeigte dann etwas anderes als der Filter.
@@ -1408,9 +1491,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         from fbgroups.marketing.tracking import CodeAllocator, tracking_url
 
         with SqliteStore(pfad) as gruppen_store:
-            gruppe = next(
-                (g for g in gruppen_store.load_groups() if g.group_id == group_id), None
-            )
+            gruppe = next((g for g in gruppen_store.load_groups() if g.group_id == group_id), None)
         if gruppe is None:
             raise HTTPException(status_code=404, detail="Unbekannte Gruppe")
 
@@ -1461,8 +1542,12 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             store.audit("zuordnung_einzeln", f"{meldung.campaign_id}/{group_id}", code)
 
         return JSONResponse(
-            {"group_id": group_id, "zugeordnet": True, "code": code,
-             "kampagne": meldung.campaign_id}
+            {
+                "group_id": group_id,
+                "zugeordnet": True,
+                "code": code,
+                "kampagne": meldung.campaign_id,
+            }
         )
 
     @app.post("/kampagnen/{campaign_id}/gruppen")
@@ -1490,7 +1575,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         from fbgroups.marketing.selection import vergabereihenfolge
         from fbgroups.marketing.tracking import CodeAllocator, tracking_url
 
-        gewuenscht = list(dict.fromkeys(meldung.group_ids))   # Reihenfolge egal, Dubletten weg
+        gewuenscht = list(dict.fromkeys(meldung.group_ids))  # Reihenfolge egal, Dubletten weg
         with SqliteStore(pfad) as gruppen_store:
             bekannt = {g.group_id: g for g in gruppen_store.load_groups()}
 
@@ -1777,8 +1862,11 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             )
 
         return JSONResponse(
-            {"anzahl": len(meldung.group_ids), "bearbeiten": meldung.bearbeiten,
-             "grund": "" if meldung.bearbeiten else meldung.grund}
+            {
+                "anzahl": len(meldung.group_ids),
+                "bearbeiten": meldung.bearbeiten,
+                "grund": "" if meldung.bearbeiten else meldung.grund,
+            }
         )
 
     @app.get("/r/{tracking_code}")
@@ -1899,8 +1987,9 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     # abgeschnittene URL). Ihn zu speichern erfaende eine
                     # Spalte in jeder Auswertung je Code; verworfen wird er
                     # zugunsten der Erbschaft, die den Menschen kennt.
-                    store.audit("ereignis_unbekannter_code", meldung.tracking_code,
-                                meldung.event_type.value)
+                    store.audit(
+                        "ereignis_unbekannter_code", meldung.tracking_code, meldung.event_type.value
+                    )
 
             if not tracking_code and kennung:
                 # Ohne Code die erste bekannte Zuordnung dieses Menschen erben -
@@ -1911,8 +2000,10 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             # Ein Ereignis, das je Mensch nur einmal zaehlt (Download), wird
             # beim zweiten Mal nicht gespeichert. Die Meldung ist trotzdem
             # angekommen - die Antwort sagt beides.
-            if meldung.event_type in EINMAL_JE_MENSCH and kennung and (
-                store.ereignis_bereits_gezaehlt(meldung.event_type, kennung)
+            if (
+                meldung.event_type in EINMAL_JE_MENSCH
+                and kennung
+                and (store.ereignis_bereits_gezaehlt(meldung.event_type, kennung))
             ):
                 return JSONResponse(
                     {
@@ -1997,8 +2088,12 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     for status in ReferralStatus
                 },
                 "rewards": [
-                    {"rule_id": r.rule_id, "type": r.reward_type.value,
-                     "value": r.value, "status": r.status.value}
+                    {
+                        "rule_id": r.rule_id,
+                        "type": r.reward_type.value,
+                        "value": r.value,
+                        "status": r.status.value,
+                    }
                     for r in store.rewards_of(user_ref)
                 ],
             }

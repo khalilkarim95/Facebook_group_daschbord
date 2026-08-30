@@ -99,12 +99,18 @@ def test_es_wird_kein_browser_nachgeahmt() -> None:
     Der Unterschied zwischen Abrufen und Erkennung-Umgehen ist der Grund,
     warum dieses Modul ueberhaupt vertretbar ist. Ein nachgeahmter Browser
     waere Umgehung; wer uns aussperren will, soll uns erkennen koennen.
+    Das gilt auch fuer die Automatisierung (Playwright).
     """
     from fbgroups.extract.gruppenseite import _KENNUNG
+    from pathlib import Path
 
     assert "fbgroups" in _KENNUNG
+    
+    automation_code = Path("src/fbgroups/automation/browser.py").read_text(encoding="utf-8")
+    
     for browser in ("Mozilla", "Chrome", "Safari", "AppleWebKit", "Gecko"):
         assert browser not in _KENNUNG
+        assert browser not in automation_code
 
 
 def test_es_gibt_keinen_login_weg() -> None:

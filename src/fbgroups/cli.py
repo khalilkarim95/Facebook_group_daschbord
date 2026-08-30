@@ -1123,46 +1123,11 @@ def login_command() -> None:
         page = context.new_page()
         page.goto("https://www.facebook.com/")
         console.print("Browser is open. Waiting for you to finish and close the window manually...")
-        try:
+        import contextlib
+        with contextlib.suppress(Exception):
             # Wait for the page to be closed by the user
             page.wait_for_event("close", timeout=0)
-        except Exception:
-            pass
     console.print("[green]Session saved! You can now use automated posting features.[/green]")
-
-
-@app.command("post")
-def post_command(
-    group_url: str = typer.Argument(..., help="The URL of the Facebook group to post to"),
-    message: str = typer.Argument(..., help="The text message to post"),
-) -> None:
-    """Automates posting a message to a Facebook group."""
-    from fbgroups.automation.browser import get_browser_context
-    from fbgroups.automation.actions import post_to_group
-    
-    config = _config()
-    with get_browser_context(config, headless=True) as context:
-        success = post_to_group(context, group_url, message)
-        
-    if not success:
-        raise typer.Exit(code=1)
-
-
-@app.command("comment")
-def comment_command(
-    post_url: str = typer.Argument(..., help="The URL of the Facebook post to comment on"),
-    message: str = typer.Argument(..., help="The text message to comment"),
-) -> None:
-    """Automates commenting on a specific Facebook post."""
-    from fbgroups.automation.browser import get_browser_context
-    from fbgroups.automation.actions import comment_on_post
-    
-    config = _config()
-    with get_browser_context(config, headless=True) as context:
-        success = comment_on_post(context, post_url, message)
-        
-    if not success:
-        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

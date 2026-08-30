@@ -132,6 +132,7 @@ def _kampagne_oder_ende(store: MarketingStore, campaign_id: str) -> Campaign:
 # Kampagnen
 # ---------------------------------------------------------------------------
 
+
 @campaign_app.command("new")
 def campaign_new(
     name: str = typer.Argument(..., help="Anzeigename, z. B. 'Batreeq Syrian Germany'."),
@@ -379,9 +380,7 @@ def campaign_set(
         campaign.updated_at = datetime.now(UTC)
         store.save_campaign(campaign)
 
-    console.print(
-        f"[green]{campaign_id}:[/green] {', '.join(geaendert)} aktualisiert."
-    )
+    console.print(f"[green]{campaign_id}:[/green] {', '.join(geaendert)} aktualisiert.")
     if landing_page:
         console.print(f"[dim]Klicks auf die Tracking-Links landen jetzt auf {landing_page}[/dim]")
 
@@ -516,9 +515,7 @@ def campaign_target(
 
         if unbewertete is not None:
             campaign.target_include_unscored = unbewertete
-            geaendert.append(
-                "auch unbewertete Gruppen" if unbewertete else "nur bewertete Gruppen"
-            )
+            geaendert.append("auch unbewertete Gruppen" if unbewertete else "nur bewertete Gruppen")
 
         if auto_assign is not None:
             campaign.auto_assign = auto_assign
@@ -655,8 +652,9 @@ def campaign_add_groups(
 
         gespeichert = auswahl_der_kampagne(campaign, config)
         stadt_namen = {
-            c.name_de.lower() for cid, c in config.cities.items() if cid.lower() in
-            {s.lower() for s in (city or [])}
+            c.name_de.lower()
+            for cid, c in config.cities.items()
+            if cid.lower() in {s.lower() for s in (city or [])}
         }
         auswahl = Auswahl(
             audiences=frozenset(a.lower() for a in audience) if audience else gespeichert.audiences,
@@ -935,8 +933,7 @@ def campaign_fortschritt(campaign_id: str = typer.Argument(...)) -> None:
     # zaehlen dort mit, stehen aber nicht in der Arbeitsliste. Ohne diese Zeile
     # wundert man sich, warum 40 offene Beitraege nur 12 Zeilen ergeben.
     console.print(
-        f"In der Arbeitsliste: [bold]{offen}[/bold] "
-        "(ausgeschlossene Gruppen zaehlen nicht mit)"
+        f"In der Arbeitsliste: [bold]{offen}[/bold] (ausgeschlossene Gruppen zaehlen nicht mit)"
     )
 
 
@@ -1053,9 +1050,7 @@ def campaign_retry(
     ``--alle`` uebergeht die Grenze.
     """
     config = _config()
-    grenze = 0 if alle else int(
-        config.get("marketing", "posting", "max_versuche", default=3) or 0
-    )
+    grenze = 0 if alle else int(config.get("marketing", "posting", "max_versuche", default=3) or 0)
     with MarketingStore(config.path("sqlite_path")) as store:
         _kampagne_oder_ende(store, campaign_id)
         anzahl = store.fehlgeschlagene_zuruecksetzen(campaign_id, max_versuche=grenze)
@@ -1079,9 +1074,132 @@ def campaign_retry(
         )
 
 
+@campaign_app.command("auto")
+def campaign_auto(
+    campaign_id: str = typer.Argument(...),
+    group_id: str = typer.Argument(...),
+    typ: str = typer.Option("post", "--typ", help="post | kommentar"),
+    nummer: int = typer.Option(1, "--nummer", help="Nummer der Fassung (meist 1)"),
+) -> None:
+    """Postet oder kommentiert automatisch mit Playwright - mit Tracking-Code."""
+    from fbgroups.automation.actions import comment_on_post, post_to_group
+    from fbgroups.automation.browser import get_browser_context
+    from fbgroups.marketing.arbeit import Ergebnis, Sperre, melde_vorschlag
+    from fbgroups.marketing.auswahl import Texttyp
+    from fbgroups.marketing.beitrag import mit_link
+    from fbgroups.storage.sqlite_store import SqliteStore
+
+    config = _config()
+
+    # 1. READ-Phase: Vorbereitungen treffen (Datenbank ist nur kurz offen)
+    with MarketingStore(config.path("sqlite_path")) as store:
+        campaign = _kampagne_oder_ende(store, campaign_id)
+
+        from fbgroups.marketing.models import QueueZustand
+
+        zustand = store.queue_zustand(campaign_id)
+        if zustand is QueueZustand.PAUSIERT:
+            console.print("[red]Kampagne ist pausiert.[/red]")
+            raise typer.Exit(code=1)
+        if zustand is QueueZustand.GESTOPPT:
+            console.print("[red]Kampagne ist gestoppt.[/red]")
+            raise typer.Exit(code=1)
+
+        from fbgroups.marketing import kaltmodus
+
+        aktiv, pro_tag, abstand = kaltmodus.einstellungen(config)
+        if aktiv:
+            from datetime import UTC, datetime
+
+            jetzt = datetime.now(UTC)
+            heute = store.versuche_heute(jetzt.date().isoformat())
+            if heute >= pro_tag:
+                console.print(f"[red]Tageslimit von {pro_tag} erreicht (Kaltmodus).[/red]")
+                raise typer.Exit(code=1)
+
+            letzter_versuch = store.letzter_versuch()
+            letzter_dt = datetime.fromisoformat(letzter_versuch) if letzter_versuch else None
+            naechster = kaltmodus.naechster_zeitpunkt(
+                letzter_dt, abstand_minuten=abstand, jetzt=jetzt
+            )
+            if naechster:
+                wartezeit = kaltmodus.wartezeit_text(naechster, jetzt=jetzt)
+                console.print(
+                    f"[yellow]Abstandsregel aktiv, {wartezeit} warten (Kaltmodus).[/yellow]"
+                )
+                raise typer.Exit(code=1)
+
+        try:
+            texttyp = Texttyp(typ)
+        except ValueError as err:
+            console.print(f"[red]Unbekannter Texttyp:[/red] {typ} (Erlaubt: post, kommentar)")
+            raise typer.Exit(code=2) from err
+
+        vorschlag = store.vorschlag(campaign_id, group_id, texttyp, nummer)
+        if not vorschlag or not vorschlag.text.strip():
+            console.print(f"[red]Vorschlag {nummer} als {typ} nicht gefunden oder leer.[/red]")
+            raise typer.Exit(code=1)
+
+        link = store.link_for(campaign_id, group_id)
+        if not link:
+            console.print(f"[red]Gruppe {group_id} ist nicht in der Kampagne {campaign_id}.[/red]")
+            raise typer.Exit(code=1)
+
+        text = mit_link(campaign, link, vorschlag.text, config=config)
+
+    with SqliteStore(config.path("sqlite_path")) as gruppen_store:
+        group = next((g for g in gruppen_store.load_groups() if g.group_id == group_id), None)
+        if not group or not group.url_canonical:
+            console.print(f"[red]Keine gueltige URL fuer Gruppe {group_id} gefunden.[/red]")
+            raise typer.Exit(code=1)
+
+    console.print(f"Starte Automatisierung in {group.url_canonical}...")
+
+    # 2. BROWSER-Phase (Datenbank geschlossen, kann Minuten dauern)
+    erfolg = False
+    fehler_text = "Element nicht gefunden oder blockiert"
+    try:
+        with get_browser_context(config, headless=False) as context:
+            if texttyp == Texttyp.POST:
+                erfolg = post_to_group(context, group.url_canonical, text)
+            else:
+                erfolg = comment_on_post(context, group.url_canonical, text)
+    except Exception as exc:
+        erfolg = False
+        fehler_text = str(exc).split("\n")[0][:100]
+        console.print(f"[red]Automatisierung fehlgeschlagen: {fehler_text}[/red]")
+
+    # 3. WRITE-Phase: Ergebnis eintragen
+    with MarketingStore(config.path("sqlite_path")) as store:
+        ergebnis = melde_vorschlag(
+            store,
+            campaign,
+            link,
+            texttyp,
+            nummer,
+            Ergebnis(erfolg=erfolg, fehler="" if erfolg else fehler_text),
+            ausgeloest_von="cli",
+            sitzung="auto",
+        )
+
+        if isinstance(ergebnis, Sperre):
+            if erfolg:
+                console.print(f"[yellow]Gepostet, aber DB blockiert: {ergebnis.grund}[/yellow]")
+            else:
+                console.print(f"[red]Blockiert: {ergebnis.grund}[/red]")
+            raise typer.Exit(code=1)
+
+        if erfolg:
+            console.print("[green]Erfolgreich veroeffentlicht![/green]")
+        else:
+            console.print(f"[red]Automatisierung fehlgeschlagen: {ergebnis.fehler}[/red]")
+            raise typer.Exit(code=1)
+
+
 # ---------------------------------------------------------------------------
 # Beitrags-Warteschlange: erzeugen, freigeben, einreihen, anhalten
 # ---------------------------------------------------------------------------
+
 
 def _job_oder_ende(store: MarketingStore, campaign_id: str, group_id: str) -> CampaignGroup:
     """Die Zuordnung - oder ein Hinweis, wie sie entsteht."""
@@ -1205,10 +1323,7 @@ def campaign_text(
         betroffen = [
             link
             for link in links
-            if any(
-                ueberschreiben or not link.text_fuer(texttyp).strip()
-                for texttyp in zwecke
-            )
+            if any(ueberschreiben or not link.text_fuer(texttyp).strip() for texttyp in zwecke)
             if link.job_status not in (JobStatus.PUBLISHED, JobStatus.PROCESSING)
         ]
 
@@ -1231,9 +1346,7 @@ def campaign_text(
                     texttyp=texttyp,
                 )
                 titel = gruppen[beispiel.group_id].name or beispiel.group_id
-                console.print(
-                    Panel(beispieltext, title=f"Beispiel: {titel}  [{schluessel}]")
-                )
+                console.print(Panel(beispieltext, title=f"Beispiel: {titel}  [{schluessel}]"))
 
         console.print(
             f"{len(betroffen)} von {len(links)} Zuordnungen bekaemen einen Text "
@@ -1302,9 +1415,7 @@ def campaign_text(
 # ``draft`` gehoert dazu: Ein von Hand geschriebener Text ist genauso
 # freizugeben wie einer von Claude - sonst waere Handarbeit der einzige Weg,
 # der in der Warteschlange nicht ankommt.
-_VOR_DER_PRUEFUNG: frozenset[JobStatus] = frozenset(
-    {JobStatus.DRAFT, JobStatus.AI_GENERATED}
-)
+_VOR_DER_PRUEFUNG: frozenset[JobStatus] = frozenset({JobStatus.DRAFT, JobStatus.AI_GENERATED})
 
 
 @campaign_app.command("approve")
@@ -1344,9 +1455,7 @@ def campaign_approve(
             for link in offen:
                 if link.job_status in _VOR_DER_PRUEFUNG:
                     _wechsle(store, campaign_id, link.group_id, JobStatus.PENDING_REVIEW)
-                if _wechsle(
-                    store, campaign_id, link.group_id, JobStatus.APPROVED, akteur=akteur
-                ):
+                if _wechsle(store, campaign_id, link.group_id, JobStatus.APPROVED, akteur=akteur):
                     fertig += 1
             console.print(f"[green]{fertig}[/green] freigegeben.")
             return
@@ -1356,9 +1465,7 @@ def campaign_approve(
             _wechsle(store, campaign_id, group_id, JobStatus.PENDING_REVIEW)
         if _wechsle(store, campaign_id, group_id, JobStatus.APPROVED, akteur=akteur):
             console.print("[green]Freigegeben.[/green]")
-            console.print(
-                f"[dim]Einreihen:  fbgroups campaign enqueue {campaign_id}[/dim]"
-            )
+            console.print(f"[dim]Einreihen:  fbgroups campaign enqueue {campaign_id}[/dim]")
 
 
 @campaign_app.command("enqueue")
@@ -1508,8 +1615,9 @@ def campaign_jobs(
         gruppen_store.close()
         store.close()
 
-    kopf = Table(title=f"{campaign_id} - Warteschlange {zustand.value}",
-                 show_header=False, box=None)
+    kopf = Table(
+        title=f"{campaign_id} - Warteschlange {zustand.value}", show_header=False, box=None
+    )
     for stand in JobStatus:
         anzahl = zaehler.get(stand.value, 0)
         if anzahl or stand in (JobStatus.DRAFT, JobStatus.APPROVED, JobStatus.QUEUED):
@@ -1540,7 +1648,8 @@ def campaign_jobs(
             prioritaet(g, config) if g else "[dim]-[/dim]",
             link.job_status.value,
             (link.post_text[:34] + "...") if link.post_text else "[dim]-[/dim]",
-            link.last_attempt_at.strftime("%d.%m. %H:%M") if link.last_attempt_at
+            link.last_attempt_at.strftime("%d.%m. %H:%M")
+            if link.last_attempt_at
             else "[dim]-[/dim]",
         )
     console.print(table)
@@ -1645,9 +1754,7 @@ def campaign_next(
 
             kopiert = False if keine_zwischenablage else in_zwischenablage(text)
             geoeffnet = (
-                False
-                if kein_browser or group is None
-                else oeffne_im_browser(group.url_canonical)
+                False if kein_browser or group is None else oeffne_im_browser(group.url_canonical)
             )
 
             hinweise = [link.tracking_code]
@@ -1683,9 +1790,7 @@ def campaign_next(
                 console.print("[dim]uebersprungen[/dim]")
             elif antwort == "f":
                 grund = console.input("Grund: ").strip()
-                store.set_post_status(
-                    campaign_id, link.group_id, PostStatus.FEHLGESCHLAGEN, grund
-                )
+                store.set_post_status(campaign_id, link.group_id, PostStatus.FEHLGESCHLAGEN, grund)
                 console.print(f"[red]fehlgeschlagen[/red] · {grund}")
             else:
                 store.set_post_status(campaign_id, link.group_id, PostStatus.VEROEFFENTLICHT)
@@ -1761,14 +1866,13 @@ def campaign_reset(
         f"\n[green]Zurueckgesetzt.[/green] {getan['zuordnungen']} Zuordnungen stehen wieder "
         "am Anfang, die Warteschlange laeuft."
     )
-    console.print(
-        f"[dim]Weiter mit:  fbgroups campaign enqueue {campaign_id}[/dim]"
-    )
+    console.print(f"[dim]Weiter mit:  fbgroups campaign enqueue {campaign_id}[/dim]")
 
 
 # ---------------------------------------------------------------------------
 # Arbeitsstand je Gruppe
 # ---------------------------------------------------------------------------
+
 
 @marketing_app.command("set")
 def marketing_set(
@@ -1834,9 +1938,14 @@ def marketing_set(
         gruppen_store.close()
         store.close()
 
-    arbeit = "in Arbeit" if eintrag.bearbeiten else (
-        f"ausgeschlossen ({eintrag.ausschlussgrund})" if eintrag.ausschlussgrund
-        else "ausgeschlossen"
+    arbeit = (
+        "in Arbeit"
+        if eintrag.bearbeiten
+        else (
+            f"ausgeschlossen ({eintrag.ausschlussgrund})"
+            if eintrag.ausschlussgrund
+            else "ausgeschlossen"
+        )
     )
     console.print(
         f"[green]{group_id}:[/green] {eintrag.marketing_status.value} / "
@@ -2044,8 +2153,9 @@ def marketing_overview() -> None:
     table.add_row("Activations", str(zahlen["activated"]))
     table.add_row("Qualified Users", str(zahlen["qualified"]))
     table.add_row("Conversions", str(zahlen["conversions"]))
-    table.add_row("Referrals", f"{zahlen['referrals']}  (qualifiziert: "
-                               f"{zahlen['referrals_qualified']})")
+    table.add_row(
+        "Referrals", f"{zahlen['referrals']}  (qualifiziert: {zahlen['referrals_qualified']})"
+    )
     table.add_row("Rewards", str(zahlen["rewards"]))
     table.add_row("", "")
     for name, anzahl in sorted(nach_status.items(), key=lambda x: -x[1]):
@@ -2054,8 +2164,7 @@ def marketing_overview() -> None:
 
     if zahlen["clicks"] == 0:
         console.print(
-            "[dim]Noch keine Klicks. Der Dienst, der sie zaehlt, startet mit: "
-            "fbgroups serve[/dim]"
+            "[dim]Noch keine Klicks. Der Dienst, der sie zaehlt, startet mit: fbgroups serve[/dim]"
         )
 
 
@@ -2068,9 +2177,7 @@ def marketing_analytics(
     config = _config()
     gruppen_store, store = _stores(config)
     try:
-        gruppen_namen = {
-            g.group_id: (g.name or g.group_id) for g in gruppen_store.load_groups()
-        }
+        gruppen_namen = {g.group_id: (g.name or g.group_id) for g in gruppen_store.load_groups()}
         kampagnen_namen = {c.campaign_id: c.name for c in store.load_campaigns()}
         gruppen_liste = top_groups(store, gruppen_namen)[:top]
         kampagnen_liste = top_campaigns(store, kampagnen_namen)[:top]
@@ -2127,17 +2234,33 @@ def marketing_analytics(
         with output.open("w", encoding="utf-8-sig", newline="") as fh:
             writer = csv.writer(fh, delimiter=";")
             writer.writerow(
-                ["ebene", "schluessel", "name", "clicks", "landing_visits",
-                 "registrations", "downloads", "activations", "qualified",
-                 "conversions", "conversion_rate"]
+                [
+                    "ebene",
+                    "schluessel",
+                    "name",
+                    "clicks",
+                    "landing_visits",
+                    "registrations",
+                    "downloads",
+                    "activations",
+                    "qualified",
+                    "conversions",
+                    "conversion_rate",
+                ]
             )
             for ebene, zeilen in (("group", gruppen_liste), ("campaign", kampagnen_liste)):
                 for zeile in zeilen:
                     writer.writerow(
                         [
-                            ebene, zeile.schluessel, zeile.label, zeile.clicks,
-                            zeile.landing_visits, zeile.registrations,
-                            zeile.downloads, zeile.activations, zeile.qualified,
+                            ebene,
+                            zeile.schluessel,
+                            zeile.label,
+                            zeile.clicks,
+                            zeile.landing_visits,
+                            zeile.registrations,
+                            zeile.downloads,
+                            zeile.activations,
+                            zeile.qualified,
                             zeile.conversions,
                             zeile.conversion_rate if zeile.conversion_rate is not None else "",
                         ]
@@ -2195,8 +2318,7 @@ def marketing_code(
         return
 
     if not bericht.benutzer:
-        console.print("[dim]Noch niemand - bisher nur Klicks, und die tragen "
-                      "keine Kennung.[/dim]")
+        console.print("[dim]Noch niemand - bisher nur Klicks, und die tragen keine Kennung.[/dim]")
         return
 
     wege = Table(title="Menschen hinter diesem Code")
@@ -2226,6 +2348,7 @@ _WOHER: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # Empfehlungen
 # ---------------------------------------------------------------------------
+
 
 @referral_app.command("code")
 def referral_code(

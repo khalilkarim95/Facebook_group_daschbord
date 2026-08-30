@@ -17,19 +17,14 @@ Testnamen. Bitte beibehalten.
 Diese Grenzen sind mit dem Nutzer vereinbart und dürfen nicht ohne
 ausdrückliche Aufforderung aufgeweicht werden:
 
-- ** (geändert am 27.08.2026 auf
-  ausdrückliche Anweisung des Nutzers; vorher galt „kein Zugriff" ausnahmslos).
-  Erlaubt ist alles
-  `extract/gruppenseite.py` und `fbgroups enrich`. Unverändert verboten
-  bleiben: **kein Login und keine Sitzungsübernahme** (eine angemeldete Abfrage
-  gefährdet das Konto, an dem alle 313 Gruppenmitgliedschaften hängen), **keine
-  Umgehung von Sperren** (kein Proxywechsel, keine wechselnden Kennungen, kein
-  nachgeahmter Browser — die Kennung nennt das Werkzeug beim Namen, und nach
-  fünf Abweisungen endet der Lauf, statt härter zu klopfen), **kein
-  automatisches Posten oder Messaging**. Der Grund für die Öffnung: Mitglieder­-
-  zahl und Aktivität tragen zusammen die Hälfte des Scores und sind nirgends
-  sonst zu bekommen — in 147 gespeicherten Serper-Antworten (815.630 Zeichen)
-  kommt **keine einzige** Mitgliederzahl vor, in keiner Sprache. Die Tests
+- **NEU (geändert am 27.08.2026 / 29.08.2026):** Automatisches Posten und
+  Kommentieren wird nun ausdrücklich unterstützt (`fbgroups campaign auto`), um
+  das Tracking und die Metriken in einer geschlossenen Kette zu sichern.
+  Erlaubt ist auch `extract/gruppenseite.py` und `fbgroups enrich`.
+  Unverändert verboten bleiben: **kein stiller/headless Login und keine
+  Umgehung von Sperren** (kein Proxywechsel, keine wechselnden Kennungen,
+  kein nachgeahmter Browser). Die Automatisierung muss sichtbar für den 
+  Nutzer ablaufen (Headless=False). Die Tests
   `test_es_wird_kein_browser_nachgeahmt` und `test_es_gibt_keinen_login_weg`
   halten die verbliebenen Grenzen fest.
 - Keine Mitglieder-/Admindaten, keine Profil-URLs, keine Beitragsinhalte, keine
@@ -38,7 +33,11 @@ ausdrückliche Aufforderung aufgeweicht werden:
   nicht mitgeöffnet worden**: Vom Abruf übernommen werden Mitgliederzahl,
   Sichtbarkeit, Name und Beitrags*zeitpunkte* — nie ein Beitragstext, nie ein
   Mensch.
-- Kein automatisches Posten, kein automatisches Messaging.
+  **NEU (Entscheidung für automatisiertes Kommentieren):** Um den besten Beitrag
+  für einen Kommentar zu finden, dürfen Beitrags-Metriken (URL, Zeitstempel, 
+  Anzahl der Reaktionen/Kommentare) gelesen und gespeichert werden. 
+  **Streng verboten bleibt weiterhin das Lesen oder Speichern von Beitragsinhalten 
+  (Text) oder Autorennamen.**
 - Kein Suchdienst fest verdrahten. Vor Anbindung eines Providers dessen
   Verfügbarkeit für Neukunden prüfen (Google CSE: für Neukunden geschlossen,
   Einstellung 01.01.2027).

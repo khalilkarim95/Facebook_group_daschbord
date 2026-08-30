@@ -452,17 +452,19 @@ def melde_vorschlag(
     Fassung, nicht die naechste: Wer einen Beitrag veroeffentlicht hat,
     entscheidet selbst, was als naechstes kommt.
 
-    **Pausiert und gestoppt halten Beitrag und Kommentar an**: Sie sind ein
-    Entschluss, in dieser Kampagne gerade nichts hinauszugeben. Eine gezaehlte
-    Grenze gibt es daneben nicht mehr.
+    **Pausiert und gestoppt halten neue Beitraege an**: Sie sind ein
+    Entschluss, in dieser Kampagne gerade nichts hinauszugeben. Ein bereits
+    erfolgreich veroeffentlichter Beitrag (erfolg=True) wird aber dennoch 
+    gespeichert, damit die Buchfuehrung mit der Wirklichkeit auf Facebook 
+    uebereinstimmt.
     """
     jetzt = jetzt or datetime.now(UTC)
     campaign_id = campaign.campaign_id
 
     zustand = store.queue_zustand(campaign_id)
-    if zustand is QueueZustand.PAUSIERT:
+    if zustand is QueueZustand.PAUSIERT and not ergebnis.erfolg:
         return Sperre(Grund.PAUSIERT)
-    if zustand is QueueZustand.GESTOPPT:
+    if zustand is QueueZustand.GESTOPPT and not ergebnis.erfolg:
         return Sperre(Grund.GESTOPPT)
 
     stand = (
@@ -476,27 +478,28 @@ def melde_vorschlag(
     if gemeldet is None:
         return Sperre(Grund.KEINE_GRUPPEN)
 
+    # Die Protokollzeile entsteht **nach** der Handlung und in einem Zug:
+    # Es gibt keinen Zeitraum mehr, in dem ein Versuch offen herumliegt -
+    # der Mensch hat den Beitrag bereits abgesetzt, wenn er hier meldet.
+    versuch_id = store.beginne_versuch(
+        PostVersuch(
+            campaign_id=campaign_id,
+            group_id=link.group_id,
+            tracking_code=link.tracking_code,
+            job_status=JobStatus.PROCESSING,
+            ausgeloest_von=ausgeloest_von,
+            browser_session=sitzung,
+            begonnen_am=jetzt,
+        )
+    )
+    store.beende_versuch(
+        versuch_id,
+        erfolg=ergebnis.erfolg,
+        post_url=ergebnis.post_url,
+        fehler="" if ergebnis.erfolg else (ergebnis.fehler or "ohne Angabe"),
+    )
+    
     if texttyp is Texttyp.POST:
-        # Die Protokollzeile entsteht **nach** der Handlung und in einem Zug:
-        # Es gibt keinen Zeitraum mehr, in dem ein Versuch offen herumliegt -
-        # der Mensch hat den Beitrag bereits abgesetzt, wenn er hier meldet.
-        versuch_id = store.beginne_versuch(
-            PostVersuch(
-                campaign_id=campaign_id,
-                group_id=link.group_id,
-                tracking_code=link.tracking_code,
-                job_status=JobStatus.PROCESSING,
-                ausgeloest_von=ausgeloest_von,
-                browser_session=sitzung,
-                begonnen_am=jetzt,
-            )
-        )
-        store.beende_versuch(
-            versuch_id,
-            erfolg=ergebnis.erfolg,
-            post_url=ergebnis.post_url,
-            fehler="" if ergebnis.erfolg else (ergebnis.fehler or "ohne Angabe"),
-        )
         _gruppenstand_nachziehen(store, campaign_id, link.group_id)
 
     return gemeldet

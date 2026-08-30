@@ -16,7 +16,7 @@ Diese Grenzen sind bewusst gesetzt und im Code verankert:
   (Name, URL, Beschreibungsausschnitt, ungefähre Mitgliederzahl).
 - **Keine** Mitglieder- oder Admindaten, keine Profil-URLs, keine Beitragsinhalte,
   keine Kontaktdaten. Das Datenmodell hat dafür keine Felder.
-- **NEU:** Automatisches Posten und Kommentieren wird über Playwright-Browser-Automatisierung unterstützt (Kommando `fbgroups post` / `fbgroups comment`).
+- **NEU:** Automatisches Posten und Kommentieren wird über Playwright-Browser-Automatisierung unterstützt (Kommando `fbgroups campaign auto`).
 - Beitragsinhalte, Mitglieder- oder Admindaten werden beim regulären Import *nicht* erfasst.
 
 ## Installation
@@ -41,8 +41,7 @@ $py = ".\.venv\Scripts\python.exe"
 & $py -m fbgroups.cli export --format both         # Excel + CSV
 & $py -m fbgroups.cli queries --all                # geplante Suchanfragen ansehen
 & $py -m fbgroups.cli auth login                   # Browser-Session fuer Automatisierung starten
-& $py -m fbgroups.cli post <url> <text>            # Beitrag in Gruppe posten
-& $py -m fbgroups.cli comment <url> <text>         # Kommentar auf Beitrag abgeben
+& $py -m fbgroups.cli campaign auto <id> <group>   # Automatisiert (mit Tracking!) posten
 ```
 
 Nach `pip install -e .` steht zusätzlich der Befehl `fbgroups` direkt zur Verfügung.
