@@ -510,7 +510,12 @@ def _gruppenwahl(
     )
 
 
-def _spalte(texttyp: Texttyp, fassungen: list[Fassung], arbeit: Gruppenarbeit) -> str:
+def _spalte(
+    texttyp: Texttyp,
+    fassungen: list[Fassung],
+    arbeit: Gruppenarbeit,
+    kalt_limit_erreicht: bool = False,
+) -> str:
     """Eine der beiden Spalten - Aufbau identisch, Inhalt unabhaengig.
 
     Bewusst dieselbe Bauform fuer Beitrag und Kommentar: Es ist derselbe
@@ -540,7 +545,7 @@ def _spalte(texttyp: Texttyp, fassungen: list[Fassung], arbeit: Gruppenarbeit) -
             _nummernleiste(kennung, fassungen)
             + _standzeile(kennung, fassungen[0])
             + _textfeld(kennung, zweck, fassungen[0])
-            + _knopfreihe(kennung, zweck, arbeit.url)
+            + _knopfreihe(kennung, zweck, arbeit.url, kalt_limit_erreicht=kalt_limit_erreicht)
             + _meldeblock(kennung, zweck, arbeit)
         )
 
@@ -652,7 +657,7 @@ def _textfeld(kennung: str, zweck: str, fassung: Fassung) -> str:
     )
 
 
-def _knopfreihe(kennung: str, zweck: str, url: str) -> str:
+def _knopfreihe(kennung: str, zweck: str, url: str, kalt_limit_erreicht: bool = False) -> str:
     """Speichern, Kopieren, Gruppe oeffnen - der Handgriff in seiner Reihenfolge.
 
     Der dritte Knopf war "Zurueck zur Vorlage" und ist es seit dem 28.08.2026
@@ -678,15 +683,25 @@ def _knopfreihe(kennung: str, zweck: str, url: str) -> str:
         else ""
     )
     auto_text = "Automatisch posten" if kennung == "post" else "Automatisch kommentieren"
+    auto_desc = "Auf der Gruppenseite" if kennung == "post" else "Sucht den aktivsten Beitrag"
+    auto_disabled = " disabled" if kalt_limit_erreicht else ""
+    auto_style = (
+        "background:#9ca3af;border-color:#6b7280;cursor:not-allowed"
+        if kalt_limit_erreicht
+        else "background:#7e22ce;border-color:#9333ea"
+    )
+    
     return (
         "<div class='knoepfe' style='margin-top:.7rem'>"
         f"<button type='button' class='haupt' id='speichern-{kennung}'>"
         "Speichern</button>"
         f"<button type='button' id='kopieren-{kennung}'>"
         f"{escape(zweck)} kopieren</button>"
-        f"<button type='button' id='auto-{kennung}' class='haupt' "
-        f"style='background:#7e22ce;border-color:#9333ea'>"
-        f"{auto_text}</button>"
+        f"<button type='button' id='auto-{kennung}' class='haupt'{auto_disabled} "
+        f"style='{auto_style}'>"
+        f"{auto_text}<br>"
+        f"<span style='font-size:0.7em;font-weight:normal;opacity:0.8'>{auto_desc}</span>"
+        "</button>"
         + oeffnen
         + "</div>"
         f"<div class='meldung' id='meldung-{kennung}'></div>"
@@ -738,6 +753,7 @@ def render_gruppenarbeit(
     eintraege: list[Gruppeneintrag],
     config: AppConfig | None = None,
     kalt_text: str = "",
+    kalt_limit_erreicht: bool = False,
 ) -> str:
     """Eine Gruppe, zwei Spalten, zehn Fassungen - die ganze Seite.
 
@@ -759,8 +775,10 @@ def render_gruppenarbeit(
             f"<span class='code'>{escape(arbeit.link.tracking_code)}</span>"
             f"<span>Kampagne <b>{escape(campaign_id)}</b></span>"
             + (
-                "<span class='hinweis' style='margin:0; padding:0 1rem; "
-                f"border-left:1px solid #ccc'>{kalt_text}</span>"
+                f"<span class='hinweis' style='margin:0; padding:0 1rem; "
+                "border-left:1px solid #ccc; "
+                f"{'color:#dc2626;font-weight:bold;' if kalt_limit_erreicht else ''}'>"
+                f"{kalt_text}</span>"
                 if kalt_text
                 else ""
             )
@@ -770,8 +788,12 @@ def render_gruppenarbeit(
         + merkmale(arbeit.gruppe, arbeit.link, config)
         + _gruppenwahl(campaign_id, arbeit, eintraege)
         + "<div class='spalten'>"
-        + _spalte(Texttyp.POST, arbeit.posts, arbeit)
-        + _spalte(Texttyp.KOMMENTAR, arbeit.kommentare, arbeit)
+        + _spalte(
+            Texttyp.POST, arbeit.posts, arbeit, kalt_limit_erreicht=kalt_limit_erreicht
+        )
+        + _spalte(
+            Texttyp.KOMMENTAR, arbeit.kommentare, arbeit, kalt_limit_erreicht=kalt_limit_erreicht
+        )
         + "</div>"
         + (
             "<p class='hinweis' style='margin-top:1rem'>"

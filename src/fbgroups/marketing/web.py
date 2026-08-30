@@ -979,6 +979,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             jetzt = datetime.now(UTC)
             aktiv, pro_tag, abstand = km.einstellungen(cfg)
             kalt_text = ""
+            kalt_limit_erreicht = False
             if aktiv:
                 heute = store.versuche_heute(jetzt.date().isoformat())
                 roh = store.letzter_versuch()
@@ -992,9 +993,18 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 kalt_text = f"Heute: {portion.erledigt} von {portion.grenze}"
                 if warte:
                     kalt_text += f" &middot; Nächster: {warte}"
+                if portion.erledigt >= portion.grenze:
+                    kalt_limit_erreicht = True
 
         return HTMLResponse(
-            render_gruppenarbeit(stand, campaign_id, eintraege, cfg, kalt_text=kalt_text)
+            render_gruppenarbeit(
+                stand,
+                campaign_id,
+                eintraege,
+                cfg,
+                kalt_text=kalt_text,
+                kalt_limit_erreicht=kalt_limit_erreicht,
+            )
         )
 
     def _vorschlag_oder_404(  # noqa: ANN202

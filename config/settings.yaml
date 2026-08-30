@@ -272,7 +272,7 @@ scoring:
 kaltmodus:
   # Voreingestellt aus: Ein Update soll das Verhalten von gestern nicht
   # stillschweigend aendern. Einschalten ist eine Entscheidung.
-  aktiv: false
+  aktiv: true
 
   # Beitraege je Tag ueber alle Kampagnen. 25 bei 310 Gruppen sind knapp
   # dreizehn Tage - die Zahl darf steigen, aber jede Erhoehung ist genau der
