@@ -1175,6 +1175,7 @@ def campaign_auto(
     # 2. BROWSER-Phase (Datenbank geschlossen, kann Minuten dauern)
     erfolg = False
     fehler_text = "Element nicht gefunden oder blockiert"
+    used_post_url = ""
     try:
         with get_browser_context(config, headless=False) as context:
             if texttyp == Texttyp.POST:
@@ -1197,8 +1198,16 @@ def campaign_auto(
                     with SqliteStore(config.path("sqlite_path")) as gruppen_store:
                         gruppen_store.upsert_group_posts(group.group_id, posts)
 
-                    best_post = max(posts, key=lambda p: p.interactions + p.comments)
-                    erfolg = comment_on_post(context, best_post.post_url, text)
+                    with MarketingStore(config.path("sqlite_path")) as store:
+                        bisherige = store.bisherige_post_urls(group.group_id)
+
+                    offene_posts = [p for p in posts if p.post_url not in bisherige]
+                    if offene_posts:
+                        best_post = max(offene_posts, key=lambda p: p.interactions + p.comments)
+                        used_post_url = best_post.post_url
+                        erfolg = comment_on_post(context, used_post_url, text)
+                    else:
+                        fehler_text = "Alle aktuellen Beiträge wurden bereits kommentiert."
                 else:
                     fehler_text = "Keine passenden Beiträge zum Kommentieren gefunden."
     except Exception as exc:
@@ -1214,7 +1223,7 @@ def campaign_auto(
             link,
             texttyp,
             nummer,
-            Ergebnis(erfolg=erfolg, fehler="" if erfolg else fehler_text),
+            Ergebnis(erfolg=erfolg, fehler="" if erfolg else fehler_text, post_url=used_post_url),
             ausgeloest_von="cli",
             sitzung="auto",
         )

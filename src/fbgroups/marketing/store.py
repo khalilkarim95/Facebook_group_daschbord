@@ -1614,6 +1614,14 @@ class MarketingStore:
             gefunden.setdefault(str(row["group_id"]), set()).add(str(row["status"]))
         return gefunden
 
+    def bisherige_post_urls(self, group_id: str) -> set[str]:
+        """Liefert die URLs aller Beiträge, auf die in dieser Gruppe bereits erfolgreich kommentiert wurde."""
+        rows = self.conn.execute(
+            "SELECT post_url FROM post_versuche WHERE group_id = ? AND erfolg = 1 AND post_url != ''",
+            (group_id,)
+        ).fetchall()
+        return {str(r["post_url"]) for r in rows}
+
     def _spiegle_ins_paar(
         self,
         campaign_id: str,

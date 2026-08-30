@@ -172,24 +172,36 @@ def fetch_top_posts(
                 if "?" in post_url and "multi_permalinks" not in post_url:
                     post_url = post_url.split("?")[0]
 
+                from fbgroups.importers.manual_seed import parse_member_count
+
                 # Get text content of the article to parse numbers
                 text_content = article.inner_text()
 
-                # Look for comments
-                comments_match = re.search(r"(\d+)\s*Kommentar", text_content, re.IGNORECASE)
-                comments_count = int(comments_match.group(1)) if comments_match else 0
+                # Look for comments (German, English, Arabic)
+                comments_match = re.search(
+                    r"(\d[\d.,\s]*[kKmM]?)\s*(?:Kommentare?|comments?|تعليقات|تعليق)",
+                    text_content,
+                    re.IGNORECASE,
+                )
+                comments_count = (
+                    parse_member_count(comments_match.group(1)) if comments_match else 0
+                )
+                # Fallback on parse_member_count returning None
+                comments_count = comments_count or 0
 
                 # Interactions
                 reactions_locator = article.locator(
-                    "[aria-label*='gefällt das'], [aria-label*='Reaktionen']"
+                    "[aria-label*='gefällt das'], [aria-label*='Reaktionen'], "
+                    "[aria-label*='likes'], [aria-label*='reactions'], "
+                    "[aria-label*='تفاعل'], [aria-label*='إعجاب']"
                 ).first
                 interactions_count = 0
                 # Using wait_for timeout 0 or just counting to see if it exists
                 if reactions_locator.count() > 0:
                     aria = reactions_locator.get_attribute("aria-label") or ""
-                    num_match = re.search(r"(\d+)", aria)
+                    num_match = re.search(r"(\d[\d.,\s]*[kKmM]?)", aria)
                     if num_match:
-                        interactions_count = int(num_match.group(1))
+                        interactions_count = parse_member_count(num_match.group(1)) or 0
 
                 posts_data.append(
                     {
