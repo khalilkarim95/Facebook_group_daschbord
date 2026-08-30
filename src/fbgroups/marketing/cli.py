@@ -1087,7 +1087,7 @@ def campaign_auto(
     from fbgroups.automation.actions import comment_on_post, fetch_top_posts, post_to_group
     from fbgroups.automation.browser import get_browser_context
     from fbgroups.marketing.arbeit import Ergebnis, Sperre, melde_vorschlag
-    from fbgroups.marketing.auswahl import Texttyp
+    from fbgroups.marketing.models import Texttyp
     from fbgroups.marketing.beitrag import mit_link
     from fbgroups.storage.sqlite_store import SqliteStore
 

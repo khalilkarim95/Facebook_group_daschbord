@@ -179,7 +179,7 @@ def fetch_top_posts(
 
                 # Look for comments (German, English, Arabic)
                 comments_match = re.search(
-                    r"(\d[\d.,\s]*[kKmM]?)\s*(?:Kommentare?|comments?|تعليقات|تعليق)",
+                    r"(\d[\d.,\s]*(?:[kKmM]|Tsd\.?|Mio\.?)?)\s*(?:Kommentare?|comments?|تعليقات|تعليق)",
                     text_content,
                     re.IGNORECASE,
                 )
@@ -199,7 +199,7 @@ def fetch_top_posts(
                 # Using wait_for timeout 0 or just counting to see if it exists
                 if reactions_locator.count() > 0:
                     aria = reactions_locator.get_attribute("aria-label") or ""
-                    num_match = re.search(r"(\d[\d.,\s]*[kKmM]?)", aria)
+                    num_match = re.search(r"(\d[\d.,\s]*(?:[kKmM]|Tsd\.?|Mio\.?)?)", aria)
                     if num_match:
                         interactions_count = parse_member_count(num_match.group(1)) or 0
 

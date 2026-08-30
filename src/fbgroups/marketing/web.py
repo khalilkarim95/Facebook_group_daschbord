@@ -972,8 +972,25 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                             return RedirectResponse(f"/arbeit/{campaign_id}", status_code=303)
 
             eintraege = auswahlliste(store, campaign_id, reihe, gruppen)
+            
+            from fbgroups.marketing import kaltmodus as km
+            from datetime import UTC, datetime
+            jetzt = datetime.now(UTC)
+            aktiv, pro_tag, abstand = km.einstellungen(cfg)
+            kalt_text = ""
+            if aktiv:
+                heute = store.versuche_heute(jetzt.date().isoformat())
+                roh = store.letzter_versuch()
+                portion = km.tagesportion(reihe, erledigt_heute=heute, grenze=pro_tag)
+                letzter = datetime.fromisoformat(roh) if roh else None
+                frei_ab = km.naechster_zeitpunkt(letzter, abstand_minuten=abstand, jetzt=jetzt)
+                warte = km.wartezeit_text(frei_ab, jetzt=jetzt)
+                
+                kalt_text = f"Heute: {portion.erledigt} von {portion.grenze}"
+                if warte:
+                    kalt_text += f" &middot; Nächster: {warte}"
 
-        return HTMLResponse(render_gruppenarbeit(stand, campaign_id, eintraege, cfg))
+        return HTMLResponse(render_gruppenarbeit(stand, campaign_id, eintraege, cfg, kalt_text=kalt_text))
 
     def _vorschlag_oder_404(  # noqa: ANN202
         store: MarketingStore, campaign_id: str, group_id: str
@@ -1290,6 +1307,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                         "nummer": ergebnis.nummer,
                         "stand": ergebnis.status.value,
                         "fehler": "",
+                        "post_url": used_post_url,
                         "meldung": "Automatisch veroeffentlicht!",
                     }
                 )

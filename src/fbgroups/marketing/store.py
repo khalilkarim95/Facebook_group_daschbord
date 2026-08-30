@@ -1622,6 +1622,14 @@ class MarketingStore:
         ).fetchall()
         return {str(r["post_url"]) for r in rows}
 
+    def letzte_post_url(self, campaign_id: str, group_id: str) -> str:
+        """Liefert die letzte erfolgreiche Post-URL für diese Gruppe in dieser Kampagne."""
+        row = self.conn.execute(
+            "SELECT post_url FROM post_versuche WHERE campaign_id = ? AND group_id = ? AND erfolg = 1 AND post_url != '' ORDER BY begonnen_am DESC LIMIT 1",
+            (campaign_id, group_id)
+        ).fetchone()
+        return str(row[0]) if row else ""
+
     def _spiegle_ins_paar(
         self,
         campaign_id: str,

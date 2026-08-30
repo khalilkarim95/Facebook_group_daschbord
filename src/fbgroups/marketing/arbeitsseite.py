@@ -589,10 +589,14 @@ def _nummernleiste(kennung: str, fassungen: list[Fassung]) -> str:
 def _standzeile(kennung: str, fassung: Fassung) -> str:
     """Stand, Vorlage und Herkunft der gerade gezeigten Fassung."""
     zeichen, wort = _STANDNAME[fassung.status]
+    link_html = (
+        f" <a href='{escape(fassung.post_url)}' target='_blank' rel='noopener' class='post-link'>[Ansehen]</a>"
+        if fassung.post_url else ""
+    )
     return (
         "<div class='standzeile'>"
         f"<span class='abzeichen' id='stand-{kennung}' "
-        f"data-stand='{fassung.status.value}'>{zeichen} {escape(wort)}</span>"
+        f"data-stand='{fassung.status.value}'>{zeichen} {escape(wort)}{link_html}</span>"
         f"<span id='fehler-{kennung}' class='schlecht-text'>"
         + escape(fassung.vorschlag.fehler)
         + "</span>"
@@ -731,6 +735,7 @@ def render_gruppenarbeit(
     campaign_id: str,
     eintraege: list[Gruppeneintrag],
     config: AppConfig | None = None,
+    kalt_text: str = "",
 ) -> str:
     """Eine Gruppe, zwei Spalten, zehn Fassungen - die ganze Seite.
 
@@ -751,7 +756,8 @@ def render_gruppenarbeit(
             "<div class='leiste'>"
             f"<span class='code'>{escape(arbeit.link.tracking_code)}</span>"
             f"<span>Kampagne <b>{escape(campaign_id)}</b></span>"
-            "<a class='knopf' href='/'>&larr; Uebersicht</a>"
+            + (f"<span class='hinweis' style='margin:0; padding:0 1rem; border-left:1px solid #ccc'>{kalt_text}</span>" if kalt_text else "")
+            + "<a class='knopf' href='/'>&larr; Uebersicht</a>"
             "</div>"
         )
         + merkmale(arbeit.gruppe, arbeit.link, config)
@@ -787,6 +793,7 @@ def _zustand_fuer_js(fassungen: list[Fassung]) -> list[dict[str, object]]:
             "angezeigt": fassung.angezeigt,
             "stand": fassung.status.value,
             "fehler": fassung.vorschlag.fehler,
+            "post_url": fassung.post_url,
             "vorlage": _vorlagentext(fassung),
         }
         for fassung in fassungen
@@ -849,6 +856,16 @@ def _skript(campaign_id: str, arbeit: Gruppenarbeit) -> str:
       const beschriftung = STAND[fassung.stand] || ['', fassung.stand];
       abzeichen.dataset.stand = fassung.stand;
       abzeichen.textContent = (beschriftung[0] + ' ' + beschriftung[1]).trim();
+      if (fassung.post_url) {{
+        const a = document.createElement('a');
+        a.href = fassung.post_url;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.className = 'post-link';
+        a.textContent = '[Ansehen]';
+        abzeichen.appendChild(document.createTextNode(' '));
+        abzeichen.appendChild(a);
+      }}
     }}
     const fehlerfeld = id('fehler', typ);
     if (fehlerfeld) fehlerfeld.textContent = fassung.fehler || '';
@@ -1018,6 +1035,9 @@ def _skript(campaign_id: str, arbeit: Gruppenarbeit) -> str:
         if (fassung) {{
           fassung.stand = daten.stand;
           fassung.fehler = daten.fehler || '';
+          if (daten.post_url) {{
+            fassung.post_url = daten.post_url;
+          }}
         }}
         zeichneStand(typ);
       }}
