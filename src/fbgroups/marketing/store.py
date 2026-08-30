@@ -1630,11 +1630,11 @@ class MarketingStore:
         """Liefert die letzte erfolgreiche Post-URL für diesen bestimmten Entwurf."""
         row = self.conn.execute(
             "SELECT post_url FROM post_versuche WHERE campaign_id = ? AND group_id = ? "
-            "AND texttyp = ? AND nummer = ? AND erfolg = 1 AND post_url != '' "
+            "AND texttyp = ? AND nummer = ? AND erfolg = 1 "
             "ORDER BY begonnen_am DESC LIMIT 1",
             (campaign_id, group_id, texttyp, nummer)
         ).fetchone()
-        return str(row[0]) if row else ""
+        return str(row[0]) if row and row[0] else ""
 
     def _spiegle_ins_paar(
         self,
