@@ -1,6 +1,7 @@
-import pytest
 from unittest.mock import MagicMock
+
 from fbgroups.automation.actions import fetch_top_posts
+
 
 def test_fetch_top_posts_extracts_correct_metrics():
     """Prüft, ob fetch_top_posts Ziffern in DE, EN und AR korrekt ausliest."""
@@ -39,7 +40,11 @@ def test_fetch_top_posts_extracts_correct_metrics():
                         return [LinkElement(self.data)]
                 return LinkLocator(self.data)
             
-            if "aria-label*='gefällt das'" in selector or "reactions" in selector or "إعجاب" in selector:
+            if (
+                "aria-label*='gefällt das'" in selector
+                or "reactions" in selector
+                or "إعجاب" in selector
+            ):
                 class ReactElement:
                     def __init__(self, data):
                         self.data = data

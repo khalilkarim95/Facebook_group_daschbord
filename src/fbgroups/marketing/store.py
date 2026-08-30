@@ -1615,9 +1615,11 @@ class MarketingStore:
         return gefunden
 
     def bisherige_post_urls(self, group_id: str) -> set[str]:
-        """Liefert die URLs aller Beiträge, auf die in dieser Gruppe bereits erfolgreich kommentiert wurde."""
+        """Liefert die URLs aller Beiträge, auf die in dieser Gruppe bereits 
+        erfolgreich kommentiert wurde."""
         rows = self.conn.execute(
-            "SELECT post_url FROM post_versuche WHERE group_id = ? AND erfolg = 1 AND post_url != ''",
+            "SELECT post_url FROM post_versuche WHERE group_id = ? "
+            "AND erfolg = 1 AND post_url != ''",
             (group_id,)
         ).fetchall()
         return {str(r["post_url"]) for r in rows}
@@ -1625,7 +1627,8 @@ class MarketingStore:
     def letzte_post_url(self, campaign_id: str, group_id: str) -> str:
         """Liefert die letzte erfolgreiche Post-URL für diese Gruppe in dieser Kampagne."""
         row = self.conn.execute(
-            "SELECT post_url FROM post_versuche WHERE campaign_id = ? AND group_id = ? AND erfolg = 1 AND post_url != '' ORDER BY begonnen_am DESC LIMIT 1",
+            "SELECT post_url FROM post_versuche WHERE campaign_id = ? AND group_id = ? "
+            "AND erfolg = 1 AND post_url != '' ORDER BY begonnen_am DESC LIMIT 1",
             (campaign_id, group_id)
         ).fetchone()
         return str(row[0]) if row else ""

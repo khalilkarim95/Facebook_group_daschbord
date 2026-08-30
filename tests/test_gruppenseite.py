@@ -101,8 +101,9 @@ def test_es_wird_kein_browser_nachgeahmt() -> None:
     waere Umgehung; wer uns aussperren will, soll uns erkennen koennen.
     Das gilt auch fuer die Automatisierung (Playwright).
     """
-    from fbgroups.extract.gruppenseite import _KENNUNG
     from pathlib import Path
+
+    from fbgroups.extract.gruppenseite import _KENNUNG
 
     assert "fbgroups" in _KENNUNG
     

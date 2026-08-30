@@ -973,8 +973,9 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
 
             eintraege = auswahlliste(store, campaign_id, reihe, gruppen)
             
-            from fbgroups.marketing import kaltmodus as km
             from datetime import UTC, datetime
+
+            from fbgroups.marketing import kaltmodus as km
             jetzt = datetime.now(UTC)
             aktiv, pro_tag, abstand = km.einstellungen(cfg)
             kalt_text = ""
@@ -990,7 +991,9 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 if warte:
                     kalt_text += f" &middot; Nächster: {warte}"
 
-        return HTMLResponse(render_gruppenarbeit(stand, campaign_id, eintraege, cfg, kalt_text=kalt_text))
+        return HTMLResponse(
+            render_gruppenarbeit(stand, campaign_id, eintraege, cfg, kalt_text=kalt_text)
+        )
 
     def _vorschlag_oder_404(  # noqa: ANN202
         store: MarketingStore, campaign_id: str, group_id: str
@@ -1281,7 +1284,9 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 link,
                 meldung.texttyp,
                 meldung.nummer,
-                Ergebnis(erfolg=erfolg, fehler="" if erfolg else fehler_text, post_url=used_post_url),
+                Ergebnis(
+                    erfolg=erfolg, fehler="" if erfolg else fehler_text, post_url=used_post_url
+                ),
                 ausgeloest_von="auto",
                 sitzung="browser",
             )

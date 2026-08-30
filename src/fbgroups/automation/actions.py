@@ -168,9 +168,8 @@ def fetch_top_posts(
                 if post_url.startswith("/"):
                     post_url = "https://www.facebook.com" + post_url
 
-                # Remove query params to get clean URL (unless it's multi_permalinks)
-                if "?" in post_url and "multi_permalinks" not in post_url:
-                    post_url = post_url.split("?")[0]
+                from fbgroups.urls import canonical_post_url
+                post_url = canonical_post_url(post_url, group_id) or post_url
 
                 from fbgroups.importers.manual_seed import parse_member_count
 

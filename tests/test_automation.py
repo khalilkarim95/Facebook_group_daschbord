@@ -11,15 +11,21 @@ Geprüft wird:
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fbgroups.marketing.store import MarketingStore
-from fbgroups.marketing.models import Campaign, CampaignGroup, QueueZustand, VorschlagStatus, Texttyp
-from fbgroups.storage import SqliteStore
-from fbgroups.models import Group
 from fbgroups.marketing.arbeit import stelle_texte_bereit
+from fbgroups.marketing.models import (
+    Campaign,
+    CampaignGroup,
+    QueueZustand,
+    Texttyp,
+    VorschlagStatus,
+)
+from fbgroups.marketing.store import MarketingStore
+from fbgroups.models import Group
+from fbgroups.storage import SqliteStore
 
 KAMPAGNE = "batreeq"
 GRUPPEN = {
@@ -69,6 +75,7 @@ def bestand(tmp_path: Path) -> Path:
 def _client(bestand, config, **kwargs):
     pytest.importorskip("fastapi", reason="nur mit dem optionalen web-Zusatz")
     from fastapi.testclient import TestClient
+
     from fbgroups.marketing.web import create_app
     return TestClient(create_app(config=config, db_path=bestand), **kwargs)
 
@@ -174,8 +181,9 @@ def test_erfolg_wird_trotz_pause_gespeichert(
     # Da das im synchronen Code schwer zu mocken ist, uebergehen wir den READ-Check,
     # indem wir store.queue_zustand IM Mock auf PAUSIERT setzen.
     
-    # Alternativer Ansatz: Wir testen nur melde_vorschlag direkt, weil der Bug ja in melde_vorschlag war.
-    from fbgroups.marketing.arbeit import melde_vorschlag, Ergebnis
+    # Alternativer Ansatz: Wir testen nur melde_vorschlag direkt, 
+    # weil der Bug ja in melde_vorschlag war.
+    from fbgroups.marketing.arbeit import Ergebnis, melde_vorschlag
     
     with MarketingStore(bestand) as store:
         store.set_queue_zustand(KAMPAGNE, QueueZustand.PAUSIERT)

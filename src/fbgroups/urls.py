@@ -110,3 +110,35 @@ def parse_group_url(raw: str) -> ParsedGroupUrl | UrlParseError:
 def is_group_url(raw: str) -> bool:
     """Bequemer Wahrheitstest ohne Fehlerdetails."""
     return isinstance(parse_group_url(raw), ParsedGroupUrl)
+
+
+def canonical_post_url(raw_url: str, group_id: str) -> str | None:
+    """Extrahiert die Post-ID aus verschiedenen Facebook-URL-Formaten 
+    und gibt eine kanonische URL zurück."""
+    from urllib.parse import parse_qs, urlparse
+    
+    url = (raw_url or "").strip()
+    if not url:
+        return None
+        
+    if url.startswith("/"):
+        url = "https://www.facebook.com" + url
+        
+    try:
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query)
+        
+        post_id = None
+        if "multi_permalinks" in qs and qs["multi_permalinks"]:
+            post_id = qs["multi_permalinks"][0].split(",")[0]
+        else:
+            match = re.search(r"/(?:posts|permalink)/(\d+)", parsed.path)
+            if match:
+                post_id = match.group(1)
+                
+        if post_id:
+            return f"https://www.facebook.com/groups/{group_id}/posts/{post_id}/"
+    except Exception:
+        pass
+        
+    return raw_url

@@ -590,8 +590,10 @@ def _standzeile(kennung: str, fassung: Fassung) -> str:
     """Stand, Vorlage und Herkunft der gerade gezeigten Fassung."""
     zeichen, wort = _STANDNAME[fassung.status]
     link_html = (
-        f" <a href='{escape(fassung.post_url)}' target='_blank' rel='noopener' class='post-link'>[Ansehen]</a>"
-        if fassung.post_url else ""
+        f" <a href='{escape(fassung.post_url)}' target='_blank' "
+        "rel='noopener' class='post-link'>[Ansehen]</a>"
+        if fassung.post_url
+        else ""
     )
     return (
         "<div class='standzeile'>"
@@ -756,7 +758,12 @@ def render_gruppenarbeit(
             "<div class='leiste'>"
             f"<span class='code'>{escape(arbeit.link.tracking_code)}</span>"
             f"<span>Kampagne <b>{escape(campaign_id)}</b></span>"
-            + (f"<span class='hinweis' style='margin:0; padding:0 1rem; border-left:1px solid #ccc'>{kalt_text}</span>" if kalt_text else "")
+            + (
+                "<span class='hinweis' style='margin:0; padding:0 1rem; "
+                f"border-left:1px solid #ccc'>{kalt_text}</span>"
+                if kalt_text
+                else ""
+            )
             + "<a class='knopf' href='/'>&larr; Uebersicht</a>"
             "</div>"
         )
