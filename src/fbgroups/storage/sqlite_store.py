@@ -20,9 +20,9 @@ from fbgroups.marketing.store import SCHEMA_IDENTITAETEN as MARKETING_IDENTITAET
 from fbgroups.marketing.store import SCHEMA_POSTING as MARKETING_POSTING_SCHEMA
 from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEMA
 from fbgroups.marketing.store import SCHEMA_VORSCHLAEGE as MARKETING_VORSCHLAEGE_SCHEMA
-from fbgroups.models import Group, ImportRun, ScoreBreakdown, ValidationStatus
+from fbgroups.models import Group, GroupPost, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 def _iso_oder_none(zeitpunkt: datetime | None) -> str | None:
@@ -33,6 +33,7 @@ def _iso_oder_none(zeitpunkt: datetime | None) -> str | None:
     haette keine Antwort mehr.
     """
     return zeitpunkt.isoformat() if zeitpunkt is not None else None
+
 
 # Schritte, die eine aeltere Datei nachholt, ohne dass der Bestand neu
 # aufgebaut werden muss. Handgepflegte Notizen bleiben so erhalten.
@@ -283,6 +284,23 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE groups ADD COLUMN data_confidence REAL NOT NULL DEFAULT 0",
         "ALTER TABLE groups ADD COLUMN last_checked_at TEXT",
     ),
+    # Beitrags-Metriken (URL, Interaktionen, Kommentare) zum Finden des
+    # besten Beitrags fuer einen automatisierten Kommentar.
+    # Wichtig: Keine Beitragsinhalte, keine Autorennamen (harte Grenze).
+    16: (
+        """
+        CREATE TABLE IF NOT EXISTS group_posts (
+            group_id         TEXT NOT NULL,
+            post_url         TEXT NOT NULL,
+            interactions     INTEGER NOT NULL DEFAULT 0,
+            comments         INTEGER NOT NULL DEFAULT 0,
+            published_at     TEXT,
+            fetched_at       TEXT NOT NULL,
+            PRIMARY KEY (group_id, post_url),
+            FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
+        )
+        """,
+    ),
 }
 
 SCHEMA = """
@@ -374,6 +392,17 @@ CREATE TABLE IF NOT EXISTS runs (
     groups_insufficient_data INTEGER NOT NULL DEFAULT 0,
     groups_scored    INTEGER NOT NULL DEFAULT 0,
     errors           TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS group_posts (
+    group_id         TEXT NOT NULL,
+    post_url         TEXT NOT NULL,
+    interactions     INTEGER NOT NULL DEFAULT 0,
+    comments         INTEGER NOT NULL DEFAULT 0,
+    published_at     TEXT,
+    fetched_at       TEXT NOT NULL,
+    PRIMARY KEY (group_id, post_url),
+    FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
 );
 """
 
@@ -625,6 +654,31 @@ class SqliteStore:
         self.conn.commit()
         return new_count, known_count
 
+    def upsert_group_posts(self, group_id: str, posts: list[GroupPost]) -> None:
+        """Speichert Beitragsmetriken. Keine Inhalte, keine Autoren."""
+        for post in posts:
+            self.conn.execute(
+                """
+                INSERT INTO group_posts (
+                    group_id, post_url, interactions, comments, published_at, fetched_at
+                ) VALUES (?,?,?,?,?,?)
+                ON CONFLICT(group_id, post_url) DO UPDATE SET
+                    interactions = excluded.interactions,
+                    comments     = excluded.comments,
+                    published_at = COALESCE(excluded.published_at, group_posts.published_at),
+                    fetched_at   = excluded.fetched_at
+                """,
+                (
+                    group_id,
+                    post.post_url,
+                    post.interactions,
+                    post.comments,
+                    _iso_oder_none(post.published_at),
+                    post.fetched_at.isoformat(),
+                ),
+            )
+        self.conn.commit()
+
     def update_scores(self, groups: list[Group]) -> int:
         """Schreibt Klassifikation und Bewertung zurueck - sonst nichts.
 
@@ -724,6 +778,28 @@ class SqliteStore:
         order = "ORDER BY score DESC, name COLLATE NOCASE" if order_by_score else ""
         rows = self.conn.execute(f"SELECT * FROM groups {order}").fetchall()  # noqa: S608
         return [self._row_to_group(row) for row in rows]
+
+    def load_group_posts(self, group_id: str) -> list[GroupPost]:
+        """Lädt die Metriken der gespeicherten Beiträge einer Gruppe."""
+        from fbgroups.models import GroupPost
+
+        rows = self.conn.execute(
+            "SELECT * FROM group_posts WHERE group_id = ? ORDER BY fetched_at DESC", (group_id,)
+        ).fetchall()
+
+        return [
+            GroupPost(
+                group_id=r["group_id"],
+                post_url=r["post_url"],
+                interactions=r["interactions"],
+                comments=r["comments"],
+                published_at=datetime.fromisoformat(r["published_at"])
+                if r["published_at"]
+                else None,
+                fetched_at=datetime.fromisoformat(r["fetched_at"]),
+            )
+            for r in rows
+        ]
 
     def count_groups(self) -> int:
         return int(self.conn.execute("SELECT COUNT(*) FROM groups").fetchone()[0])

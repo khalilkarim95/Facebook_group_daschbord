@@ -28,7 +28,7 @@ class ValidationStatus(StrEnum):
 
     VALID = "valid"
     INVALID = "invalid"
-    TEST_DATA = "test_data"     # offensichtlicher Platzhalter, kein echter Fund
+    TEST_DATA = "test_data"  # offensichtlicher Platzhalter, kein echter Fund
     # Vom Menschen im Browser geprueft und nicht erreichbar (geloescht, privat,
     # umbenannt). Dieses Urteil kann das Programm nicht selbst faellen - es
     # ruft facebook.com nicht auf - und darf es deshalb auch nie ueberschreiben.
@@ -48,9 +48,9 @@ class RecordStatus(StrEnum):
 class DataQuality(StrEnum):
     """Wie viele belastbare Metadatenfelder tatsaechlich vorliegen."""
 
-    NONE = "none"          # nur die URL
-    MINIMAL = "minimal"    # 1-2 Felder
-    PARTIAL = "partial"    # 3-4 Felder
+    NONE = "none"  # nur die URL
+    MINIMAL = "minimal"  # 1-2 Felder
+    PARTIAL = "partial"  # 3-4 Felder
     COMPLETE = "complete"  # 5 und mehr Felder
 
 
@@ -68,9 +68,9 @@ class MemberCountSource(StrEnum):
     geschaetzt wurde; ``data_confidence`` liest genau das hier ab.
     """
 
-    FACEBOOK = "facebook"    # oeffentlich erreichbare Gruppenseite
-    SEARCH = "search"        # ausdruecklich benannt im Suchtreffer
-    MANUAL = "manual"        # von Hand gepflegt (fbgroups pruefliste)
+    FACEBOOK = "facebook"  # oeffentlich erreichbare Gruppenseite
+    SEARCH = "search"  # ausdruecklich benannt im Suchtreffer
+    MANUAL = "manual"  # von Hand gepflegt (fbgroups pruefliste)
 
 
 class ActivitySource(StrEnum):
@@ -82,8 +82,8 @@ class ActivitySource(StrEnum):
     Suchtreffer belegen nur, dass irgendwann ein Beitrag indexiert wurde.
     """
 
-    FACEBOOK = "facebook"          # Beitragsliste der Gruppenseite
-    RESONANZ = "resonanz"          # eigene Tracking-Ereignisse
+    FACEBOOK = "facebook"  # Beitragsliste der Gruppenseite
+    RESONANZ = "resonanz"  # eigene Tracking-Ereignisse
     SEARCH_DATES = "search_dates"  # Datumsangaben indexierter Beitraege
 
 
@@ -91,7 +91,7 @@ class Provenance(BaseModel):
     """Woher stammt ein Datensatz - fuer die Qualitaetsauswertung."""
 
     source_type: SourceType
-    source_ref: str = ""          # Dateiname (Seed) bzw. query_id (Suche)
+    source_ref: str = ""  # Dateiname (Seed) bzw. query_id (Suche)
     source_line: int | None = None
     discovered_at: datetime = Field(default_factory=_utcnow)
 
@@ -112,11 +112,11 @@ class ScoreBreakdown(BaseModel):
     """
 
     # -- Die fuenf Bestandteile (Summe der Gewichte: 100) ------------------
-    members: float = 0.0           # 25 - Groesse, logarithmisch gestuft
-    activity: float = 0.0          # 25 - Betrieb in der Gruppe
-    location: float = 0.0          # 15 - geografische Passung
-    category: float = 0.0          # 20 - Themenpassung
-    target_audience: float = 0.0   # 15 - Zielgruppenpassung
+    members: float = 0.0  # 25 - Groesse, logarithmisch gestuft
+    activity: float = 0.0  # 25 - Betrieb in der Gruppe
+    location: float = 0.0  # 15 - geografische Passung
+    category: float = 0.0  # 20 - Themenpassung
+    target_audience: float = 0.0  # 15 - Zielgruppenpassung
 
     # -- Abschaltbare Zusatzbestandteile (Vorgabegewicht 0) ----------------
     # Sie zaehlen nicht mit, solange ihr Gewicht 0 ist, und erscheinen dann
@@ -246,14 +246,30 @@ class Group(BaseModel):
         self.times_seen += other.times_seen
 
 
+class GroupPost(BaseModel):
+    """Metriken eines einzelnen Gruppenbeitrags.
+
+    ACHTUNG: Dieses Modell darf keine Felder für Beitragstexte oder
+    Autorennamen enthalten (harte Projektgrenze). Es dient ausschließlich
+    der Auswahl des besten Beitrags für automatisierte Kommentare.
+    """
+
+    group_id: str
+    post_url: str
+    interactions: int = 0
+    comments: int = 0
+    published_at: datetime | None = None
+    fetched_at: datetime = Field(default_factory=_utcnow)
+
+
 class QueryStatus(StrEnum):
     OK = "ok"
-    EMPTY = "empty"                # Antwort ohne Treffer
-    CACHED = "cached"              # aus dem Zwischenspeicher, kein Guthaben verbraucht
+    EMPTY = "empty"  # Antwort ohne Treffer
+    CACHED = "cached"  # aus dem Zwischenspeicher, kein Guthaben verbraucht
     RATE_LIMITED = "rate_limited"
     QUOTA_EXHAUSTED = "quota_exhausted"
     ERROR = "error"
-    SKIPPED = "skipped"            # wegen Obergrenze nicht ausgefuehrt
+    SKIPPED = "skipped"  # wegen Obergrenze nicht ausgefuehrt
 
 
 class QueryRecord(BaseModel):
@@ -270,9 +286,9 @@ class QueryRecord(BaseModel):
     provider: str = ""
     status: QueryStatus = QueryStatus.SKIPPED
     from_cache: bool = False
-    n_results: int = 0             # Treffer insgesamt
-    n_group_urls: int = 0          # davon Facebook-Gruppen
-    n_groups_new: int = 0          # davon in diesem Lauf erstmals gesehen
+    n_results: int = 0  # Treffer insgesamt
+    n_group_urls: int = 0  # davon Facebook-Gruppen
+    n_groups_new: int = 0  # davon in diesem Lauf erstmals gesehen
     error_type: str = ""
     error_message: str = ""
     duration_ms: int = 0
@@ -358,8 +374,8 @@ class ImportRun(BaseModel):
     source_files: list[str] = Field(default_factory=list)
 
     rows_total: int = 0
-    rows_valid: int = 0          # Zeilen mit formal parsbarer Gruppen-URL
-    rows_rejected: int = 0       # Zeilen ohne verwertbare URL
+    rows_valid: int = 0  # Zeilen mit formal parsbarer Gruppen-URL
+    rows_rejected: int = 0  # Zeilen ohne verwertbare URL
     groups_new: int = 0
     groups_duplicate: int = 0
 

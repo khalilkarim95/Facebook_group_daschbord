@@ -1084,7 +1084,7 @@ def campaign_auto(
     nummer: int = typer.Option(1, "--nummer", help="Nummer der Fassung (meist 1)"),
 ) -> None:
     """Postet oder kommentiert automatisch mit Playwright - mit Tracking-Code."""
-    from fbgroups.automation.actions import comment_on_post, post_to_group
+    from fbgroups.automation.actions import comment_on_post, fetch_top_posts, post_to_group
     from fbgroups.automation.browser import get_browser_context
     from fbgroups.marketing.arbeit import Ergebnis, Sperre, melde_vorschlag
     from fbgroups.marketing.auswahl import Texttyp
@@ -1180,7 +1180,27 @@ def campaign_auto(
             if texttyp == Texttyp.POST:
                 erfolg = post_to_group(context, group.url_canonical, text)
             else:
-                erfolg = comment_on_post(context, group.url_canonical, text)
+                console.print("[cyan]Fetching posts for commenting...[/cyan]")
+                raw_posts = fetch_top_posts(context, group.url_canonical, group.group_id)
+                if raw_posts:
+                    from fbgroups.models import GroupPost
+
+                    posts = [
+                        GroupPost(
+                            group_id=group.group_id,
+                            post_url=p["post_url"],
+                            interactions=p["interactions"],
+                            comments=p["comments"],
+                        )
+                        for p in raw_posts
+                    ]
+                    with SqliteStore(config.path("sqlite_path")) as gruppen_store:
+                        gruppen_store.upsert_group_posts(group.group_id, posts)
+
+                    best_post = max(posts, key=lambda p: p.interactions + p.comments)
+                    erfolg = comment_on_post(context, best_post.post_url, text)
+                else:
+                    fehler_text = "Keine passenden Beiträge zum Kommentieren gefunden."
     except Exception as exc:
         erfolg = False
         fehler_text = str(exc).split("\n")[0][:100]

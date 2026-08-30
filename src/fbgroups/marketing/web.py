@@ -1209,8 +1209,13 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             return JSONResponse({"ok": False, "meldung": "Keine URL fuer Gruppe gefunden"})
 
         # 2. BROWSER-Phase (Datenbank geschlossen, kann Minuten dauern)
-        from fbgroups.automation.actions import comment_on_post, post_to_group
+        from rich.console import Console
+
+        from fbgroups.automation.actions import comment_on_post, fetch_top_posts, post_to_group
         from fbgroups.automation.browser import get_browser_context
+        from fbgroups.models import GroupPost
+
+        console = Console()
 
         erfolg = False
         fehler_text = "Element nicht gefunden/blockiert"
@@ -1219,7 +1224,25 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 if meldung.texttyp == Texttyp.POST:
                     erfolg = post_to_group(context, group.url_canonical, text)
                 else:
-                    erfolg = comment_on_post(context, group.url_canonical, text)
+                    console.print("[cyan]Fetching posts for commenting...[/cyan]")
+                    raw_posts = fetch_top_posts(context, group.url_canonical, group.group_id)
+                    if raw_posts:
+                        posts = [
+                            GroupPost(
+                                group_id=group.group_id,
+                                post_url=p["post_url"],
+                                interactions=p["interactions"],
+                                comments=p["comments"],
+                            )
+                            for p in raw_posts
+                        ]
+                        with SqliteStore(pfad) as gruppen_store:
+                            gruppen_store.upsert_group_posts(group.group_id, posts)
+
+                        best_post = max(posts, key=lambda p: p.interactions + p.comments)
+                        erfolg = comment_on_post(context, best_post.post_url, text)
+                    else:
+                        fehler_text = "Keine passenden Beiträge zum Kommentieren gefunden."
         except Exception as exc:
             erfolg = False
             fehler_text = str(exc).split("\n")[0][:100]
