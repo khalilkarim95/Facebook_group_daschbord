@@ -1077,7 +1077,9 @@ def campaign_retry(
 @campaign_app.command("auto")
 def campaign_auto(
     campaign_id: str = typer.Argument(...),
-    group_id: str = typer.Argument(...),
+    group_id: str = typer.Argument(
+        None, help="Gruppen-ID (optional, andernfalls wird die naechste Gruppe gewaehlt)"
+    ),
     typ: str = typer.Option("post", "--typ", help="post | kommentar"),
     nummer: int = typer.Option(1, "--nummer", help="Nummer der Fassung (meist 1)"),
 ) -> None:
@@ -1094,6 +1096,21 @@ def campaign_auto(
     # 1. READ-Phase: Vorbereitungen treffen (Datenbank ist nur kurz offen)
     with MarketingStore(config.path("sqlite_path")) as store:
         campaign = _kampagne_oder_ende(store, campaign_id)
+
+        # Wenn keine Gruppe angegeben ist, die nächste offene holen
+        if not group_id:
+            from fbgroups.marketing.arbeit import arbeitsreihenfolge
+            from fbgroups.marketing.models import PostStatus
+
+            with SqliteStore(config.path("sqlite_path")) as gruppen_store:
+                gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
+            reihe = arbeitsreihenfolge(store, campaign_id, gruppen)
+            offen = [link for link in reihe if link.post_status != PostStatus.VEROEFFENTLICHT]
+            if not offen:
+                console.print("[green]Alle zugeordneten Gruppen sind abgearbeitet.[/green]")
+                raise typer.Exit(0)
+            group_id = offen[0].group_id
+            console.print(f"[cyan]Automatisch ausgewaehlt: Gruppe {group_id}[/cyan]")
 
         from fbgroups.marketing.models import QueueZustand
 
