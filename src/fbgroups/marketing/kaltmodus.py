@@ -32,6 +32,7 @@ Datenbank und ohne Uhr testbar.
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -120,18 +121,28 @@ def naechster_zeitpunkt(
     *,
     abstand_minuten: int = STANDARD_ABSTAND_MINUTEN,
     jetzt: datetime,
+    erledigt_heute: int = 0,
 ) -> datetime | None:
     """Ab wann der naechste Beitrag drankommt, oder ``None`` fuer sofort.
 
-    Der Abstand ist die zweite Haelfte des Taktes: Fuenfundzwanzig Beitraege in
-    zehn Minuten sind dasselbe Muster wie dreihundert an einem Tag, nur
-    schneller. Die Pause wird bewusst **nicht** zufaellig gestreut - eine
-    gleichmaessige Pause reicht, und eine gestreute waere der Anfang davon,
-    unauffaellig aussehen zu wollen. Das ist nicht die Aufgabe dieses Projekts.
+    Mit Jitter und gelegentlichen Kaffeepausen (nach jedem 7. oder 8. Beitrag),
+    um automatisierte Muster zu durchbrechen.
     """
     if letzter_versuch is None or abstand_minuten <= 0:
         return None
-    frei_ab = letzter_versuch + timedelta(minutes=abstand_minuten)
+    
+    # Der Seed macht die Pause deterministisch (springt nicht beim Neuladen der Seite)
+    rng = random.Random(int(letzter_versuch.timestamp()))
+    
+    # 1. Jitter: Die Pause variiert zwischen 80% und 130% der Basiszeit
+    jitter_faktor = rng.uniform(0.8, 1.3)
+    pause_minuten = abstand_minuten * jitter_faktor
+    
+    # 2. Kaffeepausen: Nach einigen Beitragen eine längere Pause einlegen
+    if erledigt_heute > 0 and (erledigt_heute % rng.choice([7, 8])) == 0:
+        pause_minuten = rng.uniform(20.0, 45.0)
+
+    frei_ab = letzter_versuch + timedelta(minutes=pause_minuten)
     return frei_ab if frei_ab > jetzt else None
 
 

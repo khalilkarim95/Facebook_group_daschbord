@@ -560,6 +560,8 @@ class PostVersuch(BaseModel):
     versuch_id: int | None = None
     campaign_id: str
     group_id: str
+    texttyp: str = "post"
+    nummer: int = 1
     tracking_code: str = ""
     job_status: JobStatus = JobStatus.PROCESSING
     erfolg: bool = False

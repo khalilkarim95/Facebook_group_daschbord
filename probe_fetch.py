@@ -1,12 +1,10 @@
-from playwright.sync_api import sync_playwright
-
 from fbgroups.automation.actions import fetch_top_posts
+from fbgroups.automation.browser import get_browser_context
+from fbgroups.config import load_config
 
-with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True)
-    context = browser.new_context(locale="de-DE")
-    
-    # We fetch a group
+config = load_config()
+
+with get_browser_context(config, headless=True) as context:
     url = "https://www.facebook.com/groups/1060505847347081"
     
     print(f"Fetching posts from {url}...")
@@ -15,5 +13,4 @@ with sync_playwright() as p:
     print("Found posts:")
     for post in posts:
         print(post)
-    
-    browser.close()
+

@@ -14,6 +14,8 @@ eigenes kleines Programm. Ein Paket mehr waere fuer zwei Zeilen zu viel.
 
 from __future__ import annotations
 
+import random
+import re
 import subprocess
 import sys
 import webbrowser
@@ -111,12 +113,28 @@ def mit_link(
     geschweiften Klammern im Beitrag stehen, und das faellt erst in der Gruppe
     auf.
     """
+    # 1. Erst Spintax aufloesen (z. B. {Hallo|Hi}), Platzhalter bleiben stehen
+    text = parse_spintax(text)
+    
+    # 2. Dann die festen Platzhalter ersetzen
     return (
         text.replace("{link}", link.tracking_url)
         .replace("{tracking_code}", link.tracking_code)
         .replace("{landing_page}", campaign.landing_page)
         .replace("{datum}", monat_jetzt(config, sprache_der_kampagne(campaign, config)))
     )
+
+def parse_spintax(text: str) -> str:
+    """Loest Spintax-Muster wie {Hallo|Hi} in eine zufaellige Variante auf.
+    
+    Wertet verschachtelte Muster von innen nach aussen aus.
+    Platzhalter wie {link} bleiben unberuehrt, da sie kein '|' enthalten.
+    """
+    pattern = re.compile(r"\{([^{}]*\|[^{}]*)\}")
+    while match := pattern.search(text):
+        choices = match.group(1).split("|")
+        text = text[:match.start()] + random.choice(choices) + text[match.end():]
+    return text
 
 
 def in_zwischenablage(text: str) -> bool:

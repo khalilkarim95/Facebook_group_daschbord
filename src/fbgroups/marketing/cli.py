@@ -966,7 +966,9 @@ def campaign_kaltmodus(campaign_id: str = typer.Argument(...)) -> None:
 
     portion = km.tagesportion(reihe, erledigt_heute=heute, grenze=pro_tag)
     letzter = datetime.fromisoformat(roh) if roh else None
-    frei_ab = km.naechster_zeitpunkt(letzter, abstand_minuten=abstand, jetzt=jetzt)
+    frei_ab = km.naechster_zeitpunkt(
+        letzter, abstand_minuten=abstand, jetzt=jetzt, erledigt_heute=heute
+    )
 
     console.print(
         Panel(
@@ -1137,7 +1139,7 @@ def campaign_auto(
             letzter_versuch = store.letzter_versuch()
             letzter_dt = datetime.fromisoformat(letzter_versuch) if letzter_versuch else None
             naechster = kaltmodus.naechster_zeitpunkt(
-                letzter_dt, abstand_minuten=abstand, jetzt=jetzt
+                letzter_dt, abstand_minuten=abstand, jetzt=jetzt, erledigt_heute=heute
             )
             if naechster:
                 wartezeit = kaltmodus.wartezeit_text(naechster, jetzt=jetzt)

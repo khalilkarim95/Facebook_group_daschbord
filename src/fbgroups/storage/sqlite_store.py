@@ -22,7 +22,7 @@ from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEM
 from fbgroups.marketing.store import SCHEMA_VORSCHLAEGE as MARKETING_VORSCHLAEGE_SCHEMA
 from fbgroups.models import Group, GroupPost, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 def _iso_oder_none(zeitpunkt: datetime | None) -> str | None:
@@ -300,6 +300,10 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
             FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
         )
         """,
+    ),
+    17: (
+        "ALTER TABLE post_versuche ADD COLUMN texttyp TEXT NOT NULL DEFAULT 'post'",
+        "ALTER TABLE post_versuche ADD COLUMN nummer INTEGER NOT NULL DEFAULT 1",
     ),
 }
 

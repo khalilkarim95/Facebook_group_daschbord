@@ -486,6 +486,8 @@ def melde_vorschlag(
         PostVersuch(
             campaign_id=campaign_id,
             group_id=link.group_id,
+            texttyp=texttyp.value,
+            nummer=nummer,
             tracking_code=link.tracking_code,
             job_status=JobStatus.PROCESSING,
             ausgeloest_von=ausgeloest_von,
@@ -562,12 +564,15 @@ def _fassungen(
     gibt weiterhin genau eine Stelle, an der ein Tracking-Code in einen Text
     kommt.
     """
-    letzte_url = store.letzte_post_url(campaign.campaign_id, link.group_id)
     return [
         Fassung(
             vorschlag=vorschlag,
             angezeigt=mit_link(campaign, link, vorschlag.text, config=config),
-            post_url=letzte_url if vorschlag.status.value == "veroeffentlicht" else "",
+            post_url=store.letzte_post_url(
+                campaign.campaign_id, link.group_id, texttyp.value, vorschlag.nummer
+            )
+            if vorschlag.status.value == "veroeffentlicht"
+            else "",
         )
         for vorschlag in store.vorschlaege(campaign.campaign_id, link.group_id, texttyp)
     ]

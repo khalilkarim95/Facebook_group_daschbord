@@ -268,6 +268,8 @@ CREATE TABLE IF NOT EXISTS post_versuche (
     versuch_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     campaign_id    TEXT NOT NULL,
     group_id       TEXT NOT NULL,
+    texttyp        TEXT NOT NULL DEFAULT 'post',
+    nummer         INTEGER NOT NULL DEFAULT 1,
     -- Mitgeschrieben statt nachgeschlagen: Der Code kann Jahre spaeter noch
     -- gebraucht werden, um einen veroeffentlichten Beitrag zuzuordnen, und
     -- die Zuordnung koennte bis dahin entfernt worden sein.
@@ -1624,12 +1626,13 @@ class MarketingStore:
         ).fetchall()
         return {str(r["post_url"]) for r in rows}
 
-    def letzte_post_url(self, campaign_id: str, group_id: str) -> str:
-        """Liefert die letzte erfolgreiche Post-URL für diese Gruppe in dieser Kampagne."""
+    def letzte_post_url(self, campaign_id: str, group_id: str, texttyp: str, nummer: int) -> str:
+        """Liefert die letzte erfolgreiche Post-URL für diesen bestimmten Entwurf."""
         row = self.conn.execute(
             "SELECT post_url FROM post_versuche WHERE campaign_id = ? AND group_id = ? "
-            "AND erfolg = 1 AND post_url != '' ORDER BY begonnen_am DESC LIMIT 1",
-            (campaign_id, group_id)
+            "AND texttyp = ? AND nummer = ? AND erfolg = 1 AND post_url != '' "
+            "ORDER BY begonnen_am DESC LIMIT 1",
+            (campaign_id, group_id, texttyp, nummer)
         ).fetchone()
         return str(row[0]) if row else ""
 
@@ -1794,13 +1797,15 @@ class MarketingStore:
         cursor = self.conn.execute(
             """
             INSERT INTO post_versuche
-                (campaign_id, group_id, tracking_code, job_status, erfolg,
+                (campaign_id, group_id, texttyp, nummer, tracking_code, job_status, erfolg,
                  post_url, fehler, browser_session, ausgeloest_von, begonnen_am)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 versuch.campaign_id,
                 versuch.group_id,
+                versuch.texttyp,
+                versuch.nummer,
                 versuch.tracking_code,
                 versuch.job_status.value,
                 int(versuch.erfolg),
@@ -2224,6 +2229,8 @@ class MarketingStore:
             versuch_id=row["versuch_id"],
             campaign_id=row["campaign_id"],
             group_id=row["group_id"],
+            texttyp=row["texttyp"] if "texttyp" in row.keys() else "post",  # noqa: SIM118
+            nummer=row["nummer"] if "nummer" in row.keys() else 1,  # noqa: SIM118
             tracking_code=row["tracking_code"],
             job_status=row["job_status"],
             erfolg=bool(row["erfolg"]),

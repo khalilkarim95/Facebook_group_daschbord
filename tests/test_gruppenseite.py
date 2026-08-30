@@ -107,7 +107,11 @@ def test_es_wird_kein_browser_nachgeahmt() -> None:
 
     assert "fbgroups" in _KENNUNG
     
-    automation_code = Path("src/fbgroups/automation/browser.py").read_text(encoding="utf-8")
+    automation_dir = Path("src/fbgroups/automation")
+    automation_code = ""
+    if automation_dir.exists():
+        for p in automation_dir.rglob("*.py"):
+            automation_code += p.read_text(encoding="utf-8") + "\n"
     
     for browser in ("Mozilla", "Chrome", "Safari", "AppleWebKit", "Gecko"):
         assert browser not in _KENNUNG

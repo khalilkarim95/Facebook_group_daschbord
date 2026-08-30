@@ -984,7 +984,9 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 roh = store.letzter_versuch()
                 portion = km.tagesportion(reihe, erledigt_heute=heute, grenze=pro_tag)
                 letzter = datetime.fromisoformat(roh) if roh else None
-                frei_ab = km.naechster_zeitpunkt(letzter, abstand_minuten=abstand, jetzt=jetzt)
+                frei_ab = km.naechster_zeitpunkt(
+                    letzter, abstand_minuten=abstand, jetzt=jetzt, erledigt_heute=heute
+                )
                 warte = km.wartezeit_text(frei_ab, jetzt=jetzt)
                 
                 kalt_text = f"Heute: {portion.erledigt} von {portion.grenze}"
@@ -1200,7 +1202,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 letzter_versuch = store.letzter_versuch()
                 letzter_dt = datetime.fromisoformat(letzter_versuch) if letzter_versuch else None
                 naechster = kaltmodus.naechster_zeitpunkt(
-                    letzter_dt, abstand_minuten=abstand, jetzt=jetzt
+                    letzter_dt, abstand_minuten=abstand, jetzt=jetzt, erledigt_heute=heute
                 )
                 if naechster:
                     wartezeit = kaltmodus.wartezeit_text(naechster, jetzt=jetzt)
