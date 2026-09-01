@@ -24,6 +24,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from fbgroups.marketing.models import (
+    MARKETING_FORTSCHRITT,
     POST_STATUS_ZU_JOB,
     Campaign,
     CampaignGroup,
@@ -31,6 +32,9 @@ from fbgroups.marketing.models import (
     EventType,
     GroupMarketing,
     JobStatus,
+    KampagnenLaufStatus,
+    LaufStatus,
+    MarketingStatus,
     PostStatus,
     PostVersuch,
     QueueZustand,
@@ -136,6 +140,37 @@ CREATE TABLE IF NOT EXISTS campaign_groups (
     kommentar_vorlage_key  TEXT NOT NULL DEFAULT '',
     kommentar_quelle       TEXT NOT NULL DEFAULT 'vorlage',
     kommentar_generiert_am TEXT,
+    -- Der dritte Ausgang der Kommentarautomatik neben "voll" und "offen":
+    -- Die Gruppe gibt nicht mehr her. Zu wenige Beitraege zum Kommentieren,
+    -- Kommentare abgeschaltet, kein Zugang mehr - in allen Faellen ist jeder
+    -- weitere Anlauf vergeblich, und das ist etwas anderes als ein
+    -- Fehlschlag: Ein Fehlschlag laedt zum Wiederholen ein.
+    --
+    -- Ohne diesen Endstand haengt eine Kampagne fuer immer bei 4 von 5, weil
+    -- eine einzige Gruppe nur vier Beitraege hat - und 'completed' waere
+    -- unerreichbar. Er ist nicht ableitbar: Er ist das Urteil nach dem
+    -- Versuch, nicht eine Eigenschaft der Daten. Auch diese Spalten stehen
+    -- hier UND als Migrationsschritt 18, aus dem oben genannten Grund.
+    kommentar_erschoepft       INTEGER NOT NULL DEFAULT 0,
+    kommentar_erschoepft_grund TEXT NOT NULL DEFAULT '',
+    kommentar_erschoepft_am    TEXT,
+    -- Der zweite Tracking-Code: derselbe Weg, anderes Ziel.
+    --
+    -- ``tracking_code`` fuehrt zum Play Store (``marketing.ziel: store``) und
+    -- **bleibt dabei**. Er steht in veroeffentlichten Beitraegen; sein Ziel
+    -- nachtraeglich umzustellen aenderte, wohin alte Beitraege fuehren, und
+    -- das ohne dass jemand sie angefasst haette.
+    --
+    -- Der neue Code fuehrt in den Browser (auf ``campaign.landing_page``).
+    -- Beide werden vollstaendig gezaehlt - der Unterschied ist allein das
+    -- Ziel nach der Weiterleitung, und dadurch laesst sich im Trichter
+    -- unterscheiden, ob ein Mensch ueber Store oder Browser kam.
+    --
+    -- Nullable, weil Bestandszeilen ihn nicht haben: Er entsteht beim ersten
+    -- Bedarf (``vergib_browsercode``) und nicht durch eine Migration, die
+    -- vierhundert Codes auf einmal erfindet.
+    tracking_code_browser TEXT UNIQUE,
+    tracking_url_browser  TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (campaign_id, group_id),
     FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
     FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
@@ -165,6 +200,51 @@ CREATE TABLE IF NOT EXISTS group_marketing (
 
 CREATE INDEX IF NOT EXISTS idx_group_marketing_status
     ON group_marketing(marketing_status);
+
+-- Ein Lauf der Kommentarautomatik ueber mehrere Kampagnen.
+--
+-- Warum ueberhaupt eine Tabelle, wo der Fortschritt doch ableitbar ist: Der
+-- Fortschritt IST ableitbar - welche Fassung veroeffentlicht wurde, steht in
+-- campaign_group_texte, und daraus ergibt sich alles Uebrige. Ein zweiter
+-- Zaehler daneben waere eine zweite Wahrheit ueber dieselbe Zahl.
+--
+-- Was hier steht, ist genau das, was sich NICHT ableiten laesst:
+--
+--   * dass ueberhaupt gerade ein Lauf im Gange ist (der globale Zustand),
+--   * und WELCHE Kampagnen zu ihm gehoeren.
+--
+-- Das zweite ist der Kern: Ein Lauf arbeitet die Liste ab, die beim Start
+-- festgelegt wurde. Wer waehrend des Laufs eine Kampagne auf 'active' setzt,
+-- greift damit nicht in einen bereits laufenden Vorgang ein - sie kommt beim
+-- naechsten Start dran. Ohne die eingefrorene Liste waere "alle aktiven
+-- Kampagnen" bei jedem Schritt eine andere Menge, und ein Lauf koennte nie
+-- fertig werden, weil die Bedingung unter ihm wegwandert.
+CREATE TABLE IF NOT EXISTS automatik_lauf (
+    lauf_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    status            TEXT NOT NULL DEFAULT 'laufend',
+    texttyp           TEXT NOT NULL DEFAULT 'kommentar',
+    ziel_je_gruppe    INTEGER NOT NULL DEFAULT 5,
+    begonnen_am       TEXT NOT NULL,
+    beendet_am        TEXT,
+    letzter_schritt_am TEXT,
+    meldung           TEXT NOT NULL DEFAULT ''
+);
+
+-- Die eingefrorene Warteschlange des Laufs. 'position' haelt die Reihenfolge
+-- fest: Ohne sie entschiede die Sortierung der Abfrage, welche Kampagne als
+-- naechste kommt, und ein Neustart koennte eine andere waehlen als der
+-- unterbrochene Lauf.
+CREATE TABLE IF NOT EXISTS automatik_lauf_kampagnen (
+    lauf_id     INTEGER NOT NULL,
+    campaign_id TEXT NOT NULL,
+    position    INTEGER NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'wartet',
+    PRIMARY KEY (lauf_id, campaign_id),
+    FOREIGN KEY (lauf_id) REFERENCES automatik_lauf(lauf_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_automatik_lauf_status
+    ON automatik_lauf(status);
 """
 
 # Zweiter Teil: Ereignisse, Empfehlungen, Praemien. Getrennt gehalten, weil er
@@ -1854,12 +1934,316 @@ class MarketingStore:
         ).fetchall()
         return [self._row_to_versuch(row) for row in rows]
 
+    # --- Die Kommentarautomatik ------------------------------------------
+    #
+    # Gefuehrt wird hier nur, was sich nicht ableiten laesst. Wie weit eine
+    # Gruppe ist, steht in campaign_group_texte und wird gelesen (siehe
+    # ``kommentarstand``); ein Zaehler daneben waere eine zweite Wahrheit.
+
+    def starte_lauf(
+        self, campaign_ids: list[str], *, ziel_je_gruppe: int, texttyp: str = "kommentar"
+    ) -> int:
+        """Friert die Kampagnenliste ein und eroeffnet einen Lauf.
+
+        Die Reihenfolge der Liste wird als ``position`` festgehalten: Ohne sie
+        entschiede die Sortierung der Abfrage, welche Kampagne als naechste
+        drankommt, und ein fortgesetzter Lauf koennte eine andere waehlen als
+        der unterbrochene.
+        """
+        jetzt = _iso(datetime.now(UTC))
+        cursor = self.conn.execute(
+            "INSERT INTO automatik_lauf (status, texttyp, ziel_je_gruppe, begonnen_am) "
+            "VALUES (?,?,?,?)",
+            (LaufStatus.LAEUFT.value, texttyp, int(ziel_je_gruppe), jetzt),
+        )
+        lauf_id = int(cursor.lastrowid or 0)
+        self.conn.executemany(
+            "INSERT INTO automatik_lauf_kampagnen (lauf_id, campaign_id, position, status) "
+            "VALUES (?,?,?,?)",
+            [
+                (lauf_id, cid, pos, KampagnenLaufStatus.WARTET.value)
+                for pos, cid in enumerate(campaign_ids, start=1)
+            ],
+        )
+        self.conn.commit()
+        return lauf_id
+
+    def offener_lauf(self) -> sqlite3.Row | None:
+        """Der juengste Lauf, der noch nicht fertig ist - oder ``None``.
+
+        Ein Neustart setzt hier auf: Wer einen offenen Lauf findet, arbeitet
+        dessen eingefrorene Liste weiter, statt eine neue einzufrieren. Sonst
+        finge Kampagne 1 nach jedem Abbruch von vorn an.
+        """
+        return self.conn.execute(
+            "SELECT * FROM automatik_lauf WHERE status IN (?,?,?) "
+            "ORDER BY lauf_id DESC LIMIT 1",
+            (
+                LaufStatus.LAEUFT.value,
+                LaufStatus.ANGEHALTEN.value,
+                LaufStatus.GESCHEITERT.value,
+            ),
+        ).fetchone()
+
+    def lauf(self, lauf_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM automatik_lauf WHERE lauf_id = ?", (lauf_id,)
+        ).fetchone()
+
+    def lauf_kampagnen(self, lauf_id: int) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT * FROM automatik_lauf_kampagnen WHERE lauf_id = ? ORDER BY position",
+            (lauf_id,),
+        ).fetchall()
+
+    def setze_lauf_status(self, lauf_id: int, status: str, *, meldung: str = "") -> None:
+        """Traegt den Gesamtzustand ein; ``fertig`` setzt zusaetzlich das Ende."""
+        jetzt = _iso(datetime.now(UTC))
+        beendet = jetzt if status in (LaufStatus.FERTIG.value,) else None
+        self.conn.execute(
+            "UPDATE automatik_lauf SET status = ?, meldung = ?, "
+            "letzter_schritt_am = ?, beendet_am = COALESCE(?, beendet_am) "
+            "WHERE lauf_id = ?",
+            (status, meldung, jetzt, beendet, lauf_id),
+        )
+        self.conn.commit()
+
+    def setze_lauf_kampagne_status(self, lauf_id: int, campaign_id: str, status: str) -> None:
+        self.conn.execute(
+            "UPDATE automatik_lauf_kampagnen SET status = ? "
+            "WHERE lauf_id = ? AND campaign_id = ?",
+            (status, lauf_id, campaign_id),
+        )
+        self.conn.commit()
+
+    def kommentarstand(self, campaign_id: str) -> dict[str, int]:
+        """Je Gruppe: wie viele Kommentarfassungen sind veroeffentlicht?
+
+        **Gelesen, nicht gefuehrt.** Der Stand steht dort, wo er entsteht -
+        in ``campaign_group_texte``. Ein Abbruch braucht deshalb keine
+        Aufraeumarbeit: Was nicht heraus ist, steht auch nicht als heraus da.
+        """
+        rows = self.conn.execute(
+            "SELECT group_id, COUNT(*) AS n FROM campaign_group_texte "
+            "WHERE campaign_id = ? AND texttyp = ? AND status = ? "
+            "GROUP BY group_id",
+            (campaign_id, Texttyp.KOMMENTAR.value, VorschlagStatus.VEROEFFENTLICHT.value),
+        ).fetchall()
+        return {row["group_id"]: int(row["n"]) for row in rows}
+
+    def gescheiterte_kommentarfassungen(
+        self, campaign_id: str, max_versuche: int
+    ) -> dict[str, set[int]]:
+        """Je Gruppe: welche Fassungen sind zu oft erfolglos gewesen?
+
+        Sie werden uebersprungen, statt den Lauf an derselben Stelle
+        festzuhalten. ``versuche`` zaehlt in ``campaign_group_texte`` bereits
+        mit - es gab keinen Grund, dafuer etwas Neues zu bauen.
+        """
+        rows = self.conn.execute(
+            "SELECT group_id, nummer FROM campaign_group_texte "
+            "WHERE campaign_id = ? AND texttyp = ? AND status <> ? AND versuche >= ?",
+            (
+                campaign_id,
+                Texttyp.KOMMENTAR.value,
+                VorschlagStatus.VEROEFFENTLICHT.value,
+                int(max_versuche),
+            ),
+        ).fetchall()
+        heraus: dict[str, set[int]] = {}
+        for row in rows:
+            heraus.setdefault(row["group_id"], set()).add(int(row["nummer"]))
+        return heraus
+
+    def setze_kommentar_erschoepft(self, campaign_id: str, group_id: str, grund: str) -> None:
+        """Haelt fest, dass diese Gruppe nichts mehr hergibt.
+
+        Ein Urteil nach dem Versuch, keine Eigenschaft der Daten - deshalb
+        gespeichert und nicht abgeleitet. Es blockiert die Kampagne nicht
+        mehr, wird in der Abschlussmeldung aber getrennt ausgewiesen: erledigt
+        ist nicht dasselbe wie erfolgreich.
+        """
+        self.conn.execute(
+            "UPDATE campaign_groups SET kommentar_erschoepft = 1, "
+            "kommentar_erschoepft_grund = ?, kommentar_erschoepft_am = ? "
+            "WHERE campaign_id = ? AND group_id = ?",
+            (grund, _iso(datetime.now(UTC)), campaign_id, group_id),
+        )
+        self.conn.commit()
+
+    def erschoepfte_gruppen(self, campaign_id: str) -> dict[str, str]:
+        """Je erschoepfter Gruppe der Grund."""
+        rows = self.conn.execute(
+            "SELECT group_id, kommentar_erschoepft_grund FROM campaign_groups "
+            "WHERE campaign_id = ? AND kommentar_erschoepft = 1",
+            (campaign_id,),
+        ).fetchall()
+        return {row["group_id"]: row["kommentar_erschoepft_grund"] for row in rows}
+
+    # --- Beitrittsanfragen ------------------------------------------------
+    #
+    # Zwei Staende und nicht mehr: angefragt oder nicht. Gezaehlt wird ueber
+    # ``join_requested_at`` - das Feld gibt es seit Migrationsschritt 5, und
+    # ein eigener Zaehler daneben waere eine zweite Wahrheit ueber dieselbe
+    # Zahl.
+
+    def anfragen_heute(self, tag: str) -> int:
+        """Wie viele Beitrittsanfragen heute gestellt wurden.
+
+        Der Vergleich laeuft ueber den Datumsteil des ISO-Zeitpunkts; die
+        Tagesgrenze ist damit UTC-Mitternacht, wie ueberall im Projekt.
+        """
+        return int(
+            self.conn.execute(
+                "SELECT count(*) FROM group_marketing "
+                "WHERE join_requested_at IS NOT NULL AND substr(join_requested_at,1,10) = ?",
+                (tag,),
+            ).fetchone()[0]
+        )
+
+    def letzte_anfrage(self) -> str:
+        """Zeitpunkt der juengsten Beitrittsanfrage - fuer den Mindestabstand."""
+        zeile = self.conn.execute(
+            "SELECT max(join_requested_at) FROM group_marketing "
+            "WHERE join_requested_at IS NOT NULL"
+        ).fetchone()
+        return zeile[0] or ""
+
+    def gruppen_ohne_anfrage(self, grenze: int = 0) -> list[str]:
+        """Gruppen, an die noch keine Beitrittsanfrage ging - beste zuerst.
+
+        Sortiert nach Score: Wird die Tagesmenge nie ausgeschoepft, sollen es
+        die richtigen fuenfzig gewesen sein. Dieselbe Ueberlegung wie bei der
+        Arbeitsliste.
+
+        Ausgeschlossen sind Gruppen, an denen nicht gearbeitet wird
+        (``bearbeiten = 0``) - eine Anfrage dorthin waere ein Beitritt zu einer
+        Gruppe, die jemand ausdruecklich aussortiert hat.
+        """
+        sql = """
+            SELECT g.group_id
+            FROM groups g
+            LEFT JOIN group_marketing gm ON gm.group_id = g.group_id
+            WHERE g.url_canonical <> ''
+              AND COALESCE(gm.bearbeiten, 1) = 1
+              AND gm.join_requested_at IS NULL
+              AND COALESCE(gm.marketing_status, 'not_contacted') = 'not_contacted'
+            ORDER BY COALESCE(g.score, -1) DESC, g.group_id
+        """
+        if grenze > 0:
+            sql += f" LIMIT {int(grenze)}"
+        return [row["group_id"] for row in self.conn.execute(sql).fetchall()]
+
+    def merke_anfrage(self, group_id: str, *, mitglied: bool = False) -> None:
+        """Traegt ein, dass eine Anfrage gestellt wurde - oder dass wir drin sind.
+
+        ``mitglied=True`` fuer den Fall, den die Gruppenseite ohnehin verraet:
+        Wo kein Beitrittsknopf steht, aber das Schreibfeld, sind wir Mitglied.
+        Diese Auskunft mitzunehmen kostet keinen zusaetzlichen Abruf und
+        schliesst die Kette - sonst wuesste niemand je, dass eine Freigabe
+        gekommen ist.
+
+        Ein erreichter Stand wird **nie** zurueckgedreht: Wer schon Mitglied
+        ist, wird durch eine Anfrage nicht wieder zum Anfragenden.
+        """
+        vorhanden = self.load_marketing(group_id)
+        jetzt = datetime.now(UTC)
+
+        neuer_stand = MarketingStatus.MEMBER if mitglied else MarketingStatus.JOIN_REQUESTED
+
+        def rang(stand: MarketingStatus) -> int:
+            """Stellung in der Fortschrittsfolge - ausserhalb heisst -1.
+
+            Abgelehnt und beendet stehen bewusst nicht in ``MARKETING_FORTSCHRITT``.
+            Eine Ablehnung ist ein Ergebnis; sie durch einen Sammellauf zu
+            ueberschreiben waere ein Urteil, das niemand gefaellt hat.
+            """
+            return MARKETING_FORTSCHRITT.index(stand) if stand in MARKETING_FORTSCHRITT else -1
+
+        if vorhanden is not None:
+            alt = rang(vorhanden.marketing_status)
+            neu = rang(neuer_stand)
+            if alt == -1 or alt >= neu:
+                # Schon weiter - nur den Zeitpunkt nachtragen, falls er fehlt.
+                if vorhanden.join_requested_at is None and not mitglied:
+                    vorhanden.join_requested_at = jetzt
+                    self.save_marketing(vorhanden)
+                return
+            vorhanden.marketing_status = neuer_stand
+            if not mitglied:
+                vorhanden.join_requested_at = jetzt
+            self.save_marketing(vorhanden)
+            return
+
+        self.save_marketing(
+            GroupMarketing(
+                group_id=group_id,
+                marketing_status=neuer_stand,
+                join_requested_at=None if mitglied else jetzt,
+            )
+        )
+
+    def vergib_browsercode(self, campaign_id: str, group_id: str, basis_url: str) -> str:
+        """Legt den Browser-Code dieses Paares an - einmal und endgueltig.
+
+        Er leitet sich vom Store-Code ab (``FB-SYR-BER-010`` →
+        ``FB-SYR-BER-010-B``). Zwei Gruende gegen eine eigene Nummernreihe:
+
+        * Man sieht der Kennung an, zu welchem Paar sie gehoert. Bei einem
+          Klick in einem Protokoll ist das die erste Frage.
+        * Die Reihe des ``CodeAllocator`` bleibt unberuehrt. Zwei Reihen fuer
+          dasselbe Paar koennten auseinanderlaufen, und die Nummer ist bereits
+          an ``first_seen_at`` gebunden.
+
+        Ein vorhandener Code wird **nie** ersetzt - er steht moeglicherweise
+        schon in einem veroeffentlichten Beitrag.
+        """
+        link = self.link_for(campaign_id, group_id)
+        if link is None:
+            return ""
+        if link.tracking_code_browser:
+            return link.tracking_code_browser
+
+        code = f"{link.tracking_code}-B"
+        url = f"{basis_url.rstrip('/')}/r/{code}"
+        self.conn.execute(
+            "UPDATE campaign_groups SET tracking_code_browser = ?, tracking_url_browser = ? "
+            "WHERE campaign_id = ? AND group_id = ? AND tracking_code_browser IS NULL",
+            (code, url, campaign_id, group_id),
+        )
+        self.conn.commit()
+        return code
+
     def resolve_code(self, tracking_code: str) -> CampaignGroup | None:
-        """Findet Kampagne und Gruppe zu einem Tracking-Code."""
+        """Findet Kampagne und Gruppe zu einem Tracking-Code - beiden Zielen.
+
+        Gesucht wird in **beiden** Spalten. Ohne das antwortete die
+        Weiterleitung auf jeden Browser-Code mit 404, und der Klick waere
+        verloren - bei einem Code, der bereits in einem Beitrag steht.
+        """
         row = self.conn.execute(
-            "SELECT * FROM campaign_groups WHERE tracking_code = ?", (tracking_code,)
+            "SELECT * FROM campaign_groups "
+            "WHERE tracking_code = ? OR tracking_code_browser = ?",
+            (tracking_code, tracking_code),
         ).fetchone()
         return self._row_to_link(row) if row else None
+
+    def ziel_des_codes(self, tracking_code: str) -> str:
+        """``browser`` oder ``store`` - woran der Code haengt.
+
+        Die Auskunft steht am **Code**, nicht an der Kampagne. Vorher
+        entschied ``campaign.ziel`` fuer alle Codes gemeinsam; damit fuehrten
+        am 31.08.2026 saemtliche Links zum Play Store, und der Browser kam nie
+        vor.
+        """
+        row = self.conn.execute(
+            "SELECT tracking_code_browser FROM campaign_groups "
+            "WHERE tracking_code = ? OR tracking_code_browser = ?",
+            (tracking_code, tracking_code),
+        ).fetchone()
+        if row is None:
+            return ""
+        return "browser" if row["tracking_code_browser"] == tracking_code else "store"
 
     def record_event(self, event: TrackingEvent) -> int:
         """Schreibt ein Ereignis und liefert seine Kennung."""
@@ -2304,6 +2688,10 @@ class MarketingStore:
             group_id=row["group_id"],
             tracking_code=row["tracking_code"],
             tracking_url=row["tracking_url"],
+            # ``or ""`` fuer Bestandszeilen: Die Spalte ist nullable, weil kein
+            # Code auf Vorrat entsteht.
+            tracking_code_browser=row["tracking_code_browser"] or "",
+            tracking_url_browser=row["tracking_url_browser"] or "",
             added_at=row["added_at"],
             post_status=row["post_status"],
             posted_at=row["posted_at"],

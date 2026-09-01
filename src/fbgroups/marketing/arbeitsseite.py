@@ -115,6 +115,20 @@ button:disabled { opacity:.4; cursor:default; }
             color:#c3c8d0; font-size:.85rem; }
 .merkmale i { color:var(--zart); font-style:normal; margin-right:.35rem; }
 
+/* Die Warteschlange im Automatikband. */
+.ab-liste { list-style:none; margin:.6rem 0 0; padding:0;
+            font-size:.85rem; color:#c3c8d0; }
+.ab-liste li { padding:.15rem 0; }
+.ab-marke { font-size:.72rem; text-transform:uppercase; letter-spacing:.05em;
+            padding:.05rem .4rem; border-radius:3px; background:#2a2f38;
+            color:var(--zart); margin:0 .4rem; }
+.ab-laeuft .ab-marke { background:#1d4ed8; color:#fff; }
+.ab-fertig { opacity:.55; }
+.ab-fertig .ab-marke { background:rgba(34,197,94,.15); color:#86efac; }
+.ab-befehl { margin-top:.6rem; font-size:.78rem; color:var(--zart); }
+.ab-befehl code { display:block; margin-top:.2rem; color:var(--akzent);
+                  font-family:ui-monospace,Consolas,monospace; }
+
 /* Gruppen-Navigation: unabhaengig von der Vorschlags-Navigation, und deshalb
    ganz oben und ueber beide Spalten - nicht in einer von ihnen. */
 .gruppenwahl { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
@@ -515,6 +529,8 @@ def _spalte(
     fassungen: list[Fassung],
     arbeit: Gruppenarbeit,
     kalt_limit_erreicht: bool = False,
+    *,
+    automatik_moeglich: bool = True,
 ) -> str:
     """Eine der beiden Spalten - Aufbau identisch, Inhalt unabhaengig.
 
@@ -545,7 +561,13 @@ def _spalte(
             _nummernleiste(kennung, fassungen)
             + _standzeile(kennung, fassungen[0])
             + _textfeld(kennung, zweck, fassungen[0])
-            + _knopfreihe(kennung, zweck, arbeit.url, kalt_limit_erreicht=kalt_limit_erreicht)
+            + _knopfreihe(
+                kennung,
+                zweck,
+                arbeit.url,
+                kalt_limit_erreicht=kalt_limit_erreicht,
+                automatik_moeglich=automatik_moeglich,
+            )
             + _meldeblock(kennung, zweck, arbeit)
         )
 
@@ -657,7 +679,48 @@ def _textfeld(kennung: str, zweck: str, fassung: Fassung) -> str:
     )
 
 
-def _knopfreihe(kennung: str, zweck: str, url: str, kalt_limit_erreicht: bool = False) -> str:
+def _automatikband() -> str:
+    """Der Stand der Kommentarautomatik - hier und nicht in der Uebersicht.
+
+    Er stand zuerst ueber den Kacheln der Uebersicht. Dort beantwortet er eine
+    Frage, die sich beim Ueberblicken selten stellt; **hier** ist er die
+    Auskunft, die man beim Arbeiten braucht: Was hat die Automatik schon
+    erledigt, an welcher Gruppe ist sie, und wie viele warten noch auf eine
+    Mitgliedschaft.
+
+    Gefuellt wird per Abruf, nicht aus der Seite: Der Stand aendert sich
+    waehrend eines Laufs, und diese Seite laedt bewusst nicht neu. Verborgen,
+    solange es nichts zu melden gibt - ein leerer Kasten waere eine Zeile
+    ohne Auskunft.
+    """
+    return (
+        "<div class='karte automatikband' id='automatikband' hidden "
+        "style='border-left:4px solid #4a9eff'>"
+        "<div style='display:flex;gap:.6rem;align-items:center;flex-wrap:wrap'>"
+        "<b>Kommentarautomatik</b>"
+        "<span id='ab-status' class='code'></span>"
+        "<span id='ab-warten' class='hinweis' style='margin:0'></span>"
+        "</div>"
+        "<div id='ab-zahlen' class='hinweis' style='margin:.4rem 0 0'></div>"
+        "<div id='ab-jetzt' class='hinweis' style='margin:.2rem 0 0'></div>"
+        # Die ganze Warteschlange. Sie beantwortet "was kommt noch?" - die
+        # Frage, die sich beim Arbeiten stellt und die eine Gesamtzahl nicht
+        # beantwortet.
+        "<ol id='ab-liste' class='ab-liste'></ol>"
+        "<div class='ab-befehl'>Alle aktiven Kampagnen nacheinander abarbeiten:"
+        "<code>fbgroups campaign automatik --server http://127.0.0.1:8090</code></div>"
+        "</div>"
+    )
+
+
+def _knopfreihe(
+    kennung: str,
+    zweck: str,
+    url: str,
+    kalt_limit_erreicht: bool = False,
+    *,
+    automatik_moeglich: bool = True,
+) -> str:
     """Speichern, Kopieren, Gruppe oeffnen - der Handgriff in seiner Reihenfolge.
 
     Der dritte Knopf war "Zurueck zur Vorlage" und ist es seit dem 28.08.2026
@@ -682,26 +745,44 @@ def _knopfreihe(kennung: str, zweck: str, url: str, kalt_limit_erreicht: bool = 
         if url
         else ""
     )
-    auto_text = "Automatisch posten" if kennung == "post" else "Automatisch kommentieren"
-    auto_desc = "Auf der Gruppenseite" if kennung == "post" else "Sucht den aktivsten Beitrag"
-    auto_disabled = " disabled" if kalt_limit_erreicht else ""
-    auto_style = (
-        "background:#9ca3af;border-color:#6b7280;cursor:not-allowed"
-        if kalt_limit_erreicht
-        else "background:#7e22ce;border-color:#9333ea"
-    )
-    
+    # Der Automatikknopf erscheint nur dort, wo er etwas ausrichten kann.
+    #
+    # Er laesst den **Dienst** einen sichtbaren Browser oeffnen. Auf dem
+    # Server gibt es weder ein $DISPLAY noch eine angemeldete Sitzung; dort
+    # endete jeder Druck in "Executable doesn't exist" - und hinterliess einen
+    # Fehlversuch im Protokoll sowie eine Kaltmodus-Sperre von vier Minuten.
+    # Ein Knopf, der zuverlaessig scheitert und dabei Spuren hinterlaesst, ist
+    # schlimmer als kein Knopf.
+    #
+    # Massgeblich ist die Sitzung, nicht der Rechnername: Wer die Oberflaeche
+    # auf seinem eigenen Rechner betreibt, hat den Knopf weiterhin. ``POST
+    # /arbeit/{k}/vorschlag/auto`` bleibt unveraendert bestehen - was fehlt,
+    # ist der Knopf, nicht der Weg.
+    auto = ""
+    if automatik_moeglich:
+        auto_text = "Automatisch posten" if kennung == "post" else "Automatisch kommentieren"
+        auto_desc = "Auf der Gruppenseite" if kennung == "post" else "Sucht den aktivsten Beitrag"
+        auto_disabled = " disabled" if kalt_limit_erreicht else ""
+        auto_style = (
+            "background:#9ca3af;border-color:#6b7280;cursor:not-allowed"
+            if kalt_limit_erreicht
+            else "background:#7e22ce;border-color:#9333ea"
+        )
+        auto = (
+            f"<button type='button' id='auto-{kennung}' class='haupt'{auto_disabled} "
+            f"style='{auto_style}'>"
+            f"{auto_text}<br>"
+            f"<span style='font-size:0.7em;font-weight:normal;opacity:0.8'>{auto_desc}</span>"
+            "</button>"
+        )
+
     return (
         "<div class='knoepfe' style='margin-top:.7rem'>"
         f"<button type='button' class='haupt' id='speichern-{kennung}'>"
         "Speichern</button>"
         f"<button type='button' id='kopieren-{kennung}'>"
         f"{escape(zweck)} kopieren</button>"
-        f"<button type='button' id='auto-{kennung}' class='haupt'{auto_disabled} "
-        f"style='{auto_style}'>"
-        f"{auto_text}<br>"
-        f"<span style='font-size:0.7em;font-weight:normal;opacity:0.8'>{auto_desc}</span>"
-        "</button>"
+        + auto
         + oeffnen
         + "</div>"
         f"<div class='meldung' id='meldung-{kennung}'></div>"
@@ -754,6 +835,8 @@ def render_gruppenarbeit(
     config: AppConfig | None = None,
     kalt_text: str = "",
     kalt_limit_erreicht: bool = False,
+    *,
+    automatik_moeglich: bool = True,
 ) -> str:
     """Eine Gruppe, zwei Spalten, zehn Fassungen - die ganze Seite.
 
@@ -786,13 +869,22 @@ def render_gruppenarbeit(
             "</div>"
         )
         + merkmale(arbeit.gruppe, arbeit.link, config)
+        + _automatikband()
         + _gruppenwahl(campaign_id, arbeit, eintraege)
         + "<div class='spalten'>"
         + _spalte(
-            Texttyp.POST, arbeit.posts, arbeit, kalt_limit_erreicht=kalt_limit_erreicht
+            Texttyp.POST,
+            arbeit.posts,
+            arbeit,
+            kalt_limit_erreicht=kalt_limit_erreicht,
+            automatik_moeglich=automatik_moeglich,
         )
         + _spalte(
-            Texttyp.KOMMENTAR, arbeit.kommentare, arbeit, kalt_limit_erreicht=kalt_limit_erreicht
+            Texttyp.KOMMENTAR,
+            arbeit.kommentare,
+            arbeit,
+            kalt_limit_erreicht=kalt_limit_erreicht,
+            automatik_moeglich=automatik_moeglich,
         )
         + "</div>"
         + (
@@ -852,6 +944,87 @@ def _skript(campaign_id: str, arbeit: Gruppenarbeit) -> str:
   const ZWECK = {_js(zwecknamen)};
   const STAND = {_js({s.value: list(_STANDNAME[s]) for s in VorschlagStatus})};
   const gewaehlt = {{post: 1, kommentar: 1}};
+
+  // --- Stand der Kommentarautomatik ---------------------------------------
+  //
+  // Abgerufen statt eingebettet: Der Stand aendert sich waehrend eines Laufs,
+  // und diese Seite laedt bewusst nicht neu. Jeder Zugriff in try/catch - eine
+  // Auskunft nebenbei darf die Arbeitsseite nicht mitreissen.
+  const automatikband = async () => {{
+    const kasten = document.getElementById('automatikband');
+    if (!kasten) return;
+    let d;
+    try {{
+      const antwort = await fetch('/automatik', {{headers: {{'Accept': 'application/json'}}}});
+      if (!antwort.ok) return;
+      d = await antwort.json();
+    }} catch (e) {{ return; }}
+
+    const setz = (id, text) => {{
+      const el = document.getElementById(id);
+      if (el) el.textContent = text;
+    }};
+
+    if (d.status === 'untaetig') {{
+      const anzahl = (d.aktive_kampagnen || []).length;
+      if (!anzahl) return;
+      setz('ab-status', 'bereit');
+      setz('ab-zahlen', anzahl + ' aktive Kampagne(n) warten auf einen Lauf');
+      setz('ab-jetzt', 'Start:  fbgroups campaign automatik --server http://127.0.0.1:8090');
+    }} else {{
+      setz('ab-status', d.fertig ? 'fertig' : d.status);
+      setz('ab-zahlen',
+        'Kampagnen ' + d.kampagnen.fertig + '/' + d.kampagnen.gesamt +
+        '   ·   Gruppen ' + d.gruppen.fertig + '/' + d.gruppen.gesamt +
+        '   ·   Kommentare ' + d.kommentare.fertig + '/' + d.kommentare.gesamt);
+      setz('ab-jetzt', d.fertig
+        ? 'Alle Kampagnen dieses Laufs sind abgearbeitet.'
+        : (d.aktuelle_gruppe
+            ? 'Als naechstes: ' + d.aktuelle_kampagne + ' / ' + d.aktuelle_gruppe +
+              ' (' + d.aktuelle_kommentare + ')'
+            : ''));
+    }}
+
+    // Der haeufigste Grund fuer einen kurzen Lauf - und der einzige, den man
+    // nicht in der Technik suchen sollte.
+    if (d.gruppen_wartend) {{
+      setz('ab-warten', d.gruppen_wartend + ' Gruppe(n) ohne Mitgliedschaft - dort '
+        + 'wird nichts versucht');
+    }}
+
+    // Die Warteschlange: welche Kampagne laeuft, welche folgt, welche ist
+    // durch. Abgearbeitet wird sequentiell - erst wenn eine fertig ist,
+    // beginnt die naechste. Eine Gesamtzahl beantwortet "wo stehe ich?",
+    // aber nicht "was kommt noch?", und das ist beim Arbeiten die Frage.
+    const liste = document.getElementById('ab-liste');
+    if (liste) {{
+      const reihe = d.warteschlange || [];
+      // Ueber das DOM gebaut, nicht ueber innerHTML: Ein Kampagnenname ist
+      // Text aus der Datenbank, und ein "<" darin braeche sonst die Liste.
+      liste.textContent = '';
+      for (const k of reihe) {{
+        const marke = k.fertig ? 'fertig' : (k.laeuft ? 'laeuft' : 'wartet');
+        const zeile = document.createElement('li');
+        zeile.className = 'ab-' + marke;
+        const name = document.createElement('b');
+        name.textContent = k.name;
+        const stand = document.createElement('span');
+        stand.className = 'ab-marke';
+        stand.textContent = marke;
+        const rest = document.createTextNode(
+          ' ' + k.gruppen_fertig + '/' + k.gruppen_gesamt + ' Gruppen \\u00b7 '
+          + k.kommentare_fertig + '/' + k.kommentare_gesamt + ' Kommentare'
+          + (k.gruppen_wartend
+              ? ' \\u00b7 ' + k.gruppen_wartend + ' ohne Mitgliedschaft' : '')
+        );
+        zeile.append(name, document.createTextNode(' '), stand, rest);
+        liste.appendChild(zeile);
+      }}
+      liste.hidden = reihe.length === 0;
+    }}
+    kasten.hidden = false;
+  }};
+  automatikband();
 
   const arabisch = (text) => /[\\u0600-\\u06FF]/.test(text || '');
   const finde = (typ, nummer) =>
@@ -979,6 +1152,38 @@ def _skript(campaign_id: str, arbeit: Gruppenarbeit) -> str:
     return true;
   }};
 
+  // Wer von Hand aus dem Bearbeitungsfeld kopiert (Strg+A, Strg+C), bekommt
+  // den Platzhalter - im Feld **muss** er stehen, sonst liesse sich der Text
+  // nicht bearbeiten. Am 31.08.2026 stand deshalb ``{{link}}`` woertlich in
+  // einem veroeffentlichten Beitrag.
+  //
+  // Der Griff in das Kopier-Ereignis loest ihn genau dort auf, wo er sonst
+  // hinausginge. Das Feld selbst bleibt unveraendert: Was gespeichert wird,
+  // traegt weiterhin den Platzhalter, und nur die Zwischenablage bekommt die
+  // fertige Fassung. Wird nur ein Ausschnitt markiert, der kein ``{{link}}``
+  // enthaelt, wird nichts angefasst.
+  const linkSchutz = (typ) => {{
+    const feld = id('feld', typ);
+    if (!feld) return;
+    feld.addEventListener('copy', (e) => {{
+      const auswahl = feld.value.substring(feld.selectionStart, feld.selectionEnd);
+      if (!auswahl.includes('{{link}}')) return;
+      const fassung = finde(typ, gewaehlt[typ]);
+      if (!fassung || !fassung.angezeigt) return;
+      // Nur der Platzhalter wird getauscht - der Rest der Auswahl bleibt,
+      // wie er ist. Den ganzen Text zu ersetzen waere eine Ueberraschung.
+      const link = fassung.angezeigt.match(/https?:\\/\\/\\S+/);
+      if (!link) return;
+      e.clipboardData.setData('text/plain', auswahl.split('{{link}}').join(link[0]));
+      e.preventDefault();
+      const meldung = id('meldung', typ);
+      if (meldung) {{
+        meldung.className = 'meldung gut-text';
+        meldung.textContent = 'Link beim Kopieren eingesetzt.';
+      }}
+    }});
+  }};
+
   const kopiere = async (typ) => {{
     const knopf = id('kopieren', typ);
     const meldung = id('meldung', typ);
@@ -991,14 +1196,48 @@ def _skript(campaign_id: str, arbeit: Gruppenarbeit) -> str:
       knopf.textContent = 'Kopiert';
       setTimeout(() => {{ knopf.textContent = vorher; }}, 1500);
     }} catch (_) {{
-      // Ohne HTTPS gibt es keine Zwischenablage-Berechtigung. Dann bekommt
-      // der Mensch den fertigen Text zum Markieren - kopieren kann er selbst.
-      const feld = id('feld', typ);
-      if (feld) {{ feld.focus(); feld.select(); }}
-      meldung.className = 'meldung';
-      meldung.textContent =
-        'Zwischenablage nicht erlaubt (kein HTTPS) - Text markiert, Strg+C. '
-        + 'Achtung: im Feld steht {{link}}, nicht der fertige Link.';
+      // Ersatzweg, wenn die asynchrone Zwischenablage nicht erlaubt ist.
+      //
+      // Hier stand bis zum 31.08.2026 ``feld.select()`` - das markierte das
+      // **Bearbeitungsfeld**, und darin steht ``{{link}}``. Wer auf "kopieren"
+      // drueckte und Strg+C machte, setzte den Platzhalter in die Gruppe;
+      // genau das ist an dem Tag in einem echten Beitrag gelandet. Die
+      // Warnzeile darunter half nicht: Sie stand klein und auf Deutsch neben
+      // einem arabischen Text.
+      //
+      // Jetzt wird der **angezeigte** Text ueber ein unsichtbares Hilfsfeld
+      // kopiert. Das Bearbeitungsfeld wird dabei nicht angefasst.
+      let geschafft = false;
+      const hilfsfeld = document.createElement('textarea');
+      hilfsfeld.value = fassung.angezeigt;
+      hilfsfeld.setAttribute('readonly', '');
+      hilfsfeld.style.position = 'fixed';
+      hilfsfeld.style.top = '-1000px';
+      document.body.appendChild(hilfsfeld);
+      hilfsfeld.select();
+      try {{ geschafft = document.execCommand('copy'); }} catch (__) {{ geschafft = false; }}
+      document.body.removeChild(hilfsfeld);
+
+      meldung.className = geschafft ? 'meldung gut-text' : 'meldung schlecht-text';
+      if (geschafft) {{
+        knopf.textContent = 'Kopiert';
+        setTimeout(() => {{ knopf.textContent = vorher; }}, 1500);
+        meldung.textContent = 'Kopiert (Ersatzweg) - mit eingesetztem Link.';
+      }} else {{
+        // Auch das ging nicht. Dann bekommt der Mensch den **fertigen** Text
+        // zum Markieren - niemals das Feld mit dem Platzhalter.
+        meldung.textContent =
+          'Zwischenablage nicht moeglich. Diesen Text kopieren (er traegt den Link):';
+        const kasten = document.createElement('textarea');
+        kasten.value = fassung.angezeigt;
+        kasten.readOnly = true;
+        kasten.rows = 6;
+        kasten.style.width = '100%';
+        kasten.style.marginTop = '.4rem';
+        meldung.appendChild(kasten);
+        kasten.focus();
+        kasten.select();
+      }}
     }}
   }};
 
@@ -1104,6 +1343,7 @@ def _skript(campaign_id: str, arbeit: Gruppenarbeit) -> str:
       try {{ await speichere(typ); }} finally {{ e.target.disabled = false; }}
     }});
     id('kopieren', typ).addEventListener('click', () => kopiere(typ));
+    linkSchutz(typ);
     const autoknopf = id('auto', typ);
     if (autoknopf) autoknopf.addEventListener('click', () => automatisch(typ));
 

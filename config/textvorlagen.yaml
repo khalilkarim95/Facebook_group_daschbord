@@ -125,195 +125,151 @@ monate:
 
 vorlagen:
 
+  # --- Arabisch: die zehn Vorlagen des Nutzers (31.08.2026) ---------------
+  #
+  # Sie ersetzen die Fassungen vom 28.08.2026 vollstaendig. Der Unterschied
+  # ist nicht der Wortlaut, sondern die Haltung: Vorher standen hier Texte,
+  # die erklaerten, was die App leistet und was sie nicht leistet - richtig,
+  # aber erkennbar geschrieben. Jetzt steht da, was ein Mensch schreibt, der
+  # etwas gefunden hat und es weitergibt.
+  #
+  # **Zwei Aenderungen an den Vorlagen des Nutzers, beide notwendig:**
+  #
+  #   1. ``{ziel}`` statt des festen "سوريا". Die Vorlagen waren Beispiele
+  #      fuer syrische Gruppen; eine irakische Kampagne meint den Irak. Das
+  #      Wort kommt aus ``audiences.yaml`` und setzt sich grammatisch genau
+  #      dort ein, wo vorher "سوريا" stand.
+  #   2. ``{link}`` auch in den Kommentaren. Die Vorlagen enthielten ihn
+  #      nicht - ohne ihn bekaeme die Gruppe nie einen Klick gutgeschrieben,
+  #      und ``pruefe_platzhalter`` wiese den Text ab.
+  #
+  # Die Toepfe sind wieder getrennt: ``mit_stadt`` nennt die Stadt der Gruppe,
+  # ``ohne_stadt`` kommt ohne aus. 152 von 313 Gruppen haben keine erkannte
+  # Stadt - eine Vorlage mit "{stadt}" zerbraeche bei der Haelfte des Bestands.
   ar:
-
-    # ----------------------------------------------------------------- POST
     post:
-      # Die fuenf Fassungen, die der Nutzer vorgegeben hat (28.08.2026). Drei
-      # Zusicherungen stehen in JEDER von ihnen und sind keine Formulierung,
-      # sondern die Grenze der App: sie vermittelt nur, sie kennt keinen Preis,
-      # und sie wickelt keine Zahlung ab. Wer eine sechste Fassung schreibt,
-      # schreibt sie mit - ein Beitrag, der Bezahlung, Zustellgarantie oder
-      # Versicherung verspricht, verspricht etwas, das es nicht gibt.
       mit_stadt:
-        - id: suche
+        - id: entdeckt
           text: |
-            هل يوجد شخص مسافر من {stadt} إلى {ziel} قريبًا؟
-
-            أحتاج إلى إرسال {gegenstand} صغير إلى هناك، ووجدت منصة «بطريقك»
-            التي تربط الأشخاص الذين يريدون إرسال أغراض صغيرة بالمسافرين الذين
-            لديهم مساحة في أمتعتهم.
-
-            التطبيق مجرد وسيط ولا تتم من خلاله أي عملية دفع أو تحديد سعر.
-
-            لمن يريد معرفة التفاصيل:
+            مرحبا جميعا، حبيت شارك معكم شغلة جديدة اكتشفتها، تطبيق بطريقك.
+            فكرته حلوة، بتساعدك تلاقي مسافر بين {stadt} و{ziel} إذا بدك تبعت غرض صغير.
+            هذا الرابط:
             {link}
 
-        - id: reisende
+        - id: shabab
           text: |
-            إذا كنت مسافرًا من {stadt} إلى {ziel} ولديك مساحة صغيرة إضافية في
-            حقيبتك، قد تهمك منصة «بطريقك».
-
-            المنصة تربط المسافرين بأشخاص يريدون إرسال أغراض صغيرة مثل الوثائق
-            أو الهدايا أو الأجهزة.
-
-            لا يوجد سعر أو نظام دفع داخل التطبيق، فهو يعمل كوسيط للتواصل فقط.
-
-            التفاصيل هنا:
+            مرحبا شباب، اليوم اكتشفت تطبيق اسمه بطريقك وحبيت خبركم عنه.
+            إذا حدا من {stadt} بده يبعت غرض صغير إلى {ziel}، التطبيق بيساعده يلاقي مسافر.
             {link}
 
-        - id: frage
+        - id: afieh
           text: |
-            سؤال لأهل {stadt}:
-
-            هل سبق لأحد أن احتاج إلى إرسال غرض صغير إلى سوريا أو منها ولم يجد
-            مسافرًا مناسبًا؟
-
-            وجدت منصة اسمها «بطريقك» مخصصة لهذا الأمر، حيث تربط صاحب الغرض
-            بالمسافر الذي لديه مساحة في حقيبته.
-
-            يمكن الاطلاع على طريقة عملها هنا:
+            يعطيكم العافية جميعا، حبيت شارك معكم تطبيق جديد شفته اسمه بطريقك.
+            الفكرة إنه إذا عندك غرض صغير بدك تبعته من {stadt} إلى {ziel}، ممكن تلاقي حدا مسافر ومعه مكان بالحقيبة.
             {link}
 
-        # "في {datum}" und nicht "بتاريخ {datum}": {datum} traegt einen
-        # Monatsnamen, und "بتاريخ" verlangt ein volles Datum.
-        - id: termin
+        - id: yestafid
           text: |
-            هل يوجد أحد مسافر من {stadt} إلى {ziel} في {datum}؟
-
-            أبحث عن طريقة لإيصال {gegenstand} صغير، ووجدت «بطريقك»، وهي منصة
-            تربط المسافرين بالأشخاص الذين يريدون إرسال أغراض صغيرة.
-
-            المهم أن المنصة لا تتعامل مع الأموال ولا تحتوي على حقل للأسعار.
-
-            المزيد من المعلومات:
+            مرحبا جميعا، يمكن في حدا هون يستفيد من هالتطبيق.
+            اسمه بطريقك وبيساعد {zielgruppe} في {stadt} يلاقوا مسافرين لإرسال الأغراض الصغيرة من وإلى {ziel}.
+            حبيت شارككم ياه:
             {link}
 
-        - id: hinweis
+        - id: jadid
           text: |
-            مشاركة معلومة لمن يعيش في {stadt} أو يسافر منها وإليها:
-
-            وجدت منصة «بطريقك» لفكرة بسيطة: مسافر لديه مساحة فارغة في حقيبته
-            يمكنه التواصل مع شخص يريد إرسال غرض صغير من سوريا أو إليها.
-
-            يمكن أن يكون الغرض وثائق أو جهازًا أو هدية وغيرها من الأغراض
-            الصغيرة.
-
-            المنصة نفسها مجرد وسيط ولا يتم من خلالها تحويل الأموال.
-
-            رابط المنصة:
+            شباب حبيت شارككم شي جديد اكتشفته اليوم.
+            في تطبيق اسمه بطريقك، فكرته إنه يربط الشخص اللي بده يبعت غرض صغير من {stadt} مع مسافر رايح إلى {ziel}.
+            يمكن يفيد حدا منكم:
             {link}
 
+      # Wortgleich, nur ohne Ortsangabe - fuer die 152 Gruppen ohne erkannte
+      # Stadt. Ein "{stadt}" hier waere ein Fehler und wird von ``pruefe``
+      # gemeldet.
       ohne_stadt:
-        - id: frage
+        - id: entdeckt
           text: |
-            مَن مِن {zielgruppe} في ألمانيا مسافر إلى بلده قريبًا؟
-
-            كثيرون هنا يريدون إرسال أمانة صغيرة إلى أهلهم، وكثير من المسافرين
-            عندهم متّسع في الحقيبة. تطبيق «بطريقك» (B-Tarikak) يجمع الطرفين.
-
+            مرحبا جميعا، حبيت شارك معكم شغلة جديدة اكتشفتها، تطبيق بطريقك.
+            فكرته حلوة، بتساعدك تلاقي مسافر من أو إلى {ziel} إذا بدك تبعت غرض صغير.
+            هذا الرابط:
             {link}
 
-        - id: einladung
+        - id: shabab
           text: |
-            أهلًا بأهلنا {zielgruppe} في ألمانيا 👋
-
-            أنشأنا «بطريقك» (B-Tarikak) لسبب بسيط: أن يجد المسافرُ مَن يوصّل له
-            أمانته، وأن يجد صاحبُ الأمانة مسافرًا يثق به.
-
-            انضمّوا إلينا من هنا:
+            مرحبا شباب، اليوم اكتشفت تطبيق اسمه بطريقك وحبيت خبركم عنه.
+            إذا حدا بده يبعت غرض صغير من {ziel} أو إلى {ziel}، التطبيق بيساعده يلاقي مسافر.
             {link}
 
-        - id: alltag
+        - id: afieh
           text: |
-            أمانة صغيرة بقيت في الدرج شهورًا، وأنت تنتظر مسافرًا إلى هناك.
-
-            هذا بالضبط ما يحلّه «بطريقك» (B-Tarikak): رحلات تنطلق كلّ أسبوع،
-            وأمانات تنتظر مَن يحملها.
-
+            يعطيكم العافية جميعا، حبيت شارك معكم تطبيق جديد شفته اسمه بطريقك.
+            الفكرة إنه إذا عندك غرض صغير بدك تبعته إلى {ziel} أو منها، ممكن تلاقي حدا مسافر ومعه مكان بالحقيبة.
             {link}
 
-        - id: kurz
+        - id: yestafid
           text: |
-            إلى {zielgruppe}: مسافر، أو تريد إرسال أمانة؟
-            «بطريقك» (B-Tarikak) يجمع بينكما.
-
+            مرحبا جميعا، يمكن في حدا هون يستفيد من هالتطبيق.
+            اسمه بطريقك وبيساعد {zielgruppe} يلاقوا مسافرين لإرسال الأغراض الصغيرة من وإلى {ziel}.
+            حبيت شارككم ياه:
             {link}
 
-        - id: ablauf
+        - id: jadid
           text: |
-            كيف يعمل «بطريقك» (B-Tarikak)؟
-
-            • المسافر يسجّل رحلته والمساحة المتاحة عنده
-            • صاحب الأمانة يبحث عن رحلة تناسبه
-            • تتّفقون على التفاصيل بينكم مباشرة
-
+            شباب حبيت شارككم شي جديد اكتشفته اليوم.
+            في تطبيق اسمه بطريقك، فكرته إنه يربط الشخص اللي بده يبعت غرض صغير مع مسافر رايح أو جاي من {ziel}.
+            يمكن يفيد حدا منكم:
             {link}
 
-    # ------------------------------------------------------------ KOMMENTAR
-    # Kurz, reagierend, ohne Begruessung: Der Beitrag darueber hat schon einen
-    # Anlass; ein zweiter Anlass daneben liest sich wie eingeworfene Werbung.
     kommentar:
-      # Die fuenf Kommentarfassungen des Nutzers (28.08.2026). "erklaerung"
-      # nennt keine Stadt und steht trotzdem hier: Nur {stadt} in "ohne_stadt"
-      # ist ein Fehler, umgekehrt nicht.
       mit_stadt:
-        - id: hilfreich
+        - id: min_fatra
           text: |
-            إذا كان هناك مسافر من {stadt} إلى {ziel}، ربما تكون منصة «بطريقك»
-            مفيدة لهذا النوع من الإرسال:
+            أنا شفت هالتطبيق من فترة، اسمه بطريقك، فكرته إنه إذا بدك تبعت غرض صغير من {stadt} إلى {ziel} بتلاقي مسافر رايح بنفس الاتجاه.
             {link}
 
-        - id: erklaerung
+        - id: kam_yom
           text: |
-            فكرة «بطريقك» هي الربط بين المسافر وصاحب الغرض، خصوصًا للأغراض
-            الصغيرة من وإلى سوريا. لا يوجد دفع أو سعر داخل التطبيق:
+            شفت بطريقك من كم يوم، بيخلّيك تلاقي مسافر عنده مكان بالحقيبة إذا بدك تبعت غرض صغير بين {stadt} و{ziel}.
             {link}
 
-        - id: direkt
+        - id: ana_kaman
           text: |
-            لمن يبحث عن مسافر من {stadt} إلى {ziel}، يمكنه الاطلاع على «بطريقك»
-            هنا:
+            أنا كمان شفت هالتطبيق، حسب ما فهمت بتسجل الغرض اللي بدك تبعته من {stadt} وبتلاقي مسافر مناسب بالطريق.
             {link}
 
-        - id: reisende
+        - id: sharakta
           text: |
-            إذا كنت مسافرًا من {stadt} ولديك مساحة في الحقيبة، يمكنك التعرف على
-            «بطريقك» هنا:
+            حبيت شاركها معكم، شفت تطبيق بطريقك وفكرته إنه يربط اللي بده يبعت غرض صغير من {stadt} مع مسافر رايح إلى {ziel}.
             {link}
 
-        - id: passend
+        - id: alyom
           text: |
-            قد تكون «بطريقك» مناسبة إذا كان المطلوب إرسال {gegenstand} صغير مع
-            مسافر بين {stadt} و{ziel}. التطبيق وسيط فقط:
+            شفت هالفكرة اليوم، بطريقك بتساعدك تلاقي مسافر إذا عندك غرض صغير بدك توصله من {stadt} إلى {ziel}.
             {link}
 
       ohne_stadt:
-        - id: hilfreich
+        - id: min_fatra
           text: |
-            إن كان أحدكم يريد إرسال أمانة إلى أهله، فهناك تطبيق يجمع المسافرين
-            بأصحاب الأمانات:
+            أنا شفت هالتطبيق من فترة، اسمه بطريقك، فكرته إنه إذا بدك تبعت غرض صغير من {ziel} أو إليها بتلاقي مسافر رايح بنفس الاتجاه.
             {link}
 
-        - id: direkt
+        - id: kam_yom
           text: |
-            لمن يبحث عن مسافر إلى بلده: «بطريقك» (B-Tarikak).
+            شفت بطريقك من كم يوم، بيخلّيك تلاقي مسافر عنده مكان بالحقيبة إذا بدك تبعت غرض صغير من أو إلى {ziel}.
             {link}
 
-        - id: empfehlung
+        - id: ana_kaman
           text: |
-            فكرة «بطريقك» (B-Tarikak) بسيطة: مسافر عنده متّسع في الحقيبة،
-            وأمانة تنتظر مَن يحملها. ربما تنفعكم:
+            أنا كمان شفت هالتطبيق، حسب ما فهمت بتسجل الغرض اللي بدك تبعته وبتلاقي مسافر مناسب بالطريق.
             {link}
 
-        - id: frage
+        - id: sharakta
           text: |
-            هل تبحث عن مسافر إلى بلدك هذا الشهر؟ هنا تجد مَن سجّل رحلته:
+            حبيت شاركها معكم، شفت تطبيق بطريقك وفكرته إنه يربط اللي بده يبعت غرض صغير مع مسافر رايح أو جاي من {ziel}.
             {link}
 
-        - id: kurz
+        - id: alyom
           text: |
-            ربما يفيد أهلنا {zielgruppe}:
+            شفت هالفكرة اليوم، بطريقك بتساعدك تلاقي مسافر إذا عندك غرض صغير بدك توصله من {ziel} أو إليها.
             {link}
 
   de:

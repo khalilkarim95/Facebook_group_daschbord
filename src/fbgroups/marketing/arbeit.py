@@ -337,10 +337,29 @@ def stelle_texte_bereit(
 
     zwecke = list(Texttyp)
 
+    from fbgroups.marketing.lauf import ZIEL_JE_GRUPPE
+    from fbgroups.marketing.tracking import app_base_url
+
+    # Der Browser-Code entsteht hier, beim Vorbereiten - nicht beim Anzeigen.
+    #
+    # Ein Tracking-Code ist endgueltig; ihn bei einem Seitenaufruf zu vergeben
+    # hiesse, dass blosses Nachsehen etwas Unumkehrbares anlegt. Das
+    # Bereitstellen der Texte ist dagegen der Schritt, der ohnehin schreibt.
+    link = store.link_for(campaign.campaign_id, gruppe.group_id)
+    if link is not None and not link.tracking_code_browser:
+        store.vergib_browsercode(
+            campaign.campaign_id, gruppe.group_id, app_base_url(config)
+        )
+
     entstanden: dict[Texttyp, int] = {}
     for texttyp in zwecke:
+        # Der Kommentar bekommt **zehn** Fassungen aus fuenf Vorlagen, der
+        # Beitrag fuenf aus fuenf. Die Zahl des Vorhabens und die Zahl der
+        # Texte sind zwei Dinge; ``alle_texte_fuer_gruppe`` dreht den Topf,
+        # wenn mehr verlangt wird als darin steht.
+        wieviele = ZIEL_JE_GRUPPE if texttyp is Texttyp.KOMMENTAR else MAX_VORSCHLAEGE
         fassungen = vorlagen.alle_texte_fuer_gruppe(
-            gruppe, campaign, config, texttyp=texttyp, hoechstens=MAX_VORSCHLAEGE
+            gruppe, campaign, config, texttyp=texttyp, hoechstens=wieviele
         )
         neu_entstanden = 0
         for nummer, (schluessel, text) in enumerate(fassungen, start=1):
@@ -564,10 +583,22 @@ def _fassungen(
     gibt weiterhin genau eine Stelle, an der ein Tracking-Code in einen Text
     kommt.
     """
+    from fbgroups.marketing.lauf import ziel_zu_nummer
+
     return [
         Fassung(
             vorschlag=vorschlag,
-            angezeigt=mit_link(campaign, link, vorschlag.text, config=config),
+            # Das Ziel wechselt je Fassung: ungerade in den Browser,
+            # gerade in den Store. Ohne diese Angabe trug jeder
+            # angezeigte Text den Store-Link - und genau das war der
+            # Zustand, den die zwei Ziele beheben sollen.
+            angezeigt=mit_link(
+                campaign,
+                link,
+                vorschlag.text,
+                config=config,
+                ziel=ziel_zu_nummer(vorschlag.nummer),
+            ),
             post_url=store.letzte_post_url(
                 campaign.campaign_id, link.group_id, texttyp.value, vorschlag.nummer
             )

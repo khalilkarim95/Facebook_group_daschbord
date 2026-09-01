@@ -1076,6 +1076,350 @@ def campaign_retry(
         )
 
 
+@campaign_app.command("beitritt")
+def campaign_beitritt(
+    server: str = typer.Option(
+        "http://127.0.0.1:8090", "--server", help="Basisadresse des Dienstes (SSH-Tunnel)."
+    ),
+    limit: int = typer.Option(
+        0, "--limit", help="Hoechstens N Anfragen in diesem Lauf (0 = bis zur Tagesmenge)."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Nur zeigen, wer drankaeme."),
+) -> None:
+    """Stellt Beitrittsanfragen - sichtbar im Browser, gebucht auf dem Server.
+
+    Die riskanteste Handlung des Projekts, deshalb die vorsichtigste:
+
+    * Die **Tagesmenge bestimmt der Server**, nicht dieser Rechner. Sonst
+      haette jedes Fenster sein eigenes Kontingent, und zwei nebeneinander
+      verdoppelten die Anfragen.
+    * Gruppen mit Beitrittsfragen werden **uebersprungen**, nicht beantwortet.
+    * Ein uebersprungener oder gescheiterter Versuch hinterlaesst **nichts** -
+      ``beitritt_angefragt`` zu setzen waere die Behauptung, es sei etwas
+      abgeschickt worden.
+    """
+    import httpx
+
+    config = _config()
+    basis = server.rstrip("/")
+    kopf = {"Origin": basis, "Content-Type": "application/json"}
+
+    with httpx.Client(timeout=120.0, headers=kopf) as klient:
+        antwort = klient.post(f"{basis}/automatik/beitritt/naechste", json={})
+        if antwort.status_code == 404:
+            console.print(
+                "[red]Der Dienst haelt den Aufruf fuer nicht-oertlich.[/red] "
+                "Laeuft der SSH-Tunnel?"
+            )
+            raise typer.Exit(code=1)
+        antwort.raise_for_status()
+        daten = antwort.json()
+
+        gruppen = daten["gruppen"]
+        if limit > 0:
+            gruppen = gruppen[:limit]
+
+        console.print(
+            f"Heute gestellt: [bold]{daten['heute']}[/bold] von {daten['pro_tag']}  ·  "
+            f"jetzt an der Reihe: [bold]{len(gruppen)}[/bold]"
+        )
+        if daten.get("meldung"):
+            console.print(f"[yellow]{daten['meldung']}[/yellow]")
+        if not gruppen:
+            return
+
+        for g in gruppen[:10]:
+            console.print(f"  {g['name']}")
+        if len(gruppen) > 10:
+            console.print(f"  ... und {len(gruppen) - 10} weitere")
+
+        if dry_run:
+            console.print("\n[dry-run] Es wird nichts abgeschickt.")
+            return
+
+        from fbgroups.automation.actions import request_join
+        from fbgroups.automation.browser import get_browser_context
+        from fbgroups.marketing import beitritt as bt
+
+        _, abstand = bt.einstellungen(config)
+        gezaehlt = {"angefragt": 0, "bereits_mitglied": 0, "fragen": 0, "fehler": 0}
+
+        with get_browser_context(config, headless=False) as context:
+            for i, g in enumerate(gruppen, start=1):
+                console.print(f"\n[bold]{i}/{len(gruppen)}  {g['name']}[/bold]")
+                try:
+                    ausgang, bemerkung = request_join(context, g["url"])
+                except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Ausgang
+                    ausgang, bemerkung = "fehler", str(exc).splitlines()[0][:120]
+
+                gezaehlt[str(ausgang)] = gezaehlt.get(str(ausgang), 0) + 1
+                klient.post(
+                    f"{basis}/automatik/beitritt/ergebnis",
+                    json={
+                        "group_id": g["group_id"],
+                        "ausgang": str(ausgang),
+                        "bemerkung": bemerkung,
+                    },
+                ).raise_for_status()
+
+                # Der Takt gilt zwischen den Anfragen, nicht danach: Nach der
+                # letzten zu warten haelt nur den Menschen auf.
+                if i < len(gruppen) and abstand > 0:
+                    import random
+                    import time
+
+                    pause = abstand * 60 * random.uniform(0.8, 1.3)
+                    console.print(f"[dim]  Pause {pause / 60:.1f} Min[/dim]")
+                    time.sleep(pause)
+
+    console.print(
+        Panel(
+            f"Angefragt:        {gezaehlt['angefragt']}\n"
+            f"Schon Mitglied:   {gezaehlt['bereits_mitglied']}\n"
+            f"Uebersprungen:    {gezaehlt['fragen']}  (Gruppe stellt Beitrittsfragen)\n"
+            f"Fehlgeschlagen:   {gezaehlt['fehler']}",
+            title="Beitrittsanfragen",
+        )
+    )
+
+
+@campaign_app.command("abgleich")
+def campaign_abgleich(
+    server: str = typer.Option(
+        "http://127.0.0.1:8090", "--server", help="Basisadresse des Dienstes (SSH-Tunnel)."
+    ),
+    ja: bool = typer.Option(False, "--ja", help="Wirklich uebertragen (sonst nur zeigen)."),
+) -> None:
+    """Traegt oertlich veroeffentlichte Fassungen auf dem Server nach.
+
+    Fuer den Bestand, der vor dem Fernbetrieb entstanden ist: Wer die
+    Automatik oertlich gefahren hat, hat die Kommentare abgesetzt, aber in
+    seiner **eigenen** Datei gebucht. Auf dem Server stehen sie weiter als
+    offen, und die Arbeitsliste dort bietet Arbeit an, die getan ist.
+
+    Uebertragen wird nur in eine Richtung und nur, was oertlich als
+    veroeffentlicht gilt. Ein Rueckweg waere gefaehrlich: Der Server ist die
+    gueltige Fassung, und ein Abgleich, der ihn ueberschreibt, kostet
+    gezaehlte Klicks.
+    """
+    import httpx
+
+    from fbgroups.marketing.models import MAX_VORSCHLAEGE, Texttyp, VorschlagStatus
+
+    config = _config()
+    basis = server.rstrip("/")
+
+    with MarketingStore(config.path("sqlite_path")) as store:
+        offen: list[dict] = []
+        for kampagne in store.load_campaigns():
+            for link in store.links_for_campaign(kampagne.campaign_id):
+                # Beide Zwecke: Der Beitrag zieht auf dem Server ausserdem die
+                # Spalte BEITRAG mit (``_gruppenstand_nachziehen``), was ein
+                # Kommentar bewusst nicht tut.
+                for texttyp in (Texttyp.POST, Texttyp.KOMMENTAR):
+                    for nummer in range(1, MAX_VORSCHLAEGE + 1):
+                        v = store.vorschlag(
+                            kampagne.campaign_id, link.group_id, texttyp, nummer
+                        )
+                        if v is not None and v.status is VorschlagStatus.VEROEFFENTLICHT:
+                            offen.append(
+                                {
+                                    "campaign_id": kampagne.campaign_id,
+                                    "group_id": link.group_id,
+                                    "nummer": nummer,
+                                    "texttyp": texttyp.value,
+                                    "erfolg": True,
+                                    "post_url": store.letzte_post_url(
+                                        kampagne.campaign_id,
+                                        link.group_id,
+                                        texttyp.value,
+                                        nummer,
+                                    ),
+                                }
+                            )
+
+    if not offen:
+        console.print("[dim]Oertlich ist nichts veroeffentlicht - nichts abzugleichen.[/dim]")
+        return
+
+    console.print(f"Oertlich veroeffentlicht: [bold]{len(offen)}[/bold] Fassung(en)")
+    for e in offen:
+        console.print(
+            f"  {e['campaign_id']} / {e['group_id']} / {e['texttyp']} {e['nummer']}"
+        )
+
+    if not ja:
+        console.print("\n[dry-run] Mit [bold]--ja[/bold] werden sie auf dem Server nachgetragen.")
+        return
+
+    kopf = {"Origin": basis, "Content-Type": "application/json"}
+    uebertragen = 0
+    with httpx.Client(timeout=30.0, headers=kopf) as klient:
+        for e in offen:
+            antwort = klient.post(f"{basis}/automatik/ergebnis", json=e)
+            if antwort.status_code == 404:
+                console.print(
+                    "[red]Der Dienst haelt den Aufruf fuer nicht-oertlich.[/red] "
+                    "Laeuft der SSH-Tunnel?"
+                )
+                raise typer.Exit(code=1)
+            antwort.raise_for_status()
+            if antwort.json().get("ok"):
+                uebertragen += 1
+
+    console.print(f"[green]{uebertragen} von {len(offen)} auf dem Server nachgetragen.[/green]")
+
+
+@campaign_app.command("automatik")
+def campaign_automatik(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Nur zeigen, was liefe."),
+    max_schritte: int = typer.Option(
+        0, "--limit", help="Hoechstens N Kommentare in diesem Lauf (0 = ohne Grenze)."
+    ),
+    status: bool = typer.Option(False, "--status", help="Nur den Stand zeigen, nichts tun."),
+    server: str = typer.Option(
+        None,
+        "--server",
+        help="Auf dem Bestand des Servers arbeiten, z. B. http://127.0.0.1:8090 (SSH-Tunnel).",
+    ),
+    nur: list[str] = typer.Option(
+        None,
+        "--kampagne",
+        help="Nur diese Kampagne(n) - wirkt nur beim Start eines neuen Laufs.",
+    ),
+) -> None:
+    """Arbeitet ALLE aktiven Kampagnen ab - Gruppe fuer Gruppe, Kommentar fuer Kommentar.
+
+    Der eine Startpunkt: Kampagnenliste einfrieren, dann streng der Reihe nach.
+    Erst wenn eine Kampagne vollstaendig durch ist, beginnt die naechste.
+
+    Fortgesetzt statt neu begonnen: Ein unterbrochener Lauf wird beim naechsten
+    Aufruf dort aufgenommen, wo er stand - der Fortschritt steht in den
+    Fassungen selbst und nicht in einem Zaehler, der veralten koennte.
+    """
+    from fbgroups.marketing import automatik, lauf
+    from fbgroups.marketing.models import CampaignStatus
+
+    config = _config()
+
+    # --- Fernbetrieb: der Server haelt den Stand, dieser Rechner den Browser
+    #
+    # Der Grund steht in ``automatik.fuehre_lauf_fern_aus``: Ohne ihn bucht
+    # die Automatik in die Datei, in der sie laeuft - auf diesem Rechner also
+    # in eine Kopie. Der Kommentar geht hinaus, gebucht wird daneben, und der
+    # Server bietet dieselbe Gruppe weiter als offen an.
+    if server:
+        if status or dry_run:
+            console.print(
+                "[red]--status und --dry-run gelten fuer den oertlichen Bestand.[/red]\n"
+                "Den Stand des Servers zeigt: curl "
+                f"{server.rstrip('/')}/automatik"
+            )
+            raise typer.Exit(code=2)
+
+        from fbgroups.automation.browser import get_browser_context
+
+        console.print(f"[cyan]Fernbetrieb: Stand und Buchung auf {server}[/cyan]")
+        console.print("[dim]Dieser Rechner steuert nur den Browser.[/dim]")
+        if nur:
+            console.print(f"[yellow]Eingeschraenkt auf: {', '.join(nur)}[/yellow]")
+
+        with get_browser_context(config, headless=False) as context:
+
+            def fern(
+                gruppen_url: str, group_id: str, text: str, bisherige: list[str]
+            ) -> automatik.Schrittergebnis:
+                try:
+                    return automatik.browser_schritt_fern(
+                        context, gruppen_url, group_id, text, bisherige
+                    )
+                except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Ausgang
+                    return automatik.Schrittergebnis(
+                        erfolg=False, fehler=str(exc).splitlines()[0][:120]
+                    )
+
+            meldung = automatik.fuehre_lauf_fern_aus(
+                server, ausfuehren=fern, max_schritte=max_schritte, nur=list(nur or [])
+            )
+        console.print(Panel(meldung, title="Automatik (Server)"))
+        return
+
+    if status:
+        with MarketingStore(config.path("sqlite_path")) as store:
+            offen = store.offener_lauf()
+            if offen is None:
+                aktive = automatik.aktive_kampagnen(store)
+                console.print("[dim]Kein Lauf im Gange.[/dim]")
+                console.print(f"Aktive Kampagnen, die ein Start einfrieren wuerde: {len(aktive)}")
+                for cid in aktive:
+                    console.print(f"  - {cid}")
+                return
+            with SqliteStore(config.path("sqlite_path")) as gruppen_store:
+                gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
+            fortschritt = lauf.lies_fortschritt(store, int(offen["lauf_id"]), gruppen)
+        console.print(Panel(lauf.fortschrittstext(fortschritt), title="Automatik"))
+        return
+
+    if dry_run:
+        with MarketingStore(config.path("sqlite_path")) as store:
+            lauf_id, neu = (
+                (int(z["lauf_id"]), False)
+                if (z := store.offener_lauf()) is not None
+                else (0, True)
+            )
+            if neu:
+                aktive = automatik.aktive_kampagnen(store)
+                console.print(f"[cyan]Es entstuende ein neuer Lauf ueber {len(aktive)} "
+                              f"Kampagne(n):[/cyan]")
+                for cid in aktive:
+                    kampagne = store.load_campaign(cid)
+                    anzahl = len(store.links_for_campaign(cid))
+                    console.print(
+                        f"  - {kampagne.name if kampagne else cid}: {anzahl} Gruppen "
+                        f"= bis zu {anzahl * lauf.ZIEL_JE_GRUPPE} Kommentare"
+                    )
+                console.print("\n[dry-run] Es wird nichts abgesetzt.")
+                return
+            with SqliteStore(config.path("sqlite_path")) as gruppen_store:
+                gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
+            fortschritt = lauf.lies_fortschritt(store, lauf_id, gruppen)
+            schritt = lauf.naechster_schritt(fortschritt)
+        console.print(Panel(lauf.fortschrittstext(fortschritt), title="Automatik (dry-run)"))
+        if schritt is not None:
+            console.print(
+                f"Als naechstes: {schritt.gruppe_name} - Kommentar "
+                f"{schritt.kommentar_nr}/{schritt.kommentar_ziel} (Fassung {schritt.nummer})"
+            )
+        console.print("\n[dry-run] Es wird nichts abgesetzt.")
+        return
+
+    with MarketingStore(config.path("sqlite_path")) as store:
+        if not store.load_campaigns(CampaignStatus.ACTIVE) and store.offener_lauf() is None:
+            console.print("[red]Keine aktive Kampagne.[/red] Ein Lauf haette nichts zu tun.")
+            raise typer.Exit(code=1)
+
+    from fbgroups.automation.browser import get_browser_context
+
+    # Ein Browser fuer den ganzen Lauf, nicht einer je Kommentar.
+    with get_browser_context(config, headless=False) as context:
+
+        def schritt(gruppen_url: str, group_id: str, text: str) -> automatik.Schrittergebnis:
+            try:
+                return automatik.browser_schritt(context, config, gruppen_url, group_id, text)
+            except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Ausgang
+                return automatik.Schrittergebnis(
+                    erfolg=False, fehler=str(exc).splitlines()[0][:120]
+                )
+
+        fortschritt = automatik.fuehre_lauf_aus(
+            config, ausfuehren=schritt, max_schritte=max_schritte
+        )
+
+    console.print(Panel(lauf.abschlusstext(fortschritt), title="Automatik"))
+    if not fortschritt.fertig:
+        raise typer.Exit(code=1)
+
+
 @campaign_app.command("auto")
 def campaign_auto(
     campaign_id: str = typer.Argument(...),
@@ -1164,7 +1508,12 @@ def campaign_auto(
             console.print(f"[red]Gruppe {group_id} ist nicht in der Kampagne {campaign_id}.[/red]")
             raise typer.Exit(code=1)
 
-        text = mit_link(campaign, link, vorschlag.text, config=config)
+        from fbgroups.marketing.lauf import ziel_zu_nummer
+
+        text = mit_link(
+            campaign, link, vorschlag.text, config=config,
+            ziel=ziel_zu_nummer(vorschlag.nummer),
+        )
 
     with SqliteStore(config.path("sqlite_path")) as gruppen_store:
         group = next((g for g in gruppen_store.load_groups() if g.group_id == group_id), None)
@@ -1368,11 +1717,31 @@ def campaign_text(
             zwecke = list(Texttyp)
 
         links = store.links_for_campaign(campaign_id)
+
+        # ``job_status`` beschreibt den **Beitrag** - Freigabe, Warteschlange,
+        # Versuche. Er sperrte hier bis zum 31.08.2026 auch die Erzeugung der
+        # Kommentare, und das widerspricht der Aufteilung in CLAUDE.md: "Der
+        # Beitrag traegt den Ablauf, der Kommentar wird kopiert; der Kommentar
+        # hat davon nichts."
+        #
+        # Aufgefallen ist es, als die Kommentare von fuenf auf zehn Fassungen
+        # gingen: Eine Gruppe mit veroeffentlichtem **Beitrag** bekam die
+        # Fassungen 6 bis 10 nicht mehr - obwohl es sie dort noch gar nicht
+        # gab und kein Kommentar davon beruehrt gewesen waere.
+        beitrag_gesperrt = (JobStatus.PUBLISHED, JobStatus.PROCESSING)
+
+        # Gefragt wird nach der Sammelspalte, denn genau die schreibt dieser
+        # Befehl (``set_generierten_text``). Die **nummerierten** Fassungen
+        # entstehen an anderer Stelle - in ``arbeit.stelle_texte_bereit``,
+        # also beim Oeffnen der Arbeitsseite ("Arbeiten bereitet selbst vor").
+        # Dort werden aus fuenf Vorlagen zehn Kommentarfassungen.
+        def offen_fuer(link, texttyp: Texttyp) -> bool:
+            if texttyp is Texttyp.POST and link.job_status in beitrag_gesperrt:
+                return False
+            return ueberschreiben or not link.text_fuer(texttyp).strip()
+
         betroffen = [
-            link
-            for link in links
-            if any(ueberschreiben or not link.text_fuer(texttyp).strip() for texttyp in zwecke)
-            if link.job_status not in (JobStatus.PUBLISHED, JobStatus.PROCESSING)
+            link for link in links if any(offen_fuer(link, texttyp) for texttyp in zwecke)
         ]
 
         # Die Gruppen werden gebraucht, weil der Text je Gruppe ein anderer
@@ -1443,6 +1812,40 @@ def campaign_text(
                     texttyp=texttyp,
                 )
                 gezaehlt[texttyp.value] += 1
+
+        # Und die **nummerierten** Fassungen dazu.
+        #
+        # Bis zum 31.08.2026 tat dieser Befehl nur das Obige - er fuellte die
+        # Sammelspalte. Die zehn Kommentarfassungen entstanden allein beim
+        # Oeffnen der Arbeitsseite, und auch das nur bei leerer Warteschlange.
+        # Die Folge war ein Bestand mit ungleichen Zahlen: vier Paare mit
+        # einer Fassung, sechs mit fuenf, eines mit zehn, fuenfundzwanzig
+        # ohne jede. Wer "Texte erzeugen" aufruft, meint aber die Texte, mit
+        # denen gearbeitet wird.
+        #
+        # ``stelle_texte_bereit`` ueberschreibt nichts Vorhandenes; der Aufruf
+        # ist damit wiederholbar und fuellt allein die Luecken.
+        from fbgroups.marketing.arbeit import stelle_texte_bereit
+
+        # Ueber **alle** Zuordnungen, nicht nur ueber die eben geschriebenen.
+        #
+        # ``betroffen`` filtert an der Sammelspalte: Wo dort schon ein Text
+        # steht, gilt die Gruppe als erledigt. Fuer die nummerierten Fassungen
+        # trifft das nicht zu - ein Paar mit gefuellter Sammelspalte hatte am
+        # 31.08.2026 trotzdem nur fuenf statt zehn Kommentarfassungen, weil
+        # jene aus der Zeit vor der Umstellung stammten.
+        ergaenzt = 0
+        for link in links:
+            gruppe = gruppen.get(link.group_id)
+            if gruppe is None:
+                continue
+            bericht = stelle_texte_bereit(
+                store, campaign, gruppe, config, ueberschreiben=ueberschreiben
+            )
+            ergaenzt += sum(bericht.values())
+        if ergaenzt:
+            console.print(f"[dim]{ergaenzt} nummerierte Fassung(en) ergaenzt.[/dim]")
+
         fehlend = len(betroffen) - len(geschrieben)
         betroffen = geschrieben
 

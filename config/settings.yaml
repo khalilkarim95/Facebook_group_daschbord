@@ -43,6 +43,18 @@ marketing:
   # Vorgabe fuer Kampagnen, die nichts sagen.
   ziel: store
 
+  # Wohin ein **Browser-Code** fuehrt (``FB-SYR-BER-010-B``).
+  #
+  # Seit dem 31.08.2026 traegt jedes Paar zwei Codes: der bestehende zum Play
+  # Store, ein zweiter in den Browser. Beide werden vollstaendig gezaehlt -
+  # der Unterschied ist allein das Ziel nach der Weiterleitung, und dadurch
+  # laesst sich im Trichter unterscheiden, woher ein Mensch kam.
+  #
+  # Eigener Eintrag und nicht ``fallback_url``: Der Browser ist ein
+  # gleichrangiges Ziel, kein Notnagel. Steht an der Kampagne eine eigene
+  # ``landing_page``, gilt sie vor diesem Wert.
+  browser_url: https://b-tarikak.de/
+
   store:
     # Die echte Package-ID der App (b-tarikak-frontend/android/app/build.gradle.kts).
     # Keine Beispielkennung: Eine falsche fuehrte auf eine fremde oder gar
@@ -279,8 +291,31 @@ kaltmodus:
   # Handel, den dieser Block beschreibt.
   beitraege_pro_tag: 25
 
-  # Minuten zwischen zwei Beitraegen. Fuenfundzwanzig in zehn Minuten sind
-  # dasselbe Muster wie dreihundert an einem Tag, nur schneller. Bewusst
-  # gleichmaessig und nicht gestreut: Eine gestreute Pause waere der Anfang
-  # davon, unauffaellig aussehen zu wollen.
+  # Minuten zwischen zwei Beitraegen - die Grundzeit, nicht die gemessene.
+  # Fuenfundzwanzig in zehn Minuten sind dasselbe Muster wie dreihundert an
+  # einem Tag, nur schneller.
+  #
+  # Hier stand bis zum 31.08.2026 "bewusst gleichmaessig und nicht gestreut".
+  # Das gilt nicht mehr: ``kaltmodus.naechster_zeitpunkt`` streut die Pause
+  # seit dem 30.08.2026 zwischen 80 % und 130 % und legt nach je sieben bis
+  # acht Beitraegen eine laengere ein. Der Kommentar beschrieb damit das
+  # Gegenteil des Codes - und ein Kommentar, dem man nicht glauben kann, ist
+  # schlechter als keiner.
   mindestabstand_minuten: 4
+
+# --- Beitrittsanfragen ------------------------------------------------------
+# Die riskanteste Handlung des Projekts. Nicht wegen des Inhalts - eine Anfrage
+# traegt keinen Text -, sondern wegen der Menge: Am 31.08.2026 standen 311 von
+# 314 Gruppen ohne jeden Eintrag. Facebook begrenzt Beitrittsanfragen haerter
+# als Beitraege, und an diesem Konto haengen alle bestehenden Mitgliedschaften.
+#
+# Gruppen mit Beitrittsfragen werden uebersprungen, nicht beantwortet: Eine
+# Antwort im Namen des Nutzers zu erfinden ist etwas anderes, als einen Knopf
+# zu druecken.
+beitritt:
+  # Anfragen je Tag. Vom Nutzer am 31.08.2026 auf 50 gesetzt.
+  anfragen_pro_tag: 50
+
+  # Minuten zwischen zwei Anfragen. Gestreut wie beim Kaltmodus - fuenfzig in
+  # zehn Minuten waeren dasselbe Muster, nur schneller.
+  mindestabstand_minuten: 3

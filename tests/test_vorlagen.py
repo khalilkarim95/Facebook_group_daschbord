@@ -378,7 +378,7 @@ def test_die_kennung_ueberlebt_das_umsortieren(config: AppConfig) -> None:
 
 def test_ein_gespeicherter_schluessel_wird_wiederverwendet(config: AppConfig) -> None:
     """Der Text darf sich nicht aendern, nur weil neu gefuellt wird."""
-    fest = f"ar/post/{MIT_STADT}/reisende"
+    fest = f"ar/post/{MIT_STADT}/entdeckt"
     schluessel, text = erzeuge(gruppe(), kampagne("ar"), config, schluessel=fest)
     assert schluessel == fest
     assert text == fuelle(
@@ -402,8 +402,11 @@ def test_ein_alter_schluessel_zeigt_weiter_auf_dieselbe_vorlage(
     Ihn nicht mehr zu lesen hiesse: 310 Gruppen bekommen beim naechsten
     Fuellen eine andere Vorlage, ohne dass jemand etwas geaendert hat.
     """
+    # Der dreiteilige Schluessel meint die dritte Fassung des Beitragstopfes.
+    # Ihre Kennung hat sich am 31.08.2026 geaendert (die Vorlagen wurden
+    # ersetzt) - dass er weiterhin dorthin zeigt, ist genau die Zusage.
     alt = vorlage_zu(config, f"ar/{MIT_STADT}/3")
-    neu = vorlage_zu(config, f"ar/post/{MIT_STADT}/frage")
+    neu = vorlage_zu(config, f"ar/post/{MIT_STADT}/afieh")
     assert alt == neu
 
 

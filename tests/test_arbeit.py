@@ -482,24 +482,48 @@ def test_es_gibt_keine_gezaehlte_tagesgrenze_mehr(
 
 
 def test_pausiert_haelt_beide_zwecke_an(store, campaign, gruppen, gefuellt) -> None:
-    """Ein Entschluss, in dieser Kampagne gerade nichts hinauszugeben."""
+    """Ein Entschluss, in dieser Kampagne gerade nichts **hinauszugeben**.
+
+    Die Sperre haelt an, was noch nicht geschehen ist. Sie gilt deshalb fuer
+    einen Fehlschlag - dort ist nichts passiert, was gebucht werden muesste.
+    """
     stand = hole(store, campaign, gruppen)
     store.set_queue_zustand(KAMPAGNE, QueueZustand.PAUSIERT)
 
     for texttyp in (Texttyp.POST, Texttyp.KOMMENTAR):
         ergebnis = melde_vorschlag(
-            store, campaign, stand.link, texttyp, 1, Ergebnis(erfolg=True)
+            store, campaign, stand.link, texttyp, 1, Ergebnis(erfolg=False, fehler="abgebrochen")
         )
         assert isinstance(ergebnis, Sperre)
         assert ergebnis.grund == Grund.PAUSIERT
 
 
+def test_ein_erfolg_wird_auch_pausiert_gebucht(store, campaign, gruppen, gefuellt) -> None:
+    """Was in der Gruppe steht, steht dort - die Pause holt es nicht zurueck.
+
+    Meldet jemand einen Erfolg, ist der Beitrag bereits abgesetzt. Ihn wegen
+    einer Pause nicht zu buchen hiesse, die Buchfuehrung von der Wirklichkeit
+    auf Facebook zu trennen: Der Tracking-Code laeuft, die Klicks kommen an,
+    und die Arbeitsliste boete dieselbe Gruppe ein zweites Mal an.
+    """
+    stand = hole(store, campaign, gruppen)
+    store.set_queue_zustand(KAMPAGNE, QueueZustand.PAUSIERT)
+
+    ergebnis = melde_vorschlag(
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+    )
+
+    assert not isinstance(ergebnis, Sperre)
+    assert store.versuche_for(KAMPAGNE, stand.link.group_id) != []
+
+
 def test_eine_sperre_faengt_keinen_versuch_an(store, campaign, gruppen, gefuellt) -> None:
+    """Nachsehen ist keine Arbeit: Ein gesperrter Fehlschlag hinterlaesst nichts."""
     stand = hole(store, campaign, gruppen)
     store.set_queue_zustand(KAMPAGNE, QueueZustand.GESTOPPT)
 
     melde_vorschlag(
-        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=True)
+        store, campaign, stand.link, Texttyp.POST, 1, Ergebnis(erfolg=False, fehler="abgebrochen")
     )
 
     assert store.versuche_for(KAMPAGNE, stand.link.group_id) == []
@@ -1031,3 +1055,53 @@ def test_der_marketing_speicher_holt_den_schritt_ebenfalls_nach(bestand: Path) -
 
     with MarketingStore(bestand) as store:
         assert store.vorschlaege(KAMPAGNE, next(iter(GRUPPEN))) == []
+
+def test_der_ersatzweg_kopiert_nie_das_bearbeitungsfeld(
+    store, campaign, gruppen, gefuellt, config
+) -> None:
+    """Der Fehler vom 31.08.2026: ``{link}`` stand woertlich in einer Gruppe.
+
+    Der Kopierknopf hat einen Ersatzweg fuer den Fall, dass die asynchrone
+    Zwischenablage nicht erlaubt ist. Er markierte dort das **Bearbeitungs-
+    feld** - und darin steht der Platzhalter, weil man den Text sonst nicht
+    bearbeiten koennte. Wer auf "kopieren" drueckte und Strg+C machte, setzte
+    ihn in den Beitrag.
+
+    Geprueft wird die Seite, nicht der Browser: Dass ``feld.select()`` im
+    Ersatzweg nicht mehr vorkommt und stattdessen der angezeigte Text kopiert
+    wird, ist die Zusage, die den Fehler ausschliesst.
+    """
+    from fbgroups.marketing.arbeitsseite import render_gruppenarbeit
+
+    stand = hole(store, campaign, gruppen)
+    seite = render_gruppenarbeit(stand, KAMPAGNE, [], config)
+
+    # Der Ersatzweg baut ein Hilfsfeld aus ``fassung.angezeigt`` - dem Text
+    # **mit** eingesetztem Link.
+    assert "hilfsfeld.value = fassung.angezeigt" in seite
+    assert "document.execCommand('copy')" in seite
+
+    # Und er markiert nirgends mehr das Bearbeitungsfeld.
+    assert "feld.focus(); feld.select();" not in seite
+
+
+def test_das_bearbeitungsfeld_setzt_den_link_beim_kopieren_ein(
+    store, campaign, gruppen, gefuellt, config
+) -> None:
+    """Zweiter Riegel: auch Strg+C aus dem Feld heraus liefert den Link.
+
+    Im Feld **muss** ``{link}`` stehen - sonst liesse sich der Text nicht
+    bearbeiten, und ein von Hand hineingeschriebener Link ergaebe einen
+    Beitrag, dessen Gruppe nie einen Klick gutgeschrieben bekaeme. Der Griff
+    in das Kopier-Ereignis loest ihn genau dort auf, wo er sonst hinausginge.
+    """
+    from fbgroups.marketing.arbeitsseite import render_gruppenarbeit
+
+    stand = hole(store, campaign, gruppen)
+    seite = render_gruppenarbeit(stand, KAMPAGNE, [], config)
+
+    assert "linkSchutz" in seite
+    assert "addEventListener('copy'" in seite
+    # Das Feld selbst bleibt unveraendert - nur die Zwischenablage bekommt
+    # die fertige Fassung.
+    assert "e.clipboardData.setData('text/plain'" in seite

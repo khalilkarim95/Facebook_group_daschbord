@@ -1,11 +1,40 @@
 import random
 import re
+from enum import StrEnum
 
 from playwright.sync_api import BrowserContext
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from rich.console import Console
 
 console = Console()
+
+# Die Beschriftungen, unter denen Facebook dieselben Knoepfe je nach
+# Oberflaechensprache fuehrt. Sie stehen hier und nicht im Selektor, weil sie
+# an drei Stellen gebraucht werden - und weil eine fehlende Sprache dann eine
+# Zeile ist und keine Suche durch den ganzen Ablauf.
+#
+# ``:has-text()`` vergleicht als Teilzeichenkette ("Schreib etwas ..." trifft
+# also), ``[aria-label='...']`` dagegen genau - deshalb stehen unten die
+# vollen Beschriftungen.
+SCHREIB_ETWAS = ("Schreib etwas", "Write something", "اكتب شيئًا")
+POSTEN = ("Posten", "Post", "نشر")
+GEFAELLT_MIR = ("Gefällt mir", "Like", "أعجبني")
+
+# Das Schreibfeld. ``_DIALOG_TEXTFELD`` hat Vorrang: Der Klick auf "Schreib
+# etwas" oeffnet einen Dialog, und ein Feld ausserhalb davon gehoert zu einem
+# anderen Zweck - etwa dem Kommentarfeld eines fremden Beitrags im Strom.
+_DIALOG = "div[role='dialog']"
+_TEXTFELD = "div[role='textbox'][contenteditable='true']"
+_DIALOG_TEXTFELD = f"{_DIALOG} {_TEXTFELD}"
+
+# Das Kommentarfeld **am Beitrag**, an seiner Beschriftung erkannt. Das ``i``
+# macht den Vergleich unabhaengig von der Gross-/Kleinschreibung; als
+# Teilzeichenkette trifft es auch "Schreibe einen oeffentlichen Kommentar ...".
+# "Kommentar" und "comment" sind beide noetig - das eine ist im anderen nicht
+# enthalten.
+_KOMMENTARFELD = ", ".join(
+    f"{_TEXTFELD}[aria-label*='{wort}' i]" for wort in ("Kommentar", "comment", "تعليق")
+)
 
 
 def post_to_group(context: BrowserContext, group_url: str, text: str) -> bool:
@@ -24,13 +53,16 @@ def post_to_group(context: BrowserContext, group_url: str, text: str) -> bool:
 
         # 1. Find the "Write something" trigger button
         console.print("Looking for the 'Write something' box...")
-        # Try multiple locators for the post creation box.
-        # Facebook uses various languages and aria labels.
-        create_post_trigger = (
-            page.locator("div[role='button']:has-text('Schreib etwas')").first
-            or page.locator("div[role='button']:has-text('Write something')").first
-            or page.locator("div:text-matches('(?i)(Schreib etwas|Write something)')").last
-        )
+        # Ein Locator ist immer wahr - er ist ein Handgriff, kein gefundenes
+        # Element. Eine Kette mit ``or`` nimmt deshalb stets das erste Glied,
+        # und alle weiteren waeren toter Code: Stuende die Oberflaeche auf
+        # Englisch, fiele die Automatisierung aus, ohne dass jemand den Grund
+        # saehe. Die Sprachen gehoeren darum in **einen** Selektor.
+        create_post_trigger = page.locator(
+            ", ".join(
+                f"div[role='button']:has-text('{wort}')" for wort in SCHREIB_ETWAS
+            )
+        ).first
 
         try:
             create_post_trigger.wait_for(state="visible", timeout=10000)
@@ -46,10 +78,42 @@ def post_to_group(context: BrowserContext, group_url: str, text: str) -> bool:
 
         # 2. Find the actual text box
         console.print("Focusing the text area...")
-        textbox = page.locator("div[role='textbox'][contenteditable='true']").first
+        # Der Klick oben oeffnet einen Dialog, und **darin** steht das Feld.
+        # Ohne diese Eingrenzung nimmt ``.first`` das erste contenteditable im
+        # ganzen Dokument - auf einer Gruppenseite ist das oft ein verstecktes
+        # Feld aus dem Beitragsstrom, das nie sichtbar wird. Der Lauf lief
+        # dann in den Zeitablauf und meldete "kein Textfeld", obwohl der
+        # Dialog offen davorstand.
+        #
+        # Bewusst eine Reihenfolge aus zwei Versuchen und **kein** Selektor
+        # mit Komma: Bei einer Kommaliste entscheidet die Stellung im DOM,
+        # welches Feld ``.first`` erwischt - hier soll aber der Dialog den
+        # Vorrang haben, ganz gleich wo er steht.
+        textbox = None
+        for beschreibung, locator, frist in (
+            ("im Dialog", page.locator(_DIALOG_TEXTFELD).first, 20000),
+            ("auf der Seite", page.locator(_TEXTFELD).first, 10000),
+        ):
+            try:
+                locator.wait_for(state="visible", timeout=frist)
+            except PlaywrightTimeoutError:
+                continue
+            console.print(f"Textfeld gefunden ({beschreibung}).")
+            textbox = locator
+            break
+
+        if textbox is None:
+            # Zahlen, kein Inhalt: Wie viele Dialoge und Felder die Seite
+            # gerade fuehrt, sagt genug fuer die Fehlersuche - ein Beitragstext
+            # oder ein Name waere eine Grenzverletzung.
+            console.print(
+                "[red]Could not find the post text area.[/red] "
+                f"(Dialoge: {page.locator(_DIALOG).count()}, "
+                f"Textfelder: {page.locator(_TEXTFELD).count()})"
+            )
+            return False
 
         try:
-            textbox.wait_for(state="visible", timeout=10000)
             page.wait_for_timeout(random.randint(500, 1500))
             textbox.click(delay=random.randint(100, 300))
             page.wait_for_timeout(random.randint(500, 1000))
@@ -57,21 +121,17 @@ def post_to_group(context: BrowserContext, group_url: str, text: str) -> bool:
             console.print("Typing message (pasting/inserting directly)...")
             page.keyboard.insert_text(text)
         except PlaywrightTimeoutError:
-            console.print("[red]Could not find the post text area.[/red]")
+            console.print("[red]Textfeld gefunden, aber nicht beschreibbar.[/red]")
             return False
 
         page.wait_for_timeout(random.randint(800, 2000))
 
         # 3. Find and click the Submit/Post button
         console.print("Submitting post...")
-        submit_button = (
-            page.locator("div[aria-label='Posten']").first
-            or page.locator("div[aria-label='Post']").first
-            or page.locator("div[role='button'][aria-label='Posten']").first
-            or page.locator("div[role='button'][aria-label='Post']").first
-            or page.get_by_role("button", name="Posten").first
-            or page.get_by_role("button", name="Post").first
-        )
+        # Dieselbe Falle wie oben: ein Selektor statt einer ``or``-Kette.
+        submit_button = page.locator(
+            ", ".join(f"div[aria-label='{wort}']" for wort in POSTEN)
+        ).first
 
         try:
             # Facebook post buttons are sometimes disabled initially until text registers
@@ -109,9 +169,10 @@ def comment_on_post(context: BrowserContext, post_url: str, text: str) -> bool:
         if random.random() < 0.3:
             try:
                 like_btn = page.locator(
-                    "div[aria-label='Gefällt mir'], div[aria-label='Like']"
+                    ", ".join(f"div[aria-label='{wort}']" for wort in GEFAELLT_MIR)
                 ).first
-                if like_btn:
+                # ``count()`` fragt die Seite; der Locator selbst waere immer wahr.
+                if like_btn.count() > 0:
                     like_btn.click(delay=random.randint(100, 300))
                     console.print("Liked the post.")
                     page.wait_for_timeout(random.randint(1500, 3000))
@@ -123,19 +184,43 @@ def comment_on_post(context: BrowserContext, post_url: str, text: str) -> bool:
         page.wait_for_timeout(random.randint(1000, 2000))
 
         console.print("Looking for the comment box...")
-        comment_box = page.locator("div[role='textbox'][contenteditable='true']").last
+        # Dieselbe Falle wie beim Beitrag, nur umgekehrt herum: ``.last`` nahm
+        # das **letzte** contenteditable der Seite. Unter einem Beitrag mit
+        # Kommentaren ist das oft das Antwortfeld eines fremden Kommentars -
+        # unser Text landete dann als Antwort an eine einzelne Person statt als
+        # Kommentar am Beitrag. Er stuende eingeklappt unter einem fremden
+        # Wortwechsel, und niemand faende ihn.
+        #
+        # Das richtige Feld nennt sich selbst: Facebook beschriftet es je nach
+        # Sprache. Erst danach, wenn keine Beschriftung passt, die alte Regel.
+        comment_box = None
+        for beschreibung, locator, frist in (
+            ("beschriftet", page.locator(_KOMMENTARFELD).first, 15000),
+            ("letztes Feld", page.locator(_TEXTFELD).last, 10000),
+        ):
+            try:
+                locator.wait_for(state="visible", timeout=frist)
+            except PlaywrightTimeoutError:
+                continue
+            console.print(f"Kommentarfeld gefunden ({beschreibung}).")
+            comment_box = locator
+            break
+
+        if comment_box is None:
+            console.print(
+                "[red]Could not find the comment box. Are comments allowed on this post?[/red] "
+                f"(Textfelder: {page.locator(_TEXTFELD).count()})"
+            )
+            return False
 
         try:
-            comment_box.wait_for(state="visible", timeout=15000)
             page.wait_for_timeout(random.randint(500, 1500))
             comment_box.click(delay=random.randint(100, 300))
             page.wait_for_timeout(random.randint(500, 1000))
             console.print("Typing comment (pasting/inserting directly)...")
             page.keyboard.insert_text(text)
         except PlaywrightTimeoutError:
-            console.print(
-                "[red]Could not find the comment box. Are comments allowed on this post?[/red]"
-            )
+            console.print("[red]Kommentarfeld gefunden, aber nicht beschreibbar.[/red]")
             return False
 
         page.wait_for_timeout(random.randint(800, 2000))
@@ -147,6 +232,122 @@ def comment_on_post(context: BrowserContext, post_url: str, text: str) -> bool:
         console.print("[green]Comment submitted successfully![/green]")
         return True
 
+    finally:
+        page.close()
+
+
+# Die Beschriftungen des Beitrittsknopfes. Wie bei SCHREIB_ETWAS: an einer
+# Stelle, damit eine fehlende Sprache eine Zeile ist und keine Suche.
+BEITRETEN = ("Gruppe beitreten", "Beitreten", "Join group", "Join", "انضمام", "انضم")
+
+# Woran eine Beitrittsfrage zu erkennen ist. Solche Gruppen werden
+# uebersprungen, nicht beantwortet: Antworten in fremdem Namen zu erfinden ist
+# etwas anderes als einen Knopf zu druecken.
+BEITRITTSFRAGEN = (
+    "Beantworte",
+    "Fragen der Gruppe",
+    "Answer",
+    "membership question",
+    "أسئلة",
+    "أجب",
+)
+
+
+class Beitrittsausgang(StrEnum):
+    """Was der Beitrittsversuch ergeben hat - vier unterscheidbare Faelle.
+
+    ``BEREITS_MITGLIED`` ist kein Fehlschlag, sondern eine Auskunft, die
+    ohnehin auf dem Bildschirm stand: Wo der Beitrittsknopf fehlt und das
+    Schreibfeld da ist, sind wir drin. Sie mitzunehmen kostet nichts und
+    schliesst die Kette - sonst wuesste niemand je, dass eine Freigabe
+    gekommen ist.
+
+    ``FRAGEN`` bedeutet: Die Gruppe stellt Beitrittsfragen. Der Versuch wird
+    abgebrochen, **nichts** wird abgeschickt.
+    """
+
+    ANGEFRAGT = "angefragt"
+    BEREITS_MITGLIED = "bereits_mitglied"
+    FRAGEN = "fragen"
+    FEHLER = "fehler"
+
+
+def request_join(context: BrowserContext, group_url: str) -> tuple[Beitrittsausgang, str]:
+    """Stellt **eine** Beitrittsanfrage. Returns: ``(Ausgang, Bemerkung)``.
+
+    Die riskanteste Handlung des Projekts, und deshalb die vorsichtigste:
+
+    * Gruppen mit Beitrittsfragen werden **uebersprungen**. Eine Antwort in
+      deinem Namen zu erfinden waere etwas anderes als einen Knopf zu druecken.
+    * Ist der Beitrittsknopf nicht da, wird nichts gesucht und nichts geklickt -
+      dann sind wir entweder schon Mitglied oder die Gruppe laesst niemanden.
+    * Es wird genau ein Knopf gedrueckt. Kein Formular, kein zweiter Versuch.
+    """
+    page = context.new_page()
+    try:
+        console.print(f"Oeffne {group_url} ...")
+        page.goto(group_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(random.randint(2000, 4000))
+
+        beitreten = page.locator(
+            ", ".join(f"div[role='button']:has-text('{wort}')" for wort in BEITRETEN)
+        ).first
+
+        if beitreten.count() == 0:
+            # Kein Beitrittsknopf. Steht das Schreibfeld da, sind wir drin -
+            # diese Auskunft lag ohnehin auf dem Bildschirm.
+            if page.locator(_TEXTFELD).count() > 0 or page.locator(
+                ", ".join(f"div[role='button']:has-text('{w}')" for w in SCHREIB_ETWAS)
+            ).count() > 0:
+                return Beitrittsausgang.BEREITS_MITGLIED, "Schreibfeld vorhanden"
+            return Beitrittsausgang.FEHLER, "kein Beitrittsknopf und kein Schreibfeld"
+
+        try:
+            beitreten.wait_for(state="visible", timeout=10000)
+        except PlaywrightTimeoutError:
+            return Beitrittsausgang.FEHLER, "Beitrittsknopf nicht sichtbar"
+
+        beitreten.click(delay=random.randint(100, 300))
+        page.wait_for_timeout(random.randint(2500, 4000))
+
+        # Kam ein Dialog mit Fragen? Dann nichts abschicken.
+        dialog = page.locator(_DIALOG).first
+        if dialog.count() > 0:
+            text = (dialog.inner_text() or "")[:400]
+            if any(wort.lower() in text.lower() for wort in BEITRITTSFRAGEN):
+                console.print("[yellow]Gruppe stellt Beitrittsfragen - uebersprungen.[/yellow]")
+                return Beitrittsausgang.FRAGEN, "Gruppe stellt Beitrittsfragen"
+
+        console.print("[green]Beitrittsanfrage gestellt.[/green]")
+        return Beitrittsausgang.ANGEFRAGT, ""
+
+    except PlaywrightTimeoutError:
+        return Beitrittsausgang.FEHLER, "Zeitablauf"
+    finally:
+        page.close()
+
+
+def fetch_group_html(context: BrowserContext, group_url: str) -> str:
+    """Holt den HTML **einer** Gruppenseite - angemeldet, damit Zahlen dastehen.
+
+    Nur holen, nicht auswerten: Das tut ``gruppenseite.lies_seite``, und zwar
+    dieselbe Funktion wie beim Weg ueber ``httpx``. Zwei Auswertungen koennten
+    andere Zahlen liefern, und der Unterschied fiele erst in einer Rangliste
+    auf, nach der entschieden wird, wo die naechsten dreihundert Beitraege
+    hingehen.
+
+    Gescrollt wird ein Stueck, damit die Beitragsliste nachlaedt - aus ihren
+    **Zeitpunkten** entsteht die Aktivitaet. Beitragstexte und Namen werden
+    nicht angefasst; ``lies_seite`` nimmt sie gar nicht erst entgegen.
+    """
+    page = context.new_page()
+    try:
+        page.goto(group_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(random.randint(2000, 3500))
+        for _ in range(3):
+            page.evaluate("window.scrollBy(0, 1200)")
+            page.wait_for_timeout(random.randint(900, 1600))
+        return page.content()
     finally:
         page.close()
 

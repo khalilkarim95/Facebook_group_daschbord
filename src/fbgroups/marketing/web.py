@@ -72,7 +72,7 @@ from fbgroups.marketing.referral import code_fuer_benutzer, lege_empfehlung_an, 
 from fbgroups.marketing.rewards import bewerte_benutzer, load_reward_rules
 from fbgroups.marketing.selection import auswahl_der_kampagne, baue_plan, synchronisiere
 from fbgroups.marketing.store import MarketingStore
-from fbgroups.marketing.tracking import slug
+from fbgroups.marketing.tracking import app_base_url, slug
 from fbgroups.models import RecordStatus
 from fbgroups.storage import SqliteStore
 
@@ -170,6 +170,85 @@ class SammelZuordnenMeldung(BaseModel):
     """
 
     group_ids: list[str]
+
+
+class AnreicherungErgebnis(BaseModel):
+    """Was ein Abruf **einer** Gruppenseite ergeben hat.
+
+    Ausschliesslich Zahlen und Zeitpunkte. Kein Beitragstext, kein Name eines
+    Menschen - die harte Projektgrenze gilt fuer diesen Weg wie fuer jeden
+    anderen, und ein Feld, das es nicht gibt, kann auch nicht gefuellt werden.
+
+    Jedes Feld darf fehlen, und das ist keine Nachlaessigkeit: Eine nicht
+    gefundene Zahl **loescht keine vorhandene**. Ein Anmeldefenster ist kein
+    Beleg dafuer, dass eine Gruppe geschrumpft ist.
+    """
+
+    group_id: str
+    erreichbar: bool = False
+    member_count: int | None = None
+    privacy_hint: str = ""
+    posts_per_day: float | None = None
+    activity_factor: float | None = None
+    last_post_at: str = ""
+
+
+class AutomatikStart(BaseModel):
+    """Womit ein **neuer** Lauf beginnen soll.
+
+    ``kampagnen`` schraenkt die einzufrierende Liste ein - leer heisst "alle
+    aktiven". Es wirkt ausschliesslich beim Anlegen: Ein offener Lauf behaelt
+    seine Liste, sonst waere die Zusage aus Punkt 16 hinfaellig, dass ein
+    laufender Vorgang nicht unter der Hand seine Menge aendert.
+
+    Der Grund fuer das Feld ist der erste Ernstfall: Wer die Automatik zum
+    ersten Mal laufen laesst, will sie an **einer** Kampagne sehen und nicht
+    an allen fuenf, die gerade aktiv sind - das waeren beim ersten Versuch
+    sofort echte Gruppen statt der Testgruppe.
+    """
+
+    kampagnen: list[str] = Field(default_factory=list)
+
+
+class BeitrittErgebnis(BaseModel):
+    """Der Ausgang **einer** Beitrittsanfrage, gemeldet vom Arbeitsrechner.
+
+    ``ausgang`` kennt vier Werte (siehe ``actions.Beitrittsausgang``), aber am
+    Bestand landen nur zwei Staende: angefragt oder nicht. ``fragen`` und
+    ``fehler`` hinterlassen nichts - es ist nichts geschehen, und einen Stand
+    zu setzen waere die Behauptung, es sei etwas abgeschickt worden.
+    """
+
+    group_id: str
+    ausgang: str
+    bemerkung: str = ""
+
+
+class AutomatikErgebnis(BaseModel):
+    """Der Ausgang eines Kommentarschritts, gemeldet vom Arbeitsrechner.
+
+    **Ohne Textfeld**, und das ist der Punkt: Der Text geht vom Server nur
+    hinaus, nie zurueck. Was hier ankommt, ist ein Ergebnis - welcher Text in
+    der Gruppe steht, weiss der Server aus seiner eigenen Vorbereitung.
+
+    ``erschoepft`` unterscheidet "hat diesmal nicht geklappt" von "hier gibt
+    es nichts mehr zu holen". Das erste laedt zum Wiederholen ein, das zweite
+    beendet die Gruppe - und ohne die Unterscheidung haenge eine Kampagne fuer
+    immer an einer Gruppe mit zu wenigen Beitraegen.
+    """
+
+    campaign_id: str
+    group_id: str
+    nummer: int
+    erfolg: bool
+    fehler: str = ""
+    post_url: str = ""
+    erschoepft: bool = False
+    # Vorgabe ``kommentar``, weil die Automatik nur kommentiert. Der Beitrag
+    # laesst sich damit trotzdem nachtragen (``campaign abgleich``) - und er
+    # zieht dabei ueber ``_gruppenstand_nachziehen`` die Spalte BEITRAG mit,
+    # was ein Kommentar bewusst nicht tut.
+    texttyp: str = "kommentar"
 
 
 class LoeschMeldung(BaseModel):
@@ -508,6 +587,32 @@ def _ziel_url(store: MarketingStore, tracking_code: str, config: AppConfig) -> t
     link = store.resolve_code(tracking_code)
     campaign = store.load_campaign(link.campaign_id) if link is not None else None
 
+    # **Das Ziel haengt am Code, nicht mehr an der Kampagne.**
+    #
+    # Bis zum 31.08.2026 entschied ``campaign.ziel`` fuer alle Codes einer
+    # Kampagne gemeinsam. Mit ``marketing.ziel: store`` fuehrten damit
+    # saemtliche Links zum Play Store, und die Web-Anwendung kam in keinem
+    # Beitrag vor - obwohl es sie gibt.
+    #
+    # Jetzt traegt jedes Paar zwei Codes: der bestehende zum Store, ein
+    # zweiter (``...-B``) in den Browser. Beide werden vollstaendig gezaehlt;
+    # der Unterschied ist allein das Ziel **nach** der Weiterleitung, und
+    # dadurch laesst sich im Trichter unterscheiden, woher ein Mensch kam.
+    #
+    # Die Kampagneneinstellung gilt weiterhin fuer alles, was **kein**
+    # Browser-Code ist - ein bestehender Beitrag fuehrt damit dorthin, wohin
+    # er immer gefuehrt hat.
+    if store.ziel_des_codes(tracking_code) == "browser":
+        # Die eigene Landingpage der Kampagne geht vor - sie ist die
+        # ausdrueckliche Angabe. Sonst das allgemeine Browserziel; erst
+        # zuletzt der Rueckfall, damit ein Klick nie ins Leere geht.
+        if campaign is not None and campaign.landing_page:
+            return campaign.landing_page, False
+        browser_url = str(config.get("marketing", "browser_url", default="")).strip()
+        if browser_url:
+            return browser_url, False
+        return (str(config.get("marketing", "fallback_url", default="")) or "/"), False
+
     if _ziel_gewaehlt(campaign, config) == "store":
         adresse = play_store_url(tracking_code, config)
         if adresse:
@@ -749,6 +854,39 @@ def _vorbereiten(
     return 0, f"Unbekannter Schritt: {schritt}"
 
 
+def lauf_ziel(nummer: int) -> str:
+    """Das Ziel der n-ten Fassung - ``browser`` oder ``store``.
+
+    Duenner Durchgriff auf ``lauf.ziel_zu_nummer``, damit die Regel an genau
+    einer Stelle steht. Zwei Fassungen davon koennten auseinanderlaufen, und
+    der Unterschied fiele erst auf, wenn ein Beitrag mit dem falschen Ziel in
+    einer Gruppe steht.
+    """
+    from fbgroups.marketing.lauf import ziel_zu_nummer
+
+    return ziel_zu_nummer(nummer)
+
+
+def _facebook_verbunden(config: AppConfig) -> bool:
+    """Liegt eine angemeldete Browsersitzung fuer die Automatisierung vor?
+
+    Gefragt wird die Datei, nicht Facebook: Ein Abruf, nur um eine Anzeige zu
+    fuellen, waere ein Zugriff ohne Anlass. Die Auskunft gilt fuer **den
+    Rechner, auf dem dieser Dienst laeuft** - auf dem Server ist sie
+    zuverlaessig ``False``, und das ist die richtige Antwort: Dort steht kein
+    Browser, mit dem sich jemand anmelden koennte.
+
+    Zwei Orte, weil neuere Chromium-Fassungen die Cookies nach
+    ``Default/Network/`` gelegt haben. Nur am alten Pfad gesucht, meldete die
+    Anzeige "nicht verbunden" fuer eine Anmeldung, die es gibt.
+    """
+    profil = config.path("data_dir") / "browser_state" / "Default"
+    for kandidat in (profil / "Network" / "Cookies", profil / "Cookies"):
+        if kandidat.exists() and kandidat.stat().st_size > 0:
+            return True
+    return False
+
+
 def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> Any:
     """Baut die FastAPI-Anwendung.
 
@@ -855,6 +993,423 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         # 404 wie bisher: Wer den Dienst oeffentlich stellt, soll nicht
         # nebenbei verraten, dass es hier eine Arbeitsliste gibt.
         raise HTTPException(status_code=404, detail="Not Found")
+
+    @app.get("/automatik")
+    def automatik_stand(request: Request):  # noqa: ANN202
+        """Der Stand der Kommentarautomatik - Zahlen, keine Knoepfe.
+
+        Lesend und deshalb **nicht** hinter ``_nur_lokal``: Wer die Uebersicht
+        sehen darf, darf auch sehen, wie weit sie ist.
+
+        Gestartet wird hier bewusst nichts. Der Lauf braucht einen sichtbaren
+        Browser mit angemeldeter Sitzung; auf dem Server gibt es weder das eine
+        noch das andere (kein $DISPLAY, kein data/browser_state). Ein
+        Startknopf an dieser Stelle waere ein Knopf, der zuverlaessig
+        fehlschlaegt und dabei einen Fehlversuch protokolliert - dieselbe Falle
+        wie beim Knopf 'Automatisch posten'. Gestartet wird mit
+        ``fbgroups campaign automatik`` auf dem Rechner, an dem der Browser
+        steht.
+        """
+        from fbgroups.marketing import automatik, lauf
+
+        with _store() as store:
+            offen = store.offener_lauf()
+            if offen is None:
+                return JSONResponse(
+                    {
+                        "status": "untaetig",
+                        "meldung": "Kein Lauf im Gange.",
+                        "aktive_kampagnen": automatik.aktive_kampagnen(store),
+                        "facebook_verbunden": _facebook_verbunden(cfg),
+                    }
+                )
+            with SqliteStore(pfad) as gruppen_store:
+                gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
+            fortschritt = lauf.lies_fortschritt(store, int(offen["lauf_id"]), gruppen)
+
+        aktuell = fortschritt.naechste_kampagne
+        gruppe = aktuell.naechste_gruppe if aktuell else None
+        return JSONResponse(
+            {
+                "status": fortschritt.status.value,
+                "lauf_id": fortschritt.lauf_id,
+                "kampagnen": {
+                    "fertig": fortschritt.kampagnen_fertig,
+                    "gesamt": fortschritt.kampagnen_gesamt,
+                },
+                "gruppen": {
+                    "fertig": fortschritt.gruppen_fertig,
+                    "gesamt": fortschritt.gruppen_gesamt,
+                },
+                # Blockiert, nicht erledigt: Ohne Mitgliedschaft laesst
+                # Facebook nicht schreiben, und ein Versuch dort scheitert
+                # nicht zufaellig, sondern immer.
+                "gruppen_wartend": fortschritt.gruppen_wartend,
+                "kommentare": {
+                    "fertig": fortschritt.kommentare_veroeffentlicht,
+                    "gesamt": fortschritt.kommentare_ziel,
+                },
+                "aktuelle_kampagne": aktuell.name if aktuell else "",
+                "aktuelle_gruppe": gruppe.name if gruppe else "",
+                "aktuelle_kommentare": (
+                    f"{gruppe.veroeffentlicht} / {gruppe.ziel}" if gruppe else ""
+                ),
+                # Die ganze eingefrorene Warteschlange, in ihrer Reihenfolge.
+                # Ohne sie beantwortet das Band nur "wo stehe ich?", nicht
+                # "was kommt noch?" - und gerade das ist beim Arbeiten die
+                # Frage: Der Lauf faehrt Kampagne fuer Kampagne, und man will
+                # sehen, welche als naechste drankommt.
+                "warteschlange": [
+                    {
+                        "campaign_id": k.campaign_id,
+                        "name": k.name,
+                        "laeuft": k is aktuell,
+                        "fertig": k.fertig,
+                        "gruppen_fertig": k.gruppen_fertig,
+                        "gruppen_gesamt": k.gruppen_gesamt,
+                        "gruppen_wartend": k.gruppen_wartend,
+                        "kommentare_fertig": k.kommentare_veroeffentlicht,
+                        "kommentare_gesamt": k.kommentare_ziel,
+                    }
+                    for k in fortschritt.kampagnen
+                ],
+                "fertig": fortschritt.fertig,
+                "meldung": lauf.abschlusstext(fortschritt),
+                "facebook_verbunden": _facebook_verbunden(cfg),
+            }
+        )
+
+    @app.post("/automatik/naechster")
+    def automatik_naechster(request: Request, start: AutomatikStart | None = None):  # noqa: ANN202
+        """Gibt den naechsten Kommentarschritt heraus - fertiger Text inklusive.
+
+        **Der Weg, der die zweite Datenbank ueberfluessig macht.** Bisher las
+        die Automatik ihren Stand aus der Datei, in der sie lief - auf dem
+        Arbeitsrechner also aus einer Kopie. Der Beitrag ging hinaus, gebucht
+        wurde daneben, und der Server bot dieselbe Gruppe weiter als offen an.
+
+        Jetzt liegt Lesen **und** Buchen auf dem Server; der Arbeitsrechner
+        steuert nur noch den Browser. Genau die Aufteilung, die
+        ``docs/plan-go-subdomain.md`` verlangt: Die Arbeit kommt dorthin, wo
+        der Bestand steht.
+
+        Hinter ``_nur_lokal`` wie jeder schreibende Weg - und er **ist**
+        schreibend: Ohne offenen Lauf friert er die Kampagnenliste ein. Ueber
+        den SSH-Tunnel kommt der Aufruf als 127.0.0.1 an und gilt damit als
+        oertlich.
+        """
+        _nur_lokal(request)
+        from fbgroups.marketing import automatik, lauf
+        from fbgroups.marketing.beitrag import mit_link
+
+        with SqliteStore(pfad) as gruppen_store:
+            gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
+
+        with _store() as store:
+            lauf_id, neu = automatik.hole_oder_starte_lauf(
+                store,
+                ziel_je_gruppe=lauf.ZIEL_JE_GRUPPE,
+                # Wirkt nur beim Anlegen - ein offener Lauf behaelt seine
+                # eingefrorene Liste.
+                nur=list(start.kampagnen) if start else [],
+            )
+            fortschritt = lauf.lies_fortschritt(store, lauf_id, gruppen)
+            schritt = lauf.naechster_schritt(fortschritt)
+
+            # Kein Schritt heisst nicht immer "fertig": Vielleicht hat die
+            # naechste Gruppe alle Fassungen verbraucht, ohne ihr Ziel zu
+            # erreichen. Dann wird sie hier als erschoepft vermerkt, und der
+            # naechste Aufruf kommt weiter.
+            if schritt is None:
+                kampagne = fortschritt.naechste_kampagne
+                gruppe = kampagne.naechste_gruppe if kampagne else None
+                if gruppe is not None and lauf.gruppe_ist_erschoepft(gruppe):
+                    store.setze_kommentar_erschoepft(
+                        gruppe.campaign_id,
+                        gruppe.group_id,
+                        f"nur {gruppe.veroeffentlicht} von {gruppe.ziel} Kommentaren moeglich",
+                    )
+                    return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
+                return JSONResponse(
+                    {
+                        "schritt": None,
+                        "weiter": False,
+                        "fertig": fortschritt.fertig,
+                        "meldung": lauf.abschlusstext(fortschritt),
+                    }
+                )
+
+            vorschlag = store.vorschlag(
+                schritt.campaign_id, schritt.group_id, schritt.texttyp, schritt.nummer
+            )
+            campaign = store.load_campaign(schritt.campaign_id)
+            link = store.link_for(schritt.campaign_id, schritt.group_id)
+            if vorschlag is None or not vorschlag.text.strip() or campaign is None or link is None:
+                store.setze_kommentar_erschoepft(
+                    schritt.campaign_id, schritt.group_id, "kein Kommentartext vorhanden"
+                )
+                return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
+
+            gruppe = gruppen.get(schritt.group_id)
+            if gruppe is None or not gruppe.url_canonical:
+                store.setze_kommentar_erschoepft(
+                    schritt.campaign_id, schritt.group_id, "keine Gruppen-URL"
+                )
+                return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
+
+            # Das Ziel wechselt je Fassung: ungerade in den Browser, gerade in
+            # den Store. Der Browser-Code entsteht dabei beim ersten Bedarf -
+            # kein Code auf Vorrat, denn jeder ist endgueltig.
+            ziel = lauf.ziel_zu_nummer(schritt.nummer)
+            if ziel == "browser" and not link.tracking_code_browser:
+                store.vergib_browsercode(
+                    schritt.campaign_id, schritt.group_id, app_base_url(cfg)
+                )
+                link = store.link_for(schritt.campaign_id, schritt.group_id) or link
+
+            # Der fertige Text mit eingesetztem Tracking-Link. Er entsteht
+            # hier und nur hier - ``beitrag.mit_link`` bleibt die einzige
+            # Stelle, an der {link} aufgeloest wird. Der Arbeitsrechner
+            # bekommt ihn zum Einfuegen und baut ihn nie selbst.
+            text = mit_link(campaign, link, vorschlag.text, config=cfg, ziel=ziel)
+            bisherige = sorted(store.bisherige_post_urls(schritt.group_id))
+
+        return JSONResponse(
+            {
+                "schritt": {
+                    "lauf_id": lauf_id,
+                    "neu": neu,
+                    "campaign_id": schritt.campaign_id,
+                    "group_id": schritt.group_id,
+                    "gruppe_name": schritt.gruppe_name,
+                    "gruppen_url": gruppe.url_canonical,
+                    "nummer": schritt.nummer,
+                    "kommentar_nr": schritt.kommentar_nr,
+                    "kommentar_ziel": schritt.kommentar_ziel,
+                    "ziel": ziel,
+                    "tracking_code": link.code_fuer(ziel),
+                    "text": text,
+                    "bisherige_post_urls": bisherige,
+                },
+                "weiter": True,
+                "fertig": False,
+                "fortschritt": lauf.fortschrittstext(fortschritt),
+            }
+        )
+
+    @app.post("/automatik/ergebnis")
+    def automatik_ergebnis(meldung: AutomatikErgebnis, request: Request):  # noqa: ANN202
+        """Bucht den Ausgang eines Kommentarschritts - auf dem Server.
+
+        Derselbe Weg wie ueberall: ``arbeit.melde_vorschlag``. Eine zweite
+        Buchungsart waere eine zweite Zaehlweise fuer dieselben Kommentare.
+
+        **Der Text ist kein Feld dieser Meldung.** Wie beim Ergebnisformular
+        der Arbeitsseite geht er nur hinaus, nie zurueck - ein manipulierter
+        Aufruf kann damit keinen anderen Text in einen Kommentar bringen als
+        den, den der Server vorbereitet hat.
+        """
+        _nur_lokal(request)
+        from fbgroups.marketing.arbeit import Ergebnis, Sperre, melde_vorschlag
+
+        with _store() as store:
+            campaign = store.load_campaign(meldung.campaign_id)
+            link = store.link_for(meldung.campaign_id, meldung.group_id)
+            if campaign is None or link is None:
+                raise HTTPException(status_code=404, detail="Kampagne oder Gruppe unbekannt")
+
+            ergebnis = melde_vorschlag(
+                store,
+                campaign,
+                link,
+                Texttyp(meldung.texttyp),
+                meldung.nummer,
+                Ergebnis(
+                    erfolg=meldung.erfolg,
+                    fehler="" if meldung.erfolg else (meldung.fehler or "ohne Angabe"),
+                    post_url=meldung.post_url,
+                ),
+                ausgeloest_von="automatik",
+                sitzung="fern",
+            )
+            if meldung.erschoepft:
+                store.setze_kommentar_erschoepft(
+                    meldung.campaign_id,
+                    meldung.group_id,
+                    meldung.fehler or "keine Beitraege mehr",
+                )
+            if isinstance(ergebnis, Sperre):
+                return JSONResponse({"ok": False, "grund": ergebnis.grund})
+            return JSONResponse({"ok": True, "stand": ergebnis.status.value})
+
+    @app.post("/automatik/beitritt/naechste")
+    def automatik_beitritt_naechste(request: Request):  # noqa: ANN202
+        """Die naechsten Gruppen, an die eine Beitrittsanfrage gehen soll.
+
+        Zwei Staende und nicht mehr: angefragt oder nicht. Gezaehlt wird ueber
+        ``join_requested_at``; ein eigener Zaehler waere eine zweite Wahrheit.
+
+        **Die Tagesmenge wird hier bestimmt, nicht auf dem Arbeitsrechner.**
+        Sonst haette jeder Aufruf sein eigenes Kontingent, und zwei Fenster
+        nebeneinander verdoppelten die Anfragen - bei der riskantesten
+        Handlung des Projekts ausgerechnet die Zahl, auf die es ankommt.
+        """
+        _nur_lokal(request)
+        from fbgroups.marketing import beitritt
+
+        pro_tag, abstand = beitritt.einstellungen(cfg)
+        jetzt = datetime.now(UTC)
+
+        with SqliteStore(pfad) as gruppen_store:
+            gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
+
+        with _store() as store:
+            heute = store.anfragen_heute(jetzt.date().isoformat())
+            offen = max(pro_tag - heute, 0)
+            if offen <= 0:
+                return JSONResponse(
+                    {
+                        "gruppen": [],
+                        "heute": heute,
+                        "pro_tag": pro_tag,
+                        "meldung": f"Tagesmenge erreicht ({heute} von {pro_tag}).",
+                    }
+                )
+
+            wartezeit = beitritt.wartezeit(store.letzte_anfrage(), abstand, jetzt=jetzt)
+            if wartezeit:
+                return JSONResponse(
+                    {
+                        "gruppen": [],
+                        "heute": heute,
+                        "pro_tag": pro_tag,
+                        "meldung": f"Abstandsregel: {wartezeit}",
+                    }
+                )
+
+            kandidaten = store.gruppen_ohne_anfrage(grenze=offen)
+
+        liste = [
+            {"group_id": gid, "name": gruppen[gid].name or gid, "url": gruppen[gid].url_canonical}
+            for gid in kandidaten
+            if gid in gruppen and gruppen[gid].url_canonical
+        ]
+        return JSONResponse(
+            {
+                "gruppen": liste,
+                "heute": heute,
+                "pro_tag": pro_tag,
+                "meldung": "" if liste else "Keine Gruppe ohne Anfrage uebrig.",
+            }
+        )
+
+    @app.post("/automatik/beitritt/ergebnis")
+    def automatik_beitritt_ergebnis(meldung: BeitrittErgebnis, request: Request):  # noqa: ANN202
+        """Traegt den Ausgang **einer** Beitrittsanfrage ein.
+
+        ``mitglied`` fuer den Fall, den die Gruppenseite ohnehin verraet: kein
+        Beitrittsknopf, aber ein Schreibfeld. Diese Auskunft kostet keinen
+        zusaetzlichen Abruf und schliesst die Kette - sonst wuesste niemand je,
+        dass eine Freigabe gekommen ist.
+
+        Eine uebersprungene Gruppe (Beitrittsfragen) wird **nicht** vermerkt:
+        Es ist nichts geschehen, und ``beitritt_angefragt`` zu setzen waere die
+        Behauptung, es sei etwas abgeschickt worden.
+        """
+        _nur_lokal(request)
+        with _store() as store:
+            if meldung.ausgang in ("angefragt", "bereits_mitglied"):
+                store.merke_anfrage(
+                    meldung.group_id, mitglied=meldung.ausgang == "bereits_mitglied"
+                )
+                return JSONResponse({"ok": True, "vermerkt": True})
+            return JSONResponse({"ok": True, "vermerkt": False})
+
+    @app.post("/automatik/anreichern/naechste")
+    def anreichern_naechste(request: Request):  # noqa: ANN202
+        """Welche Gruppen als naechste eine Mitgliederzahl brauchen - beste zuerst.
+
+        Der Server bestimmt die Reihenfolge, nicht der Arbeitsrechner: Sie
+        folgt ``sort_by_rank``, also derselben Rangfolge wie die Arbeitsliste.
+        Wird der Lauf nie zu Ende gefahren, sollen es die richtigen Gruppen
+        gewesen sein.
+        """
+        _nur_lokal(request)
+        from fbgroups.scoring import sort_by_rank
+
+        with SqliteStore(pfad) as gruppen_store:
+            groups = gruppen_store.load_groups()
+
+        # Ohne Mitgliederzahl **und** ohne Aktivitaet: Wo eines von beidem
+        # dasteht, war der Abruf schon erfolgreich.
+        offen = [
+            g
+            for g in sort_by_rank(groups)
+            if g.url_canonical and g.member_count is None and g.activity_factor is None
+        ]
+        return JSONResponse(
+            {
+                "gruppen": [
+                    {"group_id": g.group_id, "name": g.name or g.group_id, "url": g.url_canonical}
+                    for g in offen
+                ],
+                "gesamt": len(groups),
+                "offen": len(offen),
+            }
+        )
+
+    @app.post("/automatik/anreichern/ergebnis")
+    def anreichern_ergebnis(meldung: AnreicherungErgebnis, request: Request):  # noqa: ANN202
+        """Traegt Mitgliederzahl und Aktivitaet **einer** Gruppe ein.
+
+        Der Weg, der die zweite Datenbank vermeidet: Der Browser laeuft auf
+        dem Arbeitsrechner, gebucht wird dort, wo auch die Klicks gezaehlt
+        werden. Ohne ihn stuenden die Zahlen nur oertlich, und das Dashboard
+        zeigte weiter "unknown".
+
+        **Eine nicht gefundene Zahl loescht keine vorhandene.** Nur was
+        tatsaechlich dastand, wird uebernommen; der Zeitpunkt der Pruefung
+        dagegen immer - sonst liefe derselbe erfolglose Abruf bei jedem Lauf
+        erneut.
+        """
+        _nur_lokal(request)
+        from fbgroups.models import ActivitySource, MemberCountSource, PrivacyHint
+
+        jetzt = datetime.now(UTC)
+        with SqliteStore(pfad) as gruppen_store:
+            gruppe = next(
+                (g for g in gruppen_store.load_groups() if g.group_id == meldung.group_id), None
+            )
+            if gruppe is None:
+                raise HTTPException(status_code=404, detail="Gruppe unbekannt")
+
+            gruppe.member_count_checked_at = jetzt
+            gruppe.activity_checked_at = jetzt
+            gruppe.last_checked_at = jetzt
+
+            if meldung.member_count is not None:
+                gruppe.member_count = meldung.member_count
+                gruppe.member_count_source = MemberCountSource.FACEBOOK
+            if meldung.privacy_hint:
+                gruppe.privacy_hint = PrivacyHint(meldung.privacy_hint)
+            if meldung.posts_per_day is not None:
+                gruppe.posts_per_day = meldung.posts_per_day
+            if meldung.activity_factor is not None:
+                gruppe.activity_factor = meldung.activity_factor
+                gruppe.activity_confidence = 1.0
+                gruppe.activity_source = ActivitySource.FACEBOOK
+            if meldung.last_post_at:
+                gruppe.last_post_at = datetime.fromisoformat(meldung.last_post_at)
+
+            gruppen_store.upsert_groups([gruppe])
+
+        return JSONResponse(
+            {
+                "ok": True,
+                "member_count": gruppe.member_count,
+                "activity_factor": gruppe.activity_factor,
+            }
+        )
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -1004,6 +1559,10 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 cfg,
                 kalt_text=kalt_text,
                 kalt_limit_erreicht=kalt_limit_erreicht,
+                # Die Automatikknoepfe nur, wo sie etwas ausrichten koennen:
+                # Sie lassen den **Dienst** einen sichtbaren Browser oeffnen,
+                # und auf dem Server gibt es weder Bildschirm noch Anmeldung.
+                automatik_moeglich=_facebook_verbunden(cfg),
             )
         )
 
@@ -1077,7 +1636,10 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     "ok": True,
                     "nummer": vorschlag.nummer,
                     "text": vorschlag.text,
-                    "angezeigt": mit_link(campaign, link, vorschlag.text, config=cfg),
+                    "angezeigt": mit_link(
+                        campaign, link, vorschlag.text, config=cfg,
+                        ziel=lauf_ziel(vorschlag.nummer),
+                    ),
                     "stand": vorschlag.status.value,
                 }
             )
@@ -1120,7 +1682,10 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     "ok": True,
                     "nummer": vorschlag.nummer,
                     "text": vorschlag.text,
-                    "angezeigt": mit_link(campaign, link, vorschlag.text, config=cfg),
+                    "angezeigt": mit_link(
+                        campaign, link, vorschlag.text, config=cfg,
+                        ziel=lauf_ziel(vorschlag.nummer),
+                    ),
                     "stand": vorschlag.status.value,
                 }
             )
@@ -1231,7 +1796,10 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
 
             from fbgroups.marketing.beitrag import mit_link
 
-            text = mit_link(campaign, link, vorschlag.text, config=cfg)
+            text = mit_link(
+                campaign, link, vorschlag.text, config=cfg,
+                ziel=lauf_ziel(meldung.nummer),
+            )
 
         with SqliteStore(pfad) as gruppen_store:
             group = next(

@@ -22,7 +22,7 @@ from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEM
 from fbgroups.marketing.store import SCHEMA_VORSCHLAEGE as MARKETING_VORSCHLAEGE_SCHEMA
 from fbgroups.models import Group, GroupPost, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 20
 
 
 def _iso_oder_none(zeitpunkt: datetime | None) -> str | None:
@@ -304,6 +304,43 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
     17: (
         "ALTER TABLE post_versuche ADD COLUMN texttyp TEXT NOT NULL DEFAULT 'post'",
         "ALTER TABLE post_versuche ADD COLUMN nummer INTEGER NOT NULL DEFAULT 1",
+    ),
+    # Die Kommentarautomatik: ein Lauf ueber mehrere Kampagnen, und der dritte
+    # Ausgang einer Gruppe neben "voll" und "offen".
+    #
+    # Kein Schritt setzt einen Bestandswert: Eine Gruppe, die vor dieser
+    # Fassung Kommentare bekommen hat, ist deshalb nicht "erschoepft" - das
+    # waere ein Urteil, das nie jemand gefaellt hat. Der Vorgabewert 0 heisst
+    # "noch nichts festgestellt", und genau das trifft zu.
+    #
+    # Die Tabellen selbst entstehen in MARKETING_SCHEMA (Schritt 3) und damit
+    # bei einer frischen Datei bereits vollstaendig; hier stehen sie fuer eine
+    # Datei, die aus einer aelteren Fassung stammt. Ein 'CREATE TABLE IF NOT
+    # EXISTS' laeuft im ersten Fall gefahrlos ins Leere, ein 'ALTER TABLE' auf
+    # eine schon vorhandene Spalte wird von _migrate uebergangen.
+    # Der zweite Tracking-Code je Paar: derselbe Weg, anderes Ziel.
+    #
+    # Kein Schritt vergibt Codes. Ein Tracking-Code ist endgueltig - er steht
+    # spaeter in veroeffentlichten Beitraegen -, und eine Migration, die
+    # vierhundert davon auf einmal erfindet, waere ein Knopf mit
+    # unumkehrbarer Wirkung, den niemand gedrueckt hat. Die Spalte bleibt
+    # leer, bis ``vergib_browsercode`` sie fuellt.
+    19: (
+        MARKETING_SCHEMA,
+        "ALTER TABLE campaign_groups ADD COLUMN tracking_code_browser TEXT",
+        "ALTER TABLE campaign_groups ADD COLUMN tracking_url_browser "
+        "TEXT NOT NULL DEFAULT ''",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_groups_code_browser "
+        "ON campaign_groups(tracking_code_browser) "
+        "WHERE tracking_code_browser IS NOT NULL",
+    ),
+    18: (
+        MARKETING_SCHEMA,
+        "ALTER TABLE campaign_groups ADD COLUMN kommentar_erschoepft "
+        "INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE campaign_groups ADD COLUMN kommentar_erschoepft_grund "
+        "TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE campaign_groups ADD COLUMN kommentar_erschoepft_am TEXT",
     ),
 }
 

@@ -11,7 +11,7 @@ zeigt die heutigen - hinter ihnen steht keine Wand.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from fbgroups.marketing.kaltmodus import (
     Tagesportion,
@@ -111,11 +111,38 @@ def test_ohne_vorherigen_versuch_geht_es_sofort() -> None:
 
 
 def test_innerhalb_des_abstands_wird_gewartet() -> None:
+    """Die Pause liegt im zugesagten Band - nicht auf der Minute genau.
+
+    Seit dem Jitter streut sie zwischen 80 % und 130 % der Grundzeit. Eine
+    Zusicherung auf die Sekunde waere die Zusicherung, dass **nicht** gestreut
+    wird - also das Gegenteil dessen, was das Modul tut. Geprueft wird
+    deshalb, was es verspricht: dass die Pause das Band nicht verlaesst.
+    """
     jetzt = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
     letzter = datetime(2026, 8, 29, 11, 58, tzinfo=UTC)
     frei_ab = naechster_zeitpunkt(letzter, abstand_minuten=4, jetzt=jetzt)
-    assert frei_ab == datetime(2026, 8, 29, 12, 2, tzinfo=UTC)
-    assert wartezeit_text(frei_ab, jetzt=jetzt) == "noch 2 Min"
+
+    assert frei_ab is not None
+    assert letzter + timedelta(minutes=4 * 0.8) <= frei_ab
+    assert frei_ab <= letzter + timedelta(minutes=4 * 1.3)
+    assert wartezeit_text(frei_ab, jetzt=jetzt).startswith("noch ")
+
+
+def test_dieselbe_lage_ergibt_dieselbe_pause() -> None:
+    """Der Jitter streut, aber er springt nicht.
+
+    Der Seed haengt am letzten Versuch und nicht am Zufall des Prozesses:
+    Sonst zeigte die Arbeitsseite bei jedem Neuladen eine andere Wartezeit,
+    und keine davon waere die geltende. Derselbe Gedanke wie bei der Wahl der
+    Textfassung, die ``blake2b`` folgt und nicht ``hash()``.
+    """
+    jetzt = datetime(2026, 8, 29, 12, 0, tzinfo=UTC)
+    letzter = datetime(2026, 8, 29, 11, 58, tzinfo=UTC)
+
+    erste = naechster_zeitpunkt(letzter, abstand_minuten=4, jetzt=jetzt)
+    zweite = naechster_zeitpunkt(letzter, abstand_minuten=4, jetzt=jetzt)
+
+    assert erste == zweite
 
 
 def test_nach_dem_abstand_geht_es_wieder() -> None:

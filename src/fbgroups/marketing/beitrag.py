@@ -90,6 +90,7 @@ def mit_link(
     text: str,
     *,
     config: AppConfig,
+    ziel: str = "store",
 ) -> str:
     """Setzt die spaeten Platzhalter in einen **beliebigen** Text dieser Gruppe.
 
@@ -118,8 +119,12 @@ def mit_link(
     
     # 2. Dann die festen Platzhalter ersetzen
     return (
-        text.replace("{link}", link.tracking_url)
-        .replace("{tracking_code}", link.tracking_code)
+        # Das Ziel entscheidet, welcher der beiden Codes hineinkommt. Ohne
+        # Angabe der Store-Code - das ist das Verhalten, das bis zum
+        # 31.08.2026 fuer alle Links galt, und ein Aufrufer, der nichts sagt,
+        # soll nichts veraendern.
+        text.replace("{link}", link.url_fuer(ziel))
+        .replace("{tracking_code}", link.code_fuer(ziel))
         .replace("{landing_page}", campaign.landing_page)
         .replace("{datum}", monat_jetzt(config, sprache_der_kampagne(campaign, config)))
     )

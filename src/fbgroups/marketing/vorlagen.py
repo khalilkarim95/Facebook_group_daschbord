@@ -678,7 +678,16 @@ def alle_texte_fuer_gruppe(
         texttyp=texttyp,
     )
     if hoechstens > 0:
-        gedreht = gedreht[:hoechstens]
+        if hoechstens > len(gedreht) and gedreht:
+            # Mehr Fassungen verlangt als Texte im Topf: Der Topf wird
+            # gedreht. Fassung 6 traegt wieder Vorlage 1, Fassung 7 wieder
+            # Vorlage 2 - genau die Rotation, die ``lauf.vorlage_zu_nummer``
+            # beschreibt. Zwei gleiche Texte gehen dabei nie unter denselben
+            # Beitrag: ``bisherige_post_urls`` gibt jedem Kommentar einen
+            # anderen.
+            gedreht = [gedreht[i % len(gedreht)] for i in range(hoechstens)]
+        else:
+            gedreht = gedreht[:hoechstens]
     return [
         (
             f"{sprache}/{texttyp.value}/{daten.topf}/{vorlage.kennung}",

@@ -290,3 +290,23 @@ class Gruppenseiten:
         befund = lies_seite(antwort.text, group_id, status_code=antwort.status_code)
         self.merke(befund)
         return befund
+
+    def aus_html(self, group_id: str, html: str) -> Seitenbefund:
+        """Wertet eine bereits geholte Seite aus - und merkt sie sich.
+
+        Fuer den angemeldeten Browser. Der Weg ueber ``httpx`` bekommt von
+        Facebook fast immer ein Anmeldefenster; am 31.08.2026 hatten deshalb
+        **null von 314** Gruppen eine Mitgliederzahl, obwohl ``members`` und
+        ``activity`` zusammen die Haelfte des Scores tragen.
+
+        Ausgewertet wird mit **derselben** ``lies_seite``. Eine zweite
+        Auswertung daneben koennte andere Zahlen liefern, und der Unterschied
+        fiele erst in einer Rangliste auf, nach der entschieden wird, wo die
+        naechsten dreihundert Beitraege hingehen.
+
+        Kein Zeitlimit und kein Blockadezaehler: Beide gehoeren zum Abrufen,
+        und hier wird nichts abgerufen - der Browser war schon da.
+        """
+        befund = lies_seite(html, group_id, status_code=200)
+        self.merke(befund)
+        return befund

@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import csv
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -400,6 +401,16 @@ def enrich_command(
     erneut: bool = typer.Option(
         False, "--erneut", help="Auch Gruppen abrufen, deren Befund noch frisch ist."
     ),
+    browser: bool = typer.Option(
+        False,
+        "--browser",
+        help="Mit dem angemeldeten Browser lesen statt ueber httpx (siehe auth login).",
+    ),
+    server: str = typer.Option(
+        None,
+        "--server",
+        help="Befunde auf dem Server buchen statt oertlich, z. B. http://127.0.0.1:8090.",
+    ),
 ) -> None:
     """Liest Mitgliederzahl und Aktivitaet von den oeffentlichen Gruppenseiten.
 
@@ -469,15 +480,46 @@ def enrich_command(
     geaendert: list[Group] = []
     abgerufen = gefunden_zahl = gefunden_aktiv = nicht_erreichbar = 0
 
+    # Zwei Wege zur selben Seite, und der Unterschied ist die Anmeldung.
+    #
+    # Ueber ``httpx`` antwortet Facebook fast immer mit einem Anmeldefenster;
+    # am 31.08.2026 hatten deshalb **null von 314** Gruppen eine
+    # Mitgliederzahl - obwohl ``members`` und ``activity`` zusammen die
+    # Haelfte des Scores tragen. Der angemeldete Browser sieht die Zahlen.
+    #
+    # Ausgewertet wird in beiden Faellen mit derselben ``lies_seite``: Nur der
+    # Weg zum HTML unterscheidet sich, nicht die Regeln.
+    holer = None
+    kontext = None
+    if browser:
+        from fbgroups.automation.actions import fetch_group_html
+        from fbgroups.automation.browser import get_browser_context
+
+        console.print("[cyan]Mit angemeldetem Browser - das Fenster bleibt sichtbar.[/cyan]")
+        kontext = get_browser_context(config, headless=False)
+        context = kontext.__enter__()
+
+        def holer(seiten, group):  # noqa: F811
+            html = fetch_group_html(
+                context, group.url_canonical or
+                f"https://www.facebook.com/groups/{group.group_id}/"
+            )
+            return seiten.aus_html(group.group_id, html)
+
     with Gruppenseiten(cache, config) as seiten, httpx.Client(
         timeout=20.0, follow_redirects=True
     ) as client:
         for group in offen[:wieviele]:
             try:
-                befund = seiten.hole(group.group_id, client)
+                befund = (
+                    holer(seiten, group) if holer else seiten.hole(group.group_id, client)
+                )
             except Blockiert as exc:
                 console.print(f"[yellow]{exc}[/yellow]")
                 break
+            except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Befund
+                console.print(f"[red]{group.group_id}: {str(exc).splitlines()[0][:90]}[/red]")
+                continue
 
             abgerufen += 1
             jetzt = datetime.now(UTC)
@@ -517,7 +559,45 @@ def enrich_command(
 
             geaendert.append(group)
 
-    if geaendert:
+    # Der Browser gehoert geschlossen, auch wenn die Schleife vorzeitig endet.
+    # Sonst bliebe ein Fenster stehen und mit ihm ein Chromium-Prozess.
+    if kontext is not None:
+        kontext.__exit__(None, None, None)
+
+    if geaendert and server:
+        # Auf dem Server buchen statt hier. Ohne diesen Weg stuenden die
+        # Zahlen nur oertlich, und das Dashboard zeigte weiter "unknown" -
+        # dieselbe zweite Wahrheit, die schon bei den Kommentaren entstand.
+        basis = server.rstrip("/")
+        kopf = {"Origin": basis, "Content-Type": "application/json"}
+        gebucht = 0
+        with httpx.Client(timeout=30.0, headers=kopf) as klient:
+            for g in geaendert:
+                antwort = klient.post(
+                    f"{basis}/automatik/anreichern/ergebnis",
+                    json={
+                        "group_id": g.group_id,
+                        "erreichbar": True,
+                        "member_count": g.member_count,
+                        "privacy_hint": g.privacy_hint.value if g.privacy_hint else "",
+                        "posts_per_day": g.posts_per_day,
+                        "activity_factor": g.activity_factor,
+                        "last_post_at": (
+                            g.last_post_at.isoformat() if g.last_post_at else ""
+                        ),
+                    },
+                )
+                if antwort.status_code == 404:
+                    console.print(
+                        "[red]Der Dienst haelt den Aufruf fuer nicht-oertlich "
+                        "oder kennt die Gruppe nicht.[/red]"
+                    )
+                    break
+                antwort.raise_for_status()
+                gebucht += 1
+        console.print(f"[green]{gebucht} Befund(e) auf dem Server gebucht.[/green]")
+        console.print("[dim]Danach dort neu bewerten:  fbgroups rescore[/dim]")
+    elif geaendert:
         with SqliteStore(config.path("sqlite_path")) as store:
             store.upsert_groups(geaendert)
 
@@ -1113,21 +1193,70 @@ def _print_groups(groups: list, title: str = "Gruppen") -> None:
 
 @auth_app.command("login")
 def login_command() -> None:
-    """Launches an interactive browser to log into Facebook and save the session."""
+    """Oeffnet einen sichtbaren Browser fuer die Anmeldung bei Facebook.
+
+    Drei Dinge unterscheiden diesen Befehl von einem blossen ``goto``:
+
+    * **Die vorhandene Seite wird benutzt, keine zweite geoeffnet.** Ein
+      dauerhafter Kontext bringt bereits eine Seite mit; ``new_page()`` machte
+      daraus zwei Fenster, und wer das falsche schloss, wartete danach auf
+      eines, das niemand mehr ansah.
+    * **Ein geschlossenes Fenster ist keine Ausnahme, sondern das Ende.**
+      Vorher stieg ``page.goto`` mit ``TargetClosedError`` samt Traceback aus,
+      wenn jemand das Fenster waehrend des Ladens schloss - ein Abbruch, der
+      wie ein Programmfehler aussah.
+    * **Gemeldet wird, was wirklich gespeichert wurde.** Die alte Fassung
+      schrieb "Session saved!" auch dann, wenn kein einziges Cookie
+      zurueckblieb. Eine falsche Erfolgsmeldung ist hier teuer: Der naechste
+      Lauf sucht dann das Schreibfeld auf einer Anmeldeseite und meldet, die
+      Gruppe erlaube kein Posten.
+    """
+    import contextlib
+
     from fbgroups.automation.browser import get_browser_context
+
     config = _config()
-    console.print("[yellow]A visible browser window will now open.[/yellow]")
-    console.print("Please log into Facebook, complete 2FA if necessary, and then close the window.")
-    
+    console.print("[yellow]Es oeffnet sich ein sichtbares Browserfenster.[/yellow]")
+    console.print("Melde dich bei Facebook an (ggf. mit 2FA) und schliesse dann das Fenster.")
+
     with get_browser_context(config, headless=False) as context:
-        page = context.new_page()
-        page.goto("https://www.facebook.com/")
-        console.print("Browser is open. Waiting for you to finish and close the window manually...")
-        import contextlib
+        # Der dauerhafte Kontext hat schon eine Seite - die nehmen wir.
+        page = context.pages[0] if context.pages else context.new_page()
+
         with contextlib.suppress(Exception):
-            # Wait for the page to be closed by the user
-            page.wait_for_event("close", timeout=0)
-    console.print("[green]Session saved! You can now use automated posting features.[/green]")
+            page.goto("https://www.facebook.com/", wait_until="domcontentloaded")
+
+        console.print("Der Browser ist offen. Schliesse das Fenster, wenn du fertig bist ...")
+
+        # Auf das Ende des ganzen Kontexts warten, nicht auf eine einzelne
+        # Seite: Wer sich anmeldet, landet oft in einem neuen Tab.
+        fertig = threading.Event()
+        context.on("close", lambda _: fertig.set())
+        with contextlib.suppress(Exception):
+            while context.pages and not fertig.wait(timeout=1.0):
+                pass
+
+    # Nach dem Schliessen liegt das Profil auf der Platte - erst jetzt laesst
+    # sich nachsehen, ob wirklich eine Sitzung entstanden ist.
+    #
+    # Zwei Orte, und der zweite ist der heutige: Neuere Chromium-Fassungen
+    # legen die Cookies unter ``Default/Network/`` ab. Nur am alten Pfad
+    # gesucht, meldete dieser Befehl "keine Sitzung" fuer eine Anmeldung, die
+    # tatsaechlich gespeichert war.
+    profil = config.path("data_dir") / "browser_state" / "Default"
+    cookies = next(
+        (p for p in (profil / "Network" / "Cookies", profil / "Cookies") if p.exists()),
+        None,
+    )
+    if cookies is not None and cookies.stat().st_size > 0:
+        console.print("[green]Sitzung gespeichert.[/green] Die Automatisierung kann sie nutzen.")
+    else:
+        console.print(
+            "[red]Keine Sitzung gespeichert.[/red] Das Fenster wurde offenbar vor der "
+            "Anmeldung geschlossen - bitte noch einmal, und diesmal erst nach dem "
+            "Einloggen schliessen."
+        )
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

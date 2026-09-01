@@ -862,6 +862,9 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   body.nur-lesen th.auswahl, body.nur-lesen td.auswahl,
   body.nur-lesen .knopfzelle, body.nur-lesen .k-status,
   body.nur-lesen .neu-kampagne,
+  /* Ein Stand, den die Automatik fuehrt - als Text, nicht als Feld. Ein
+     Auswahlfeld mit zwei Werten liesse ihn beim naechsten Anfassen fallen. */
+  .stand-fest {{ font-size:.85rem; opacity:.85; font-style:italic; }}
 </style>
 </head>
 <body{koerper_klasse}>
@@ -872,6 +875,7 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
 </p>
 
 {warnung}
+
 <div class="kacheln">{kacheln}</div>
 
 <div class="filter">
@@ -1094,6 +1098,7 @@ const NUR_LESEN = {nur_lesen_js};
 const zeilen = DATEN.gruppen;
 let sortSpalte = "score", sortAb = true;
 
+
 // --- Blaettern ------------------------------------------------------------
 //
 // Bei 314 Zeilen war die Tabelle laenger als jeder Bildschirm: Wer die
@@ -1309,13 +1314,7 @@ function zeichne() {{
           <td>${{esc(z.zielgruppen.join(", ")) || "–"}}</td>
           <td>${{esc(z.kategorie) || "–"}}</td>
           <td class="kampagnen-zelle">${{kampagnenZelle(z)}}</td>
-          <td>${{NUR_LESEN
-            ? esc(z.marketing_label)
-            : `<select class="stand" data-id="${{esc(z.id)}}">`
-              + DATEN.staende.map((s) =>
-                  `<option value="${{s.wert}}"${{s.wert === z.marketing ? " selected" : ""}}>`
-                  + esc(s.label) + "</option>").join("")
-              + `</select>`}}</td>
+          <td>${{standZelle(z)}}</td>
           <td>${{beitragZelle(z)}}</td>
           <td class="zahl">${{z.click}}</td>
           <td class="zahl">${{z.registration}}</td>
@@ -1516,6 +1515,37 @@ const BEITRAG_LABEL = {{
 // denselben Ablauf ein zweites Mal anbot, nur schmaler und ohne die Merkmale
 // der Gruppe. Zwei Wege zum selben Beitrag heissen zwei Zaehlweisen;
 // gearbeitet wird unter /arbeit/{{kampagne}}.
+// Die Spalte STAND - zwei Werte, nicht zehn.
+//
+// Von Hand gesetzt werden nur die beiden, um die es geht: Anfrage gesendet
+// oder nicht. Die uebrigen Staende der Aufzaehlung (Mitglied, abgelehnt,
+// Zusammenarbeit ...) bleiben im Modell und in den Bestandsdaten - entfernt
+// waeren aeltere Datensaetze nicht mehr ladbar, und "Mitglied" setzt die
+// Automatik ohnehin selbst, wenn sie das Schreibfeld sieht.
+//
+// Steht ein solcher Wert an der Gruppe, erscheint er als **Text** statt als
+// Auswahlfeld. Das ist kein Schmuck: Ein Feld mit zwei Optionen, in dem
+// "Mitglied" gar nicht vorkommt, wuerde bei der naechsten Beruehrung auf
+// "nicht gesendet" zurueckfallen - und damit eine erreichte Mitgliedschaft
+// stillschweigend loeschen.
+const STAND_VON_HAND = ["not_contacted", "beitritt_angefragt"];
+
+function standZelle(z) {{
+  if (NUR_LESEN) return esc(z.marketing_label);
+  if (!STAND_VON_HAND.includes(z.marketing)) {{
+    return `<span class="stand-fest" title="Wird von der Automatik gefuehrt">`
+      + esc(z.marketing_label) + `</span>`;
+  }}
+  return `<select class="stand" data-id="${{esc(z.id)}}">`
+    + STAND_VON_HAND.map((wert) => {{
+        const s = DATEN.staende.find((x) => x.wert === wert);
+        const label = wert === "not_contacted" ? "nicht gesendet" : "Anfrage gesendet";
+        return `<option value="${{wert}}"${{wert === z.marketing ? " selected" : ""}}>`
+          + esc(label) + "</option>";
+      }}).join("")
+    + `</select>`;
+}}
+
 function beitragZelle(z) {{
   if (!z.beitraege.length) {{
     return '<span class="b-leer">kein Tracking-Link</span>';

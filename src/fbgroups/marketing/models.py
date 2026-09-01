@@ -527,6 +527,40 @@ class VorschlagStatus(StrEnum):
     FEHLGESCHLAGEN = "fehlgeschlagen"
 
 
+class LaufStatus(StrEnum):
+    """Der Gesamtzustand der Kommentarautomatik - ueber alle Kampagnen.
+
+    Zweite Ebene ueber ``CampaignStatus``: Jene sagt, ob eine Kampagne
+    betrieben wird; diese sagt, ob **gerade gearbeitet** wird. Eine Kampagne
+    bleibt ``active``, auch wenn niemand einen Lauf gestartet hat.
+
+    ``GESCHEITERT`` ist ein Lauf, der nicht zu Ende kam - nicht eine Kampagne,
+    die nichts erreicht hat. Der Unterschied entscheidet, ob ein Neustart
+    fortsetzt (``LAEUFT``, ``ANGEHALTEN``, ``GESCHEITERT``) oder eine neue
+    Liste einfriert (``FERTIG``).
+    """
+
+    LAEUFT = "laeuft"
+    ANGEHALTEN = "angehalten"
+    GESCHEITERT = "gescheitert"
+    FERTIG = "fertig"
+
+
+class KampagnenLaufStatus(StrEnum):
+    """Wo eine einzelne Kampagne innerhalb eines Laufs steht.
+
+    Sie steht **neben** ``CampaignStatus``, nicht darin: Jene beschreibt die
+    Kampagne auf Dauer (Entwurf, aktiv, pausiert), diese ihre Stellung in
+    genau diesem Lauf. In ein Feld gezwungen verloere man beim zweiten Lauf
+    die Auskunft, ob die Kampagne ueberhaupt noch betrieben wird.
+    """
+
+    WARTET = "wartet"
+    LAEUFT = "laeuft"
+    FERTIG = "fertig"
+    GESCHEITERT = "gescheitert"
+
+
 class QueueZustand(StrEnum):
     """Ob die Warteschlange einer Kampagne gerade laufen darf.
 
@@ -585,6 +619,38 @@ class CampaignGroup(BaseModel):
     group_id: str
     tracking_code: str
     tracking_url: str = ""
+
+    # Der zweite Code desselben Paares - derselbe Weg, anderes Ziel.
+    #
+    # ``tracking_code`` fuehrt zum Play Store und **bleibt dabei**: Er steht in
+    # veroeffentlichten Beitraegen, und sein Ziel nachtraeglich umzustellen
+    # aenderte, wohin alte Beitraege fuehren. Dieser hier fuehrt in den
+    # Browser, auf die Landingpage.
+    #
+    # Beide werden vollstaendig gezaehlt. Der Unterschied ist allein das Ziel
+    # **nach** der Weiterleitung - und genau dadurch laesst sich im Trichter
+    # unterscheiden, ob ein Mensch ueber den Store oder den Browser kam.
+    #
+    # Leer heisst "noch nicht vergeben": Ein Code ist endgueltig, und keiner
+    # entsteht auf Vorrat.
+    tracking_code_browser: str = ""
+    tracking_url_browser: str = ""
+
+    def code_fuer(self, ziel: str) -> str:
+        """Der Code fuer ein Ziel - ``browser`` oder ``store``.
+
+        Faellt auf den Store-Code zurueck, wenn der Browser-Code fehlt: Ein
+        Beitrag ohne Link waere schlimmer als einer mit dem anderen Ziel.
+        """
+        if ziel == "browser" and self.tracking_code_browser:
+            return self.tracking_code_browser
+        return self.tracking_code
+
+    def url_fuer(self, ziel: str) -> str:
+        """Die Weiterleitungsadresse fuer ein Ziel. Siehe ``code_fuer``."""
+        if ziel == "browser" and self.tracking_url_browser:
+            return self.tracking_url_browser
+        return self.tracking_url
     added_at: datetime = Field(default_factory=_utcnow)
     # -- Protokoll des Beitrags -------------------------------------------
     # Getrennt von ``added_at``: Eine Zuordnung entsteht durch die Regel, ein
