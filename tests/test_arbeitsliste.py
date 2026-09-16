@@ -97,13 +97,18 @@ def test_der_text_traegt_den_link_dieser_gruppe(bestand: Path, config) -> None:
     with MarketingStore(bestand) as store:
         campaign = store.load_campaign("batreeq")
         assert campaign is not None
+        links = {link.group_id: link for link in store.links_for_campaign("batreeq")}
         texte = {
-            link.group_id: beitragstext(campaign, link, config=config)
-            for link in store.links_for_campaign("batreeq")
+            group_id: beitragstext(campaign, link, config=config)
+            for group_id, link in links.items()
         }
 
-    assert texte[REAL_ID_A] == "مرحبا! https://go.b-tarikak.de/r/FB-SYR-BER-001"
-    assert texte[REAL_ID_B] == "مرحبا! https://go.b-tarikak.de/r/FB-SYR-MUE-001"
+    # Der Link ist die kurze, oeffentliche Adresse - der Tracking-Code steht
+    # in keinem Beitrag. Gezaehlt wird trotzdem unter ihm: Die Weiterleitung
+    # loest den Decknamen auf, bevor sie ein Ereignis schreibt.
+    for group_id, text in texte.items():
+        assert text == f"مرحبا! {links[group_id].url_fuer('store')}"
+        assert links[group_id].tracking_code not in text
     # Jede Gruppe ihren eigenen Link - sonst zaehlten alle Klicks auf eine.
     assert len(set(texte.values())) == 3
 
@@ -380,14 +385,28 @@ def test_next_protokolliert_jeden_ausgang(cli) -> None:
     assert "Gruppe erlaubt keine Links" in ergebnis.output
 
 
-def test_next_setzt_den_link_dieser_gruppe_in_den_text(cli) -> None:
-    """Der Kern: kein Code steht fest im Programm."""
+def test_next_setzt_den_link_dieser_gruppe_in_den_text(cli, bestand: Path) -> None:
+    """Der Kern: kein Code steht fest im Programm.
+
+    Im Text steht die **kurze** Adresse. Der Tracking-Code taucht dort seit
+    dem 14.09.2026 nicht mehr auf - er nennt jedem Leser Kanal, Zielgruppe,
+    Stadt und laufende Nummer.
+    """
     ergebnis = cli(
         "next", "batreeq", "--kein-browser", "--keine-zwischenablage", "--limit", "1",
         eingabe="q\n",
     )
+    ausgabe = ergebnis.output.replace("\n", "")
 
-    assert "go.b-tarikak.de/r/FB-SYR-MUE-001" in ergebnis.output.replace("\n", "")
+    with MarketingStore(bestand) as store:
+        treffer = store.aufloesen("FB-SYR-MUE-001")
+        assert treffer is not None
+
+    assert f"go.b-tarikak.de/r/{treffer.oeffentlicher_code}" in ausgabe
+    # Die **Adresse** traegt den Code nicht mehr. In der Ueberschrift der
+    # Karte steht er weiterhin: Das ist der Bildschirm des Bearbeiters, und
+    # dort ist "um welche Zuordnung geht es?" die erste Frage.
+    assert "go.b-tarikak.de/r/FB-SYR-MUE-001" not in ausgabe
 
 
 def test_next_haelt_bei_q_an_und_laesst_die_gruppe_offen(cli) -> None:

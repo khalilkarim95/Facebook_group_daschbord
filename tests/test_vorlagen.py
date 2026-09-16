@@ -600,3 +600,48 @@ def _config_mit_vorlagen(config: AppConfig, vorlagen: dict) -> AppConfig:
             "anrede_allgemein": config.textvorlagen.get("anrede_allgemein", {}),
         },
     )
+
+
+def test_jede_kommentarfassung_traegt_genau_einen_link(config: AppConfig) -> None:
+    """Der ganze Vorrat, nicht eine Fassung.
+
+    Eine einzige Vorlage mit zwei Links oder ohne einen traefe zehn Gruppen,
+    bevor es jemandem auffiele. Dass der Kommentar ueberhaupt einen Link
+    traegt, ist dabei eine Entscheidung des Nutzers (11.09.2026) und keine
+    technische Notwendigkeit - ``pruefe_platzhalter`` laesst einen Kommentar
+    ohne Link zu, siehe ``test_ein_kommentar_ohne_link_geht_durch_die_pruefung``.
+    """
+    from fbgroups.marketing.vorlagen import alle_texte_fuer_gruppe
+
+    for sprache in ("ar", "de"):
+        for stadt in ("Bonn", None):
+            fassungen = alle_texte_fuer_gruppe(
+                gruppe(city=stadt),
+                kampagne(sprache),
+                config,
+                texttyp=Texttyp.KOMMENTAR,
+                hoechstens=10,
+            )
+            assert fassungen, f"{sprache}/{stadt}: kein Vorrat"
+            for schluessel, text in fassungen:
+                assert text.count(PLATZHALTER_LINK) == 1, schluessel
+
+
+def test_ein_kommentar_ohne_link_geht_durch_die_pruefung(config: AppConfig) -> None:
+    """``pruefe_platzhalter`` kennt den Unterschied - der Beitrag nicht.
+
+    Sonst wiese der Server einen gueltigen Kommentar genau dort zurueck, wo
+    ein Mensch ihn gerade von Hand geschrieben hat.
+    """
+    from fbgroups.marketing.vorlagen import UngueltigerText, pruefe_platzhalter
+
+    ohne = "تطبيق اسمه بطريقك، بيلاقيلك مسافر."
+    assert pruefe_platzhalter(ohne, texttyp=Texttyp.KOMMENTAR) == ohne
+    with pytest.raises(UngueltigerText):
+        pruefe_platzhalter(ohne, texttyp=Texttyp.POST)
+
+    # Eine von Hand getippte Adresse bleibt auch im Kommentar ein Fehler:
+    # Der Kommentar saehe richtig aus, und seine Gruppe bekaeme nie einen
+    # Klick gutgeschrieben.
+    with pytest.raises(UngueltigerText):
+        pruefe_platzhalter("schau mal https://go.example.invalid/r/X", texttyp=Texttyp.KOMMENTAR)

@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
+import json
 import os
 import secrets
 from datetime import UTC, date, datetime
@@ -60,6 +62,7 @@ from fbgroups.marketing.models import (
     CampaignStatus,
     EventType,
     JobStatus,
+    LaufStatus,
     MarketingStatus,
     PostStatus,
     QueueZustand,
@@ -209,6 +212,47 @@ class AutomatikStart(BaseModel):
 
     kampagnen: list[str] = Field(default_factory=list)
 
+    neu: bool = False
+    """Den offenen Lauf abschliessen und eine frische Liste einfrieren.
+
+    Der Ausweg aus der eingefrorenen Liste, und er ist ausdruecklich ein
+    eigener Handgriff: Ein Lauf behaelt seine Kampagnen, damit ein laufender
+    Vorgang nicht unter der Hand seine Menge aendert. Genau das wird aber zum
+    Hindernis, sobald Kampagnen **dazukommen** - sie kaemen nie dran, und von
+    aussen sieht das aus, als taete die Automatik nichts.
+
+    Was dabei verlorengeht, ist nur die Liste: Der Fortschritt steht in den
+    Fassungen (``campaign_group_texte``) und wird gelesen, nicht gefuehrt.
+    Der neue Lauf faengt deshalb nicht von vorn an - er sieht dieselben
+    veroeffentlichten Kommentare wie der alte. Zurueckgesetzt wird allein,
+    was in **diesem** Lauf uebersprungen wurde, und das ist gewollt.
+    """
+
+
+class RegelErgebnis(BaseModel):
+    """Was auf **einer** Gruppenseite an Regeln stand - gemeldet vom Arbeitsrechner.
+
+    Gemeldet wird der **Befund**, nicht die Seite: Der Arbeitsrechner liest
+    sie mit ``actions.fetch_group_html`` und wertet sie mit
+    ``qualifikation.lies_regeln`` aus - derselben reinen Funktion, die auch
+    der oertliche Lauf nimmt. Zwei Auswertungen koennten abweichen, und die
+    Seite selbst ueber den Tunnel zu schicken hiesse, ein halbes Megabyte
+    HTML zu uebertragen, damit der Server vier Wahrheitswerte daraus liest.
+
+    ``gelesen=False`` (Anmeldewand, Zeitablauf) **schreibt nichts** - eine
+    nicht gelesene Seite ist kein Beleg dafuer, dass eine frueher gelesene
+    Regel weg ist. Stattdessen wird die Gruppe fuer diesen Lauf beiseitegelegt,
+    wie bei einer gescheiterten Beitrittsanfrage.
+    """
+
+    group_id: str
+    gelesen: bool = False
+    keine_links: bool = False
+    keine_werbung: bool = False
+    freigabe_noetig: bool = False
+    neue_ohne_links: bool = False
+    campaign_id: str = ""
+
 
 class BeitrittErgebnis(BaseModel):
     """Der Ausgang **einer** Beitrittsanfrage, gemeldet vom Arbeitsrechner.
@@ -222,6 +266,16 @@ class BeitrittErgebnis(BaseModel):
     group_id: str
     ausgang: str
     bemerkung: str = ""
+    campaign_id: str = ""
+    """Zu welcher Kampagne der Schritt gehoerte - nur im Lauf gefuellt.
+
+    Damit kann der Server eine Gruppe, deren Anfrage **nicht** hinausging,
+    fuer diesen Lauf beiseitelegen. Ohne das boete er dieselbe Gruppe im
+    naechsten Durchgang wieder an, und der Lauf drehte sich um sie, statt zur
+    naechsten zu gehen. Der Einzelbefehl ``campaign beitritt`` laesst das Feld
+    leer - dort gibt es keinen Lauf, in dem etwas uebersprungen werden
+    koennte.
+    """
 
 
 class AutomatikErgebnis(BaseModel):
@@ -244,6 +298,51 @@ class AutomatikErgebnis(BaseModel):
     fehler: str = ""
     post_url: str = ""
     erschoepft: bool = False
+
+    gruppe_beiseite: bool = False
+    """Diese Gruppe fuer **diesen Lauf** beiseitelegen - ohne Urteil.
+
+    Gesetzt, wenn in der Gruppe mehrere Beitraege hintereinander technisch
+    nicht angenommen haben (kein Kommentarfeld, Formular gesperrt). Der
+    Ausgang wird **trotzdem gebucht** - er gehoert ins Protokoll -, aber die
+    Gruppe kommt in diesem Durchgang nicht wieder dran.
+
+    Der Unterschied zu ``kein_anlass``: Dort stand nichts Passendes, hier
+    hat die Technik nicht mitgespielt. Beides ist kein Urteil ueber die
+    Gruppe; im Protokoll muss der Unterschied trotzdem stehen.
+    """
+
+    kein_anlass: bool = False
+    """Heute stand hier nichts, worauf eine Antwort etwas beigetragen haette.
+
+    **Kein Fehlschlag**, und deshalb ein eigenes Feld (14.09.2026): Der
+    oertliche Lauf legt die Gruppe dann fuer diesen Durchgang beiseite und
+    bucht **nichts**. Der Fernbetrieb meldete bis dahin nur ``erfolg=False``,
+    und der Server buchte einen gescheiterten Versuch gegen die Fassung -
+    nach dreien galt sie als verbraucht, irgendwann die Gruppe als
+    erschoepft. Dieselbe Verwechslung wie am 11.09.2026, nur an einer
+    anderen Stelle.
+    """
+
+    lauf_id: int = 0
+    """Welcher Lauf - fuer die Uebersprungsliste. ``0`` heisst: kein Lauf."""
+
+    vorlage_key: str = ""
+    """Welche Anlassfassung wirklich hinausging (``ar/anlaesse/geschenk/x``).
+
+    **Eine Kennung, kein Text** - die Regel oben bleibt unangetastet. Der
+    Server loest sie ueber ``vorlagen.anlasstext_zu`` in denselben Satz auf,
+    den der Arbeitsrechner abgesetzt hat; beide fahren dieselbe
+    ``textvorlagen.yaml``. Leer heisst: Es war der vorbereitete Text.
+    """
+
+    mit_link: bool = False
+    """Trug der abgesetzte Text den Tracking-Link?
+
+    Gehoert zur Kennung: Derselbe Vorrat ergibt mit und ohne Link zwei
+    verschiedene Saetze, und welcher es war, entscheidet die Gruppe - nicht
+    die Vorlage.
+    """
     # Vorgabe ``kommentar``, weil die Automatik nur kommentiert. Der Beitrag
     # laesst sich damit trotzdem nachtragen (``campaign abgleich``) - und er
     # zieht dabei ueber ``_gruppenstand_nachziehen`` die Spalte BEITRAG mit,
@@ -535,6 +634,72 @@ def _ist_linkvorschau(user_agent: str) -> bool:
     return any(muster in ua for muster in _VORSCHAU_USER_AGENTS)
 
 
+def _vorschauseite(config: AppConfig, eigene_url: str, ziel: str) -> str:
+    """Die Karte, die eine Plattform aus einem Tracking-Link baut.
+
+    **Warum der Dienst das selbst beantwortet.** Der Abruf folgt sonst der
+    Weiterleitung und nimmt, was am Ziel steht - beim Store-Code die Karte
+    von Google, beim Browser-Code die der Landingpage. Dieselbe App zeigte
+    damit je nach Fassung ein anderes Gesicht, und im ersten automatisch
+    gesetzten Beitrag stand gar keines: nur die nackte Adresse.
+
+    ``og:url`` ist bewusst die **eigene** Adresse und nicht das Ziel: Sonst
+    fuehrte die Karte an der Zaehlung vorbei, und der Klick, den sie
+    ausloest, waere keiner Gruppe zuzuordnen.
+
+    **Keine Meta-Weiterleitung.** Hier stand bis zum 14.09.2026
+    ``<meta http-equiv='refresh'>`` auf das Ziel - und genau daran ist die
+    Karte gescheitert: Facebooks Abrufer folgt einer Meta-Weiterleitung und
+    beschreibt, was er am Ende findet. Bei einem Store-Code war das
+    ``play.google.com``, und im Beitrag stand die Karte von Google statt der
+    der App. Die sorgfaeltig gesetzten Angaben darueber las niemand mehr.
+
+    Weitergeleitet wird jetzt mit einer Zeile JavaScript. Der Unterschied ist
+    der Punkt: Ein Browser fuehrt sie aus, ein Abrufer nicht - der Mensch, der
+    hier landet, kommt weiter, und die Plattform bleibt bei dem stehen, was
+    ausdruecklich fuer sie geschrieben ist. Der Mensch sieht diese Seite
+    ohnehin fast nie; er bekommt die 302.
+
+    ``og:url`` ist bewusst die **eigene** Adresse und nicht das Ziel: Sonst
+    fuehrte die Karte an der Zaehlung vorbei.
+    """
+    titel = str(config.get("marketing", "vorschau", "titel", default="") or "")
+    beschreibung = str(config.get("marketing", "vorschau", "beschreibung", default="") or "")
+    bild = str(config.get("marketing", "vorschau", "bild", default="") or "")
+    seitenname = str(config.get("marketing", "vorschau", "seitenname", default="") or "") or titel
+
+    e = html.escape
+    # Die Adresse im JavaScript geht durch die JSON-Kodierung: Sie stammt aus
+    # der Konfiguration und aus ``play_store_url``, also nicht vom Besucher -
+    # aber ein Apostroph darin beendete sonst die Zeichenkette, und aus einem
+    # Tippfehler in der Konfiguration wuerde eine kaputte Seite.
+    ziel_js = json.dumps(ziel)
+    return (
+        "<!doctype html>"
+        "<html lang='ar' dir='rtl'><head><meta charset='utf-8'>"
+        f"<title>{e(titel)}</title>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        f"<meta name='description' content='{e(beschreibung)}'>"
+        "<meta property='og:type' content='website'>"
+        f"<meta property='og:site_name' content='{e(seitenname)}'>"
+        "<meta property='og:locale' content='ar_AR'>"
+        f"<meta property='og:title' content='{e(titel)}'>"
+        f"<meta property='og:description' content='{e(beschreibung)}'>"
+        f"<meta property='og:image' content='{e(bild)}'>"
+        f"<meta property='og:image:secure_url' content='{e(bild)}'>"
+        f"<meta property='og:image:alt' content='{e(seitenname)}'>"
+        f"<meta property='og:url' content='{e(eigene_url)}'>"
+        "<meta name='twitter:card' content='summary_large_image'>"
+        f"<meta name='twitter:title' content='{e(titel)}'>"
+        f"<meta name='twitter:description' content='{e(beschreibung)}'>"
+        f"<meta name='twitter:image' content='{e(bild)}'>"
+        "</head><body>"
+        f"<a href='{e(ziel)}'>{e(titel)}</a>"
+        f"<script>location.replace({ziel_js});</script>"
+        "</body></html>"
+    )
+
+
 def play_store_url(tracking_code: str, config: AppConfig) -> str:
     """Die Play-Store-Adresse dieser App - mit dem Code im ``referrer``.
 
@@ -572,12 +737,25 @@ def _ziel_gewaehlt(campaign: Campaign | None, config: AppConfig) -> str:
     return str(config.get("marketing", "ziel", default="landing")).strip().lower()
 
 
-def _ziel_url(store: MarketingStore, tracking_code: str, config: AppConfig) -> tuple[str, bool]:
+def _ziel_url(
+    store: MarketingStore,
+    tracking_code: str,
+    config: AppConfig,
+    *,
+    referrer: str = "",
+) -> tuple[str, bool]:
     """Wohin ein Klick fuehrt. Returns: (Adresse, ist_store).
 
     ``ist_store`` gehoert dazu, weil der Aufrufer daran entscheidet, ob ein
     ``store_visit`` mitgeschrieben wird - und weil es nicht aus der Adresse
     zurueckzulesen ist, ohne sie zu zerlegen.
+
+    ``referrer`` ist der Code, der an Google weitergereicht wird - und damit
+    der einzige, der in der Adresszeile eines Menschen landet. Er steht hier
+    getrennt von ``tracking_code``, weil die beiden verschiedene Fragen
+    beantworten: Jenes ist der Datensatz, dieses die Beschriftung. Ohne
+    Angabe bleibt es beim Tracking-Code - ein Aufrufer, der nichts sagt,
+    aendert nichts.
 
     Faellt der Store aus (keine Package-ID eingetragen), wird auf die
     Landingpage ausgewichen **und das nicht als Store-Besuch gezaehlt**. Eine
@@ -614,7 +792,7 @@ def _ziel_url(store: MarketingStore, tracking_code: str, config: AppConfig) -> t
         return (str(config.get("marketing", "fallback_url", default="")) or "/"), False
 
     if _ziel_gewaehlt(campaign, config) == "store":
-        adresse = play_store_url(tracking_code, config)
+        adresse = play_store_url(referrer or tracking_code, config)
         if adresse:
             return adresse, True
 
@@ -1010,7 +1188,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         ``fbgroups campaign automatik`` auf dem Rechner, an dem der Browser
         steht.
         """
-        from fbgroups.marketing import automatik, lauf
+        from fbgroups.marketing import automatik, grenzen, lauf, qualifikation
 
         with _store() as store:
             offen = store.offener_lauf()
@@ -1025,7 +1203,15 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 )
             with SqliteStore(pfad) as gruppen_store:
                 gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
-            fortschritt = lauf.lies_fortschritt(store, int(offen["lauf_id"]), gruppen)
+            lagen = automatik.aktionslage(store, cfg)
+            fortschritt = lauf.lies_fortschritt(
+                store,
+                int(offen["lauf_id"]),
+                gruppen,
+                mitgliedschaft_pflicht=automatik.mitgliedschaft_pflicht(cfg),
+                qualifikation_pflicht=qualifikation.pflicht(cfg),
+                aktionen=lagen,
+            )
 
         aktuell = fortschritt.naechste_kampagne
         gruppe = aktuell.naechste_gruppe if aktuell else None
@@ -1050,6 +1236,40 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     "gesamt": fortschritt.kommentare_ziel,
                 },
                 "aktuelle_kampagne": aktuell.name if aktuell else "",
+                # In welchem Abschnitt die laufende Kampagne steht -
+                # Beitrittsanfragen, Neubewertung oder Arbeit. Ohne diese
+                # Angabe sieht ein Lauf, der gerade Anfragen stellt, aus wie
+                # einer, der nichts tut.
+                "abschnitt": (
+                    lauf.PHASENTEXT[
+                        aktuell.phase(beitritt_frei=fortschritt.beitritt_frei)
+                    ]
+                    if aktuell
+                    else ""
+                ),
+                "beitritt_offen": len(aktuell.beitritt_offen) if aktuell else 0,
+                "beitritt_kontingent": fortschritt.beitritt_kontingent,
+                # **Was jede Aktion heute noch darf.** Die haeufigste Frage
+                # beim Nachsehen ist nicht "wie weit?", sondern "warum
+                # passiert nichts?" - und die Antwort steht hier. Der
+                # Arbeitsrechner kann sie nicht selbst ausrechnen: Gezaehlt
+                # wird auf dem Server, und ``campaign automatik --status``
+                # liest die Datei **dieses** Rechners.
+                "aktionen": {
+                    aktion.value: {
+                        "moeglich": lage.moeglich,
+                        "grund": lage.grund,
+                        "wartezeit": lage.wartezeit,
+                        "rest_heute": lage.rest_heute,
+                    }
+                    for aktion in grenzen.Aktion
+                    if (lage := fortschritt.lage(aktion)) is not None
+                },
+                # Zwei Arten von Auslassung, und sie bedeuten Verschiedenes:
+                # ein Urteil der Gruppe ueber unseren Inhalt, und ein
+                # Fehlschlag von heute.
+                "gruppen_gesperrt": fortschritt.gruppen_gesperrt,
+                "gruppen_uebersprungen": fortschritt.gruppen_uebersprungen,
                 "aktuelle_gruppe": gruppe.name if gruppe else "",
                 "aktuelle_kommentare": (
                     f"{gruppe.veroeffentlicht} / {gruppe.ziel}" if gruppe else ""
@@ -1081,7 +1301,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
 
     @app.post("/automatik/naechster")
     def automatik_naechster(request: Request, start: AutomatikStart | None = None):  # noqa: ANN202
-        """Gibt den naechsten Kommentarschritt heraus - fertiger Text inklusive.
+        """Gibt den naechsten Schritt des Ablaufs heraus - fertiger Text inklusive.
 
         **Der Weg, der die zweite Datenbank ueberfluessig macht.** Bisher las
         die Automatik ihren Stand aus der Datei, in der sie lief - auf dem
@@ -1093,19 +1313,46 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         ``docs/plan-go-subdomain.md`` verlangt: Die Arbeit kommt dorthin, wo
         der Bestand steht.
 
+        **Die Reihenfolge entscheidet der Server** (12.09.2026): Kampagne,
+        dann ihre Beitrittsanfragen, dann die Neubewertung, dann die besten
+        Gruppen, darin Beitrag vor Kommentar. Der Arbeitsrechner fuehrt aus,
+        was ``lauf.naechster_schritt`` vorgibt - er kennt die Reihenfolge
+        nicht und kann sie deshalb auch nicht anders auslegen als der
+        oertliche Lauf.
+
+        Drei Arten von Antwort: ein ``schritt`` (``art`` sagt, welche),
+        ``warten`` (der Takt der Beitrittsanfragen laesst gerade keine zu)
+        oder ``weiter``/``fertig``.
+
         Hinter ``_nur_lokal`` wie jeder schreibende Weg - und er **ist**
         schreibend: Ohne offenen Lauf friert er die Kampagnenliste ein. Ueber
         den SSH-Tunnel kommt der Aufruf als 127.0.0.1 an und gilt damit als
         oertlich.
         """
         _nur_lokal(request)
-        from fbgroups.marketing import automatik, lauf
+        from fbgroups.marketing import (
+            automatik,
+            grenzen,
+            lauf,
+            qualifikation,
+            zielgruppe,
+        )
         from fbgroups.marketing.beitrag import mit_link
 
         with SqliteStore(pfad) as gruppen_store:
             gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
 
         with _store() as store:
+            if start is not None and start.neu and (offen := store.offener_lauf()) is not None:
+                # Auf Ansage: Der offene Lauf wird geschlossen, damit die
+                # naechste Zeile eine frische Kampagnenliste einfriert. Ohne
+                # diesen Weg kaeme eine spaeter angelegte Kampagne nie dran.
+                store.setze_lauf_status(
+                    int(offen["lauf_id"]),
+                    LaufStatus.FERTIG.value,
+                    meldung="Von Hand abgeschlossen, um eine neue Kampagnenliste "
+                    "einzufrieren (campaign automatik --neu).",
+                )
             lauf_id, neu = automatik.hole_oder_starte_lauf(
                 store,
                 ziel_je_gruppe=lauf.ZIEL_JE_GRUPPE,
@@ -1113,14 +1360,93 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 # eingefrorene Liste.
                 nur=list(start.kampagnen) if start else [],
             )
-            fortschritt = lauf.lies_fortschritt(store, lauf_id, gruppen)
+            if lauf_id == 0:
+                # Kein Lauf begonnen, weil es nichts einzufrieren gab. Die
+                # Auskunft gehoert hierher und nicht in einen leeren Lauf:
+                # Ein Lauf ohne Kampagnen wird nie fertig und wuerde bei
+                # jedem Start wieder angeboten.
+                return JSONResponse(
+                    {
+                        "schritt": None,
+                        "weiter": False,
+                        "fertig": False,
+                        "meldung": (
+                            "Keine aktive Kampagne - es wurde kein Lauf begonnen. "
+                            "In der Uebersicht auf 'active' setzen, dann erneut starten."
+                        ),
+                    }
+                )
+
+            # Die Tagesmenge der Beitrittsanfragen gilt ueber alle Kampagnen
+            # und wird hier bestimmt, nicht auf dem Arbeitsrechner: Sonst
+            # haette jedes Fenster sein eigenes Kontingent.
+            lagen = automatik.aktionslage(store, cfg)
+            # Dieselben Angaben wie im oertlichen Lauf (``automatik.stand``).
+            # Sie muessen hier stehen und nicht auf dem Arbeitsrechner: Der
+            # Server haelt den Bestand, und eine Rangfolge, die an zwei
+            # Stellen gerechnet wird, ist zwei Rangfolgen.
+            zielregeln = zielgruppe.regeln_aus_config(cfg)
+            heute = datetime.now(UTC).date().isoformat()
+            fortschritt = lauf.lies_fortschritt(
+                store,
+                lauf_id,
+                gruppen,
+                mitgliedschaft_pflicht=automatik.mitgliedschaft_pflicht(cfg),
+                qualifikation_pflicht=qualifikation.pflicht(cfg),
+                aktionen=lagen,
+                zielbefunde={
+                    gid: zielgruppe.aus_group(g, zielregeln)
+                    for gid, g in gruppen.items()
+                },
+                regeln_pflicht=automatik.regeln_zuerst(cfg),
+                heute_je_gruppe=store.versuche_heute_je_gruppe(
+                    heute, Texttyp.KOMMENTAR.value
+                ),
+                gruppenlimit=grenzen.einstellungen(cfg)
+                .fuer(grenzen.Aktion.KOMMENTAR)
+                .je_gruppe_taeglich,
+            )
             schritt = lauf.naechster_schritt(fortschritt)
 
-            # Kein Schritt heisst nicht immer "fertig": Vielleicht hat die
+            # Kein Schritt heisst nicht immer "fertig": Vielleicht wartet der
+            # Lauf auf den Takt der Beitrittsanfragen, vielleicht hat die
             # naechste Gruppe alle Fassungen verbraucht, ohne ihr Ziel zu
             # erreichen. Dann wird sie hier als erschoepft vermerkt, und der
             # naechste Aufruf kommt weiter.
             if schritt is None:
+                if warten := fortschritt.wartet_auf_beitritt:
+                    # Gewartet wird, nicht vorgezogen: Sonst waere die
+                    # geforderte Reihenfolge eine Empfehlung, die jeder
+                    # Mindestabstand aushebelt. Die Sekundenzahl kommt vom
+                    # Server, damit der Arbeitsrechner die Regel nicht ein
+                    # zweites Mal rechnet.
+                    return JSONResponse(
+                        {
+                            "schritt": None,
+                            "weiter": False,
+                            "fertig": False,
+                            "warten": automatik.wartesekunden(warten),
+                            "meldung": f"Beitrittstakt: {warten}",
+                        }
+                    )
+                # **Dieselbe Frage fuer jede andere Aktion** (14.09.2026).
+                # Der Warteweg gab es nur fuer die Beitrittsanfrage; stand
+                # der Takt der **Kommentare** im Weg, meldete der Server
+                # "nichts mehr zu tun", und der Lauf beendete sich - bei
+                # 31 von 2700 Kommentaren und zwei Minuten Restzeit.
+                # ``wartet_auf_takt`` sucht den Schritt ein zweites Mal mit
+                # den Bremsen als frei: Kommt dann einer, war der Takt der
+                # einzige Grund.
+                if warten := fortschritt.wartet_auf_takt:
+                    return JSONResponse(
+                        {
+                            "schritt": None,
+                            "weiter": False,
+                            "fertig": False,
+                            "warten": automatik.wartesekunden(warten),
+                            "meldung": f"Takt: {warten}",
+                        }
+                    )
                 kampagne = fortschritt.naechste_kampagne
                 gruppe = kampagne.naechste_gruppe if kampagne else None
                 if gruppe is not None and lauf.gruppe_ist_erschoepft(gruppe):
@@ -1129,6 +1455,24 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                         gruppe.group_id,
                         f"nur {gruppe.veroeffentlicht} von {gruppe.ziel} Kommentaren moeglich",
                     )
+                    return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
+                # Den Stand festschreiben, bevor die Antwort hinausgeht.
+                #
+                # Der oertliche Lauf tut das am Ende von ``fuehre_lauf_aus``;
+                # der Fernbetrieb hatte keine solche Stelle - er fragt nur
+                # nach dem naechsten Schritt und hoert auf, wenn keiner mehr
+                # kommt. Der Lauf blieb damit auf ``laeuft`` stehen, obwohl
+                # die Meldung "erfolgreich abgeschlossen" lautete, und
+                # ``offener_lauf`` bot ihn beim naechsten Start wieder an:
+                # mit seiner eingefrorenen Kampagnenliste und seinem
+                # eingefrorenen ``ziel_je_gruppe``. Eine Erhoehung von 5 auf
+                # 10 Kommentare je Gruppe waere so nie wirksam geworden.
+                automatik._stand_fortschreiben(store, lauf_id, fortschritt)
+                if not fortschritt.kampagnen:
+                    # Ein alter Lauf ohne jede Kampagne ist damit geschlossen.
+                    # ``weiter`` schickt den Treiber gleich noch einmal los:
+                    # Dann friert er eine frische Liste ein, statt dass der
+                    # Mensch denselben Befehl ein zweites Mal eintippt.
                     return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
                 return JSONResponse(
                     {
@@ -1139,57 +1483,248 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     }
                 )
 
-            vorschlag = store.vorschlag(
-                schritt.campaign_id, schritt.group_id, schritt.texttyp, schritt.nummer
+            if schritt.art is lauf.Schrittart.BEWERTEN:
+                # Die Neubewertung braucht keinen Browser - sie bleibt auf
+                # dem Server. Ausgefuehrt wird sie ausserhalb dieses Blocks:
+                # Sie oeffnet den Bestand selbst, und zwei offene Schreibwege
+                # auf dieselbe Datei sind eine Sperre, die niemand braucht.
+                zu_bewerten = schritt.campaign_id
+                kampagnenname = schritt.gruppe_name
+                nur_gruppen = {
+                    link.group_id for link in store.links_for_campaign(zu_bewerten)
+                }
+            elif schritt.art is lauf.Schrittart.REGELN:
+                # Schritt 1: nachsehen, was die Gruppe erlaubt - vor der
+                # Anfrage. Der Arbeitsrechner holt die Seite (er hat den
+                # angemeldeten Browser) und wertet sie mit derselben reinen
+                # Funktion aus wie der oertliche Lauf; hier kommt nur der
+                # Befund zurueck.
+                gruppe = gruppen.get(schritt.group_id)
+                if gruppe is None or not gruppe.url_canonical:
+                    store.ueberspringe_gruppe(
+                        lauf_id, schritt.campaign_id, schritt.group_id, "keine Gruppen-URL"
+                    )
+                    return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
+                return JSONResponse(
+                    {
+                        "schritt": {
+                            "lauf_id": lauf_id,
+                            "neu": neu,
+                            "art": lauf.Schrittart.REGELN.value,
+                            "campaign_id": schritt.campaign_id,
+                            "group_id": schritt.group_id,
+                            "gruppe_name": schritt.gruppe_name,
+                            "gruppen_url": gruppe.url_canonical,
+                            "nummer": 0,
+                            "texttyp": "",
+                            "kommentar_nr": 1,
+                            "kommentar_ziel": 1,
+                            "ziel": "",
+                            "tracking_code": "",
+                            "text": "",
+                            "bisherige_post_urls": [],
+                        },
+                        "weiter": True,
+                        "fertig": False,
+                        "fortschritt": lauf.fortschrittstext(fortschritt),
+                    }
+                )
+            elif schritt.art is lauf.Schrittart.BEITRITT:
+                gruppe = gruppen.get(schritt.group_id)
+                if gruppe is None or not gruppe.url_canonical:
+                    # Ohne Adresse laesst sich keine Anfrage stellen. Fuer
+                    # diesen Lauf beiseitelegen, nicht verurteilen.
+                    store.ueberspringe_gruppe(
+                        lauf_id, schritt.campaign_id, schritt.group_id, "keine Gruppen-URL"
+                    )
+                    return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
+                return JSONResponse(
+                    {
+                        "schritt": {
+                            "lauf_id": lauf_id,
+                            "neu": neu,
+                            "art": lauf.Schrittart.BEITRITT.value,
+                            "campaign_id": schritt.campaign_id,
+                            "group_id": schritt.group_id,
+                            "gruppe_name": schritt.gruppe_name,
+                            "gruppen_url": gruppe.url_canonical,
+                            "nummer": 0,
+                            "texttyp": "",
+                            "kommentar_nr": 1,
+                            "kommentar_ziel": 1,
+                            "ziel": "",
+                            "tracking_code": "",
+                            "text": "",
+                            "bisherige_post_urls": [],
+                        },
+                        "weiter": True,
+                        "fertig": False,
+                        "fortschritt": lauf.fortschrittstext(fortschritt),
+                    }
+                )
+            else:
+                zu_bewerten = ""
+
+                # Fehlende Fassungen werden **erzeugt**, nicht als
+                # Erschoepfung gemeldet. Der Fernbetrieb ist der Weg, den der
+                # Nutzer faehrt; ohne diesen Schritt erklaerte er jede Gruppe,
+                # fuer die nie ``campaign text`` lief, fuer erschoepft - am
+                # 11.09.2026 waren das 44 von 45 in einem einzigen Lauf.
+                try:
+                    vorschlag = automatik.texte_sicherstellen(store, schritt, gruppen, cfg)
+                except Exception as exc:  # noqa: BLE001 - eine Gruppe, nicht der Lauf
+                    # Fehlerisolierung: Eine Vorlage, die wirft, kostet diese
+                    # Gruppe den Durchgang und nicht den ganzen Lauf.
+                    store.ueberspringe_gruppe(
+                        lauf_id,
+                        schritt.campaign_id,
+                        schritt.group_id,
+                        str(exc).splitlines()[0][:160],
+                    )
+                    return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
+
+                campaign = store.load_campaign(schritt.campaign_id)
+                link = store.link_for(schritt.campaign_id, schritt.group_id)
+                if vorschlag is None or campaign is None or link is None:
+                    # Beim Beitrag faellt nur der Beitrag aus, nicht die Gruppe:
+                    # Die zehn Kommentare haengen nicht daran, ob ein
+                    # Beitragstext erzeugt wurde.
+                    if schritt.texttyp is Texttyp.POST:
+                        store.set_post_status(
+                            schritt.campaign_id,
+                            schritt.group_id,
+                            PostStatus.FEHLGESCHLAGEN,
+                            lauf.KEINE_VORLAGE,
+                        )
+                    else:
+                        store.setze_kommentar_erschoepft(
+                            schritt.campaign_id, schritt.group_id, lauf.KEINE_VORLAGE
+                        )
+                    return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
+
+                gruppe = gruppen.get(schritt.group_id)
+                if gruppe is None or not gruppe.url_canonical:
+                    # Ohne Adresse ist hier nichts zu machen - weder ein Beitrag
+                    # noch ein Kommentar. Beide Achsen werden geschlossen, sonst
+                    # boete der naechste Aufruf denselben Schritt erneut an.
+                    store.setze_kommentar_erschoepft(
+                        schritt.campaign_id, schritt.group_id, "keine Gruppen-URL"
+                    )
+                    store.set_post_status(
+                        schritt.campaign_id,
+                        schritt.group_id,
+                        PostStatus.FEHLGESCHLAGEN,
+                        "keine Gruppen-URL",
+                    )
+                    return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
+
+                # Das Ziel wechselt je Fassung: ungerade in den Browser, gerade in
+                # den Store. Der Browser-Code entsteht dabei beim ersten Bedarf -
+                # kein Code auf Vorrat, denn jeder ist endgueltig.
+                ziel = lauf.ziel_zu_nummer(schritt.nummer)
+                if ziel == "browser" and not link.tracking_code_browser:
+                    store.vergib_browsercode(
+                        schritt.campaign_id, schritt.group_id, app_base_url(cfg)
+                    )
+                    link = store.link_for(schritt.campaign_id, schritt.group_id) or link
+                # Der oeffentliche Deckname, falls er noch fehlt. Dieselbe
+                # Ueberlegung wie beim Browser-Code direkt darueber: Er
+                # entsteht beim ersten Bedarf und bleibt dann stehen.
+                if not link.public_code:
+                    link = store.vergib_kurzcodes(schritt.campaign_id, schritt.group_id) or link
+
+                # Der fertige Text mit eingesetztem Tracking-Link. Er entsteht
+                # hier und nur hier - ``beitrag.mit_link`` bleibt die einzige
+                # Stelle, an der {link} aufgeloest wird. Der Arbeitsrechner
+                # bekommt ihn zum Einfuegen und baut ihn nie selbst.
+                text = mit_link(campaign, link, vorschlag.text, config=cfg, ziel=ziel)
+                bisherige = sorted(store.bisherige_post_urls(schritt.group_id))
+
+                # **Die Entscheidungsgrundlagen gehen mit** (14.09.2026).
+                # Der Arbeitsrechner haelt keinen Bestand - er kann weder
+                # die gelesenen Gruppenregeln noch die Klasse der Gruppe
+                # nachschlagen. Ohne diese drei Angaben nahm er deshalb den
+                # lautesten Beitrag und setzte den vorbereiteten Text
+                # darunter: kein Inhaltsurteil, keine Regeln, kein Anspruch.
+                #
+                # Gerechnet wird hier, ausgewertet dort - dieselbe Aufteilung
+                # wie bei den Gruppenregeln (``lies_regeln``): Der Bestand
+                # liegt, wo gezaehlt wird; die reine Regel laeuft, wo der
+                # Browser steht.
+                erlaubnis = automatik.erlaubnis_fuer(store, schritt.group_id)
+                anspruch = automatik.anspruch_fuer(cfg, schritt.group_id)
+                vorgaben = {
+                    "erlaubnis": {
+                        "kommentare": erlaubnis.kommentare,
+                        "beitraege": erlaubnis.beitraege,
+                        "links": erlaubnis.links,
+                        "werbung": erlaubnis.werbung,
+                        "privatkontakt": erlaubnis.privatkontakt,
+                        "regeln_gelesen": erlaubnis.regeln_gelesen,
+                    },
+                    "anspruch": {
+                        "mindestrelevanz": anspruch.mindestrelevanz.value,
+                        "verlangt_strecke": anspruch.verlangt_strecke,
+                    },
+                    # Damit derselbe Satz nicht zweimal in derselben Gruppe
+                    # steht - ueber **alle** Kampagnen, wie oertlich auch.
+                    "verbrauchte_vorlagen": sorted(
+                        store.verwendete_vorlagen(
+                            schritt.group_id, Texttyp.KOMMENTAR.value
+                        )
+                    ),
+                }
+
+        if zu_bewerten:
+            # Schritt 3 des Ablaufs, auf dem Server ausgefuehrt: Was wir
+            # inzwischen wissen, entscheidet ueber die Rangfolge, nach der
+            # gearbeitet wird. Scheitert sie, wird sie trotzdem vermerkt -
+            # sonst stuende die Kampagne bei jedem Aufruf wieder davor.
+            from fbgroups.rescoring import bewerte_neu
+
+            meldung = f"{kampagnenname}: neu bewertet"
+            try:
+                ergebnis = bewerte_neu(cfg, nur=nur_gruppen)
+                meldung = (
+                    f"{kampagnenname}: {ergebnis.bewertet} Gruppen bewertet, "
+                    f"{ergebnis.geaendert} mit geaendertem Score"
+                )
+            except Exception as exc:  # noqa: BLE001 - eine Kampagne, nicht der Lauf
+                meldung = f"{kampagnenname}: Neubewertung fehlgeschlagen ({exc})"
+            with _store() as store:
+                store.merke_bewertung(lauf_id, zu_bewerten)
+            return JSONResponse(
+                {"schritt": None, "weiter": True, "fertig": False, "meldung": meldung}
             )
-            campaign = store.load_campaign(schritt.campaign_id)
-            link = store.link_for(schritt.campaign_id, schritt.group_id)
-            if vorschlag is None or not vorschlag.text.strip() or campaign is None or link is None:
-                store.setze_kommentar_erschoepft(
-                    schritt.campaign_id, schritt.group_id, "kein Kommentartext vorhanden"
-                )
-                return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
-
-            gruppe = gruppen.get(schritt.group_id)
-            if gruppe is None or not gruppe.url_canonical:
-                store.setze_kommentar_erschoepft(
-                    schritt.campaign_id, schritt.group_id, "keine Gruppen-URL"
-                )
-                return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
-
-            # Das Ziel wechselt je Fassung: ungerade in den Browser, gerade in
-            # den Store. Der Browser-Code entsteht dabei beim ersten Bedarf -
-            # kein Code auf Vorrat, denn jeder ist endgueltig.
-            ziel = lauf.ziel_zu_nummer(schritt.nummer)
-            if ziel == "browser" and not link.tracking_code_browser:
-                store.vergib_browsercode(
-                    schritt.campaign_id, schritt.group_id, app_base_url(cfg)
-                )
-                link = store.link_for(schritt.campaign_id, schritt.group_id) or link
-
-            # Der fertige Text mit eingesetztem Tracking-Link. Er entsteht
-            # hier und nur hier - ``beitrag.mit_link`` bleibt die einzige
-            # Stelle, an der {link} aufgeloest wird. Der Arbeitsrechner
-            # bekommt ihn zum Einfuegen und baut ihn nie selbst.
-            text = mit_link(campaign, link, vorschlag.text, config=cfg, ziel=ziel)
-            bisherige = sorted(store.bisherige_post_urls(schritt.group_id))
 
         return JSONResponse(
             {
                 "schritt": {
                     "lauf_id": lauf_id,
                     "neu": neu,
+                    "art": lauf.Schrittart.TEXT.value,
                     "campaign_id": schritt.campaign_id,
                     "group_id": schritt.group_id,
                     "gruppe_name": schritt.gruppe_name,
                     "gruppen_url": gruppe.url_canonical,
                     "nummer": schritt.nummer,
+                    # ``post`` oder ``kommentar``. Der Arbeitsrechner
+                    # entscheidet das nicht selbst - er fuehrt aus, was der
+                    # Bestand vorgibt.
+                    "texttyp": schritt.texttyp.value,
                     "kommentar_nr": schritt.kommentar_nr,
                     "kommentar_ziel": schritt.kommentar_ziel,
                     "ziel": ziel,
                     "tracking_code": link.code_fuer(ziel),
                     "text": text,
+                    # Die Adresse **getrennt vom Text**: Waehlt der
+                    # Arbeitsrechner gleich einen Anlasstext statt dieses
+                    # vorbereiteten, traegt jener wieder ``{link}`` - und
+                    # braucht dieselbe Adresse. Ohne dieses Feld stand am
+                    # 14.09.2026 "{link}" woertlich in einem Kommentar.
+                    "link_url": link.url_fuer(ziel),
                     "bisherige_post_urls": bisherige,
+                    "vorgaben": vorgaben,
                 },
                 "weiter": True,
                 "fertig": False,
@@ -1218,6 +1753,42 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             if campaign is None or link is None:
                 raise HTTPException(status_code=404, detail="Kampagne oder Gruppe unbekannt")
 
+            if meldung.kein_anlass:
+                # **Nichts buchen.** Es ist ein Ergebnis, kein Fehlversuch:
+                # Die Gruppe wird fuer diesen Lauf beiseitegelegt - genau
+                # wie es ``automatik._fuehre_schritt_aus`` oertlich tut -,
+                # und morgen stehen dort andere Beitraege. Als Versuch
+                # gebucht zaehlte es gegen die Fassung und irgendwann gegen
+                # die Gruppe, obwohl nichts gegen sie vorliegt.
+                if meldung.lauf_id:
+                    store.ueberspringe_gruppe(
+                        meldung.lauf_id,
+                        meldung.campaign_id,
+                        meldung.group_id,
+                        f"kein Anlass: {meldung.fehler}"[:160],
+                    )
+                return JSONResponse({"ok": True, "stand": "kein_anlass"})
+
+            # **Zuerst der Text, dann der Ausgang** - wie im oertlichen Lauf
+            # (``automatik._buche``). ``melde_vorschlag`` spiegelt den Text
+            # bei Erfolg ins Paar; danach einzutragen waere zu spaet, und im
+            # Bestand stuende die vorbereitete Fassung statt der abgesetzten.
+            if meldung.vorlage_key:
+                from fbgroups.marketing.vorlagen import anlasstext_zu
+
+                wirklich = anlasstext_zu(
+                    cfg, meldung.vorlage_key, mit_link=meldung.mit_link
+                )
+                if wirklich:
+                    store.merke_verwendeten_text(
+                        meldung.campaign_id,
+                        meldung.group_id,
+                        meldung.texttyp,
+                        meldung.nummer,
+                        wirklich,
+                        meldung.vorlage_key,
+                    )
+
             ergebnis = melde_vorschlag(
                 store,
                 campaign,
@@ -1238,6 +1809,18 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     meldung.group_id,
                     meldung.fehler or "keine Beitraege mehr",
                 )
+            if meldung.gruppe_beiseite and meldung.lauf_id:
+                # Gebucht ist der Ausgang bereits (oben, ueber
+                # ``melde_vorschlag``) - das hier ist die Fehlerisolierung:
+                # Die Gruppe kommt in **diesem** Lauf nicht wieder dran,
+                # damit der naechste Schritt zur naechsten Gruppe geht.
+                store.ueberspringe_gruppe(
+                    meldung.lauf_id,
+                    meldung.campaign_id,
+                    meldung.group_id,
+                    f"technisch: {meldung.fehler}"[:160],
+                )
+
             if isinstance(ergebnis, Sperre):
                 return JSONResponse({"ok": False, "grund": ergebnis.grund})
             return JSONResponse({"ok": True, "stand": ergebnis.status.value})
@@ -1303,6 +1886,45 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             }
         )
 
+    @app.post("/automatik/regeln/ergebnis")
+    def automatik_regeln_ergebnis(meldung: RegelErgebnis, request: Request):  # noqa: ANN202
+        """Traegt fest, was auf **einer** Gruppenseite an Regeln stand.
+
+        Derselbe Weg wie ``store.merke_regeln`` im oertlichen Lauf, und
+        derselbe Vorbehalt: Ein **nicht gelesener** Befund schreibt nichts.
+        Eine Anmeldewand ist kein Beleg dafuer, dass eine frueher gelesene
+        Regel weg ist - dieselbe Ueberlegung wie bei ``upsert_groups`` mit
+        COALESCE.
+
+        Damit dieselbe Gruppe trotzdem nicht bei jedem Durchgang wiederkommt,
+        wird sie dann fuer diesen Lauf beiseitegelegt - wie bei einer
+        gescheiterten Beitrittsanfrage.
+        """
+        _nur_lokal(request)
+        from fbgroups.marketing.qualifikation import Regelbefund
+
+        with _store() as store:
+            if meldung.gelesen:
+                store.merke_regeln(
+                    meldung.group_id,
+                    Regelbefund(
+                        gelesen=True,
+                        keine_links=meldung.keine_links,
+                        keine_werbung=meldung.keine_werbung,
+                        freigabe_noetig=meldung.freigabe_noetig,
+                        neue_ohne_links=meldung.neue_ohne_links,
+                    ),
+                )
+                return JSONResponse({"ok": True, "vermerkt": True})
+            if meldung.campaign_id and (offen := store.offener_lauf()) is not None:
+                store.ueberspringe_gruppe(
+                    int(offen["lauf_id"]),
+                    meldung.campaign_id,
+                    meldung.group_id,
+                    "Gruppenseite nicht lesbar",
+                )
+            return JSONResponse({"ok": True, "vermerkt": False})
+
     @app.post("/automatik/beitritt/ergebnis")
     def automatik_beitritt_ergebnis(meldung: BeitrittErgebnis, request: Request):  # noqa: ANN202
         """Traegt den Ausgang **einer** Beitrittsanfrage ein.
@@ -1323,6 +1945,16 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     meldung.group_id, mitglied=meldung.ausgang == "bereits_mitglied"
                 )
                 return JSONResponse({"ok": True, "vermerkt": True})
+            # Nichts geschehen, nichts vermerkt - aber im Lauf wird die Gruppe
+            # beiseitegelegt: Sonst boete der naechste Durchgang dieselbe
+            # Gruppe wieder an, und der Lauf kaeme nicht zur naechsten.
+            if meldung.campaign_id and (offen := store.offener_lauf()) is not None:
+                store.ueberspringe_gruppe(
+                    int(offen["lauf_id"]),
+                    meldung.campaign_id,
+                    meldung.group_id,
+                    f"Beitritt: {meldung.ausgang} {meldung.bemerkung}".strip()[:160],
+                )
             return JSONResponse({"ok": True, "vermerkt": False})
 
     @app.post("/automatik/anreichern/naechste")
@@ -1465,13 +2097,13 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             if campaign is None:
                 raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
 
-            reihe = arbeitsreihenfolge(store, campaign_id, gruppen)
+            reihe = arbeitsreihenfolge(store, campaign_id, gruppen, cfg)
             if not reihe:
                 # Der einzige verbliebene Grund, die Seite zu verschliessen.
                 # Pausiert und gestoppt halten nur noch das Veroeffentlichen
                 # an - Texte vorbereiten geht weiter.
                 bericht = _kette_automatisch(store, campaign, gruppen, cfg)
-                reihe = arbeitsreihenfolge(store, campaign_id, gruppen)
+                reihe = arbeitsreihenfolge(store, campaign_id, gruppen, cfg)
                 if not reihe:
                     return HTMLResponse(
                         render_sperre(Sperre(Grund.KEINE_GRUPPEN), campaign_id, bericht)
@@ -1596,10 +2228,17 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         ein Textfeld darin waere ein Kanal, den niemand geoeffnet haben wollte.
 
         Geprueft wird mit **derselben** ``pruefe_platzhalter`` wie jeder
-        andere Text: genau ein ``{link}``, keine ausgeschriebene Adresse, kein
-        codeaehnliches Muster. Wer hier eine Adresse hineinschriebe, haette
-        einen Beitrag, der richtig aussieht und dessen Gruppe nie einen Klick
-        gutgeschrieben bekommt - der Fehler, den niemand bemerkt.
+        andere Text: hoechstens ein ``{link}`` (beim Beitrag genau einer),
+        keine ausgeschriebene Adresse, kein codeaehnliches Muster. Wer hier
+        eine Adresse hineinschriebe, haette einen Beitrag, der richtig
+        aussieht und dessen Gruppe nie einen Klick gutgeschrieben bekommt -
+        der Fehler, den niemand bemerkt.
+
+        Der Zweck faehrt dabei mit: Ein **Kommentar** darf seit dem
+        11.09.2026 ohne Link auskommen, weil Gruppen genau daran ablehnen
+        ("Link in Kommentar"). Ohne den Zweck wiese der Server einen gueltigen
+        Kommentar zurueck, und zwar an der Stelle, an der ein Mensch ihn
+        gerade von Hand geschrieben hat.
 
         Zurueck kommt der gespeicherte Text **und** die angezeigte Fassung mit
         eingesetztem Link. Der Browser rechnet das eine nicht in das andere
@@ -1612,7 +2251,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
 
         text = meldung.text.strip()
         try:
-            pruefe_platzhalter(text)
+            pruefe_platzhalter(text, texttyp=meldung.texttyp)
         except UngueltigerText as exc:
             return JSONResponse({"ok": False, "meldung": str(exc)})
 
@@ -1823,7 +2462,16 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         try:
             with get_browser_context(cfg, headless=False) as context:
                 if meldung.texttyp == Texttyp.POST:
-                    erfolg = post_to_group(context, group.url_canonical, text)
+                    ausgang = post_to_group(context, group.url_canonical, text)
+                    erfolg = ausgang.erfolg
+                    # Der Ausgang sagt mehr als "ging es?": ``link_sichtbar``
+                    # heisst, dass die nackte Adresse im Beitrag steht, weil
+                    # die Vorschaukarte ohne sie nicht gehalten hat. Das ist
+                    # kein Fehlschlag - der Beitrag steht und wird gezaehlt -,
+                    # aber es gehoert ins Protokoll und nicht in die Stille.
+                    if ausgang.hinweis:
+                        fehler_text = ausgang.hinweis
+                        console.print(f"[yellow]{ausgang.hinweis}[/yellow]")
                 else:
                     console.print("[cyan]Fetching posts for commenting...[/cyan]")
                     raw_posts = fetch_top_posts(context, group.url_canonical, group.group_id)
@@ -1847,7 +2495,14 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                         if offene_posts:
                             best_post = max(offene_posts, key=lambda p: p.interactions + p.comments)
                             used_post_url = best_post.post_url
-                            erfolg = comment_on_post(context, used_post_url, text)
+                            # ``comment_on_post`` liefert seit dem 12.09.2026
+                        # einen Ausgang statt eines ``bool``: Er sagt auch,
+                        # ob die Gruppe gerade nichts mehr annimmt oder der
+                        # Kommentar auf eine Freigabe wartet.
+                        ausgang = comment_on_post(context, used_post_url, text)
+                        erfolg = ausgang.erfolg
+                        if ausgang.hinweis:
+                            fehler_text = ausgang.hinweis[:100]
                         else:
                             fehler_text = "Alle aktuellen Beiträge wurden bereits kommentiert."
                     else:
@@ -2513,22 +3168,32 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         stiller Umweg wuerde das verschleiern.
         """
         with _store() as store:
-            link = store.resolve_code(tracking_code)
-            if link is None:
+            treffer = store.aufloesen(tracking_code)
+            if treffer is None:
                 store.audit("klick_unbekannter_code", tracking_code)
                 raise HTTPException(status_code=404, detail="Unbekannter Tracking-Code")
 
+            link = treffer.link
+            # **Ab hier gilt der innere Code.** In der Adresse kann der
+            # oeffentliche Deckname gestanden haben; gezaehlt, entdoppelt und
+            # gespeichert wird unter dem inneren. Sonst stuenden dieselben
+            # Klicks je nach Alter des Beitrags unter zwei Codes, und jede
+            # Auswertung zerfiele in zwei Haelften.
+            intern = treffer.interner_code
+            oeffentlich = treffer.oeffentlicher_code
+
             user_agent = request.headers.get("user-agent", "")
-            if not _ist_linkvorschau(user_agent):
+            vorschau = _ist_linkvorschau(user_agent)
+            if not vorschau:
                 besucher = _visitor_hash(
                     store,
                     request.client.host if request.client else "",
                     user_agent,
                 )
-                if not store.klick_bereits_gezaehlt(tracking_code, besucher):
+                if not store.klick_bereits_gezaehlt(intern, besucher):
                     store.record_event(
                         TrackingEvent(
-                            tracking_code=tracking_code,
+                            tracking_code=intern,
                             campaign_id=link.campaign_id,
                             group_id=link.group_id,
                             event_type=EventType.CLICK,
@@ -2536,9 +3201,12 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                             source="redirect",
                         )
                     )
-            ziel, ist_store = _ziel_url(store, tracking_code, cfg)
+            # Der Play-Store-``referrer`` traegt den **oeffentlichen** Code:
+            # Er steht gleich in der Adresszeile des Menschen. Was aus der App
+            # damit zurueckkommt, loest ``POST /events`` wieder auf.
+            ziel, ist_store = _ziel_url(store, intern, cfg, referrer=treffer.oeffentlicher_code)
 
-            if ist_store and not _ist_linkvorschau(user_agent):
+            if ist_store and not vorschau:
                 # Eine eigene Stufe, und sie heisst mit Bedacht nicht
                 # "Installation": Gemessen ist, dass wir diesen Menschen zum
                 # Play Store geschickt haben. Ob er dort installiert, meldet
@@ -2546,7 +3214,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 # der App selbst.
                 store.record_event(
                     TrackingEvent(
-                        tracking_code=tracking_code,
+                        tracking_code=intern,
                         campaign_id=link.campaign_id,
                         group_id=link.group_id,
                         event_type=EventType.STORE_VISIT,
@@ -2559,6 +3227,13 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     )
                 )
 
+        # Der Vorschau-Abruf bekommt die Karte, nicht das Ziel - aber nur,
+        # wenn ein Bild eingetragen ist. Ohne Bild zeigt Facebook ohnehin
+        # keine Karte, und die Weiterleitung zum Ziel ist dann das Bessere:
+        # Dort steht wenigstens die Karte der Landingpage oder des Stores.
+        if vorschau and cfg.get("marketing", "vorschau", "bild", default=""):
+            return HTMLResponse(_vorschauseite(cfg, str(request.url), ziel))
+
         # 302, nicht 301: Ein dauerhaft gemerkter Umzug wuerde spaetere Klicks
         # am Zaehler vorbeifuehren.
         if ist_store:
@@ -2567,7 +3242,10 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             # daneben brauchte niemand und Google reichte es nicht weiter.
             return RedirectResponse(url=ziel, status_code=302)
         trenner = "&" if "?" in ziel else "?"
-        return RedirectResponse(url=f"{ziel}{trenner}ref={tracking_code}", status_code=302)
+        # ``ref`` traegt den oeffentlichen Code: Er landet in der Adresszeile
+        # des Besuchers und spaeter in den Meldungen der Web-App. Dort wird er
+        # wieder aufgeloest - gespeichert wird nie der Deckname.
+        return RedirectResponse(url=f"{ziel}{trenner}ref={oeffentlich}", status_code=302)
 
     @app.post("/events")
     def melde_ereignis(meldung: EventMeldung, request: Request):  # noqa: ANN202
@@ -2613,10 +3291,17 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             tracking_code = ""
 
             if meldung.tracking_code:
-                link = store.resolve_code(meldung.tracking_code)
-                if link is not None:
-                    campaign_id, group_id = link.campaign_id, link.group_id
-                    tracking_code = meldung.tracking_code
+                treffer = store.aufloesen(meldung.tracking_code)
+                if treffer is not None:
+                    campaign_id = treffer.link.campaign_id
+                    group_id = treffer.link.group_id
+                    # **Der innere Code, nicht der gemeldete.** Was die App
+                    # meldet, hat sie aus ``?ref=`` oder aus dem
+                    # Play-``referrer``, und dort steht der oeffentliche
+                    # Deckname. Ihn zu speichern zerlegte jede Auswertung in
+                    # zwei Haelften - eine fuer Beitraege vor dem 14.09.2026
+                    # und eine danach.
+                    tracking_code = treffer.interner_code
                 else:
                     # Ein Code, den es nicht gibt (Tippfehler, alter Beitrag,
                     # abgeschnittene URL). Ihn zu speichern erfaende eine

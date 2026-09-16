@@ -22,7 +22,10 @@ def test_fetch_top_posts_extracts_correct_metrics():
             self.data = data
             
         def locator(self, selector):
-            if "a[href*='/groups/']" in selector:
+            # Seit dem 10.09.2026 fragt fetch_top_posts alle Verweise ab
+            # und filtert sie mit ``urls.beitragslinks`` - der Selektor ist
+            # deshalb "a[href]" und nicht mehr "a[href*='/groups/']".
+            if selector.startswith("a[href"):
                 # Das ist der Link
                 class LinkElement:
                     def __init__(self, data):

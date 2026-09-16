@@ -43,6 +43,34 @@ marketing:
   # Vorgabe fuer Kampagnen, die nichts sagen.
   ziel: store
 
+  # --- Wie der Link im Beitrag aussieht ---------------------------------
+  #
+  # Facebook, WhatsApp und Telegram rufen einen frisch geposteten Link selbst
+  # ab und bauen daraus die Vorschaukarte: Bild, Titel, ein Satz. Ohne Karte
+  # steht im Beitrag die nackte Adresse - "go.b-tarikak.de/r/FB-SYR-BER-010-B"
+  # liest sich wie ein Code und nicht wie eine App.
+  #
+  # Ohne diesen Block folgt der Abruf der Weiterleitung und nimmt, was am
+  # Ziel steht: beim Store-Code die Karte von Google, beim Browser-Code die
+  # der Landingpage - zwei verschiedene Karten fuer dieselbe App. Mit dem
+  # Block antwortet /r/{code} den Vorschau-Abrufen selbst, und jeder Beitrag
+  # zeigt dasselbe.
+  #
+  # Ein Klick auf die Karte fuehrt weiterhin auf /r/{code} und wird gezaehlt -
+  # die Karte ersetzt die Weiterleitung nicht, sie beschreibt sie nur.
+  #
+  # bild: absolute Adresse, oeffentlich erreichbar, mindestens 200x200 -
+  # kleinere zeigt Facebook gar nicht. Ist es leer, bleibt es beim bisherigen
+  # Verhalten (Weiterleitung auch fuer den Vorschau-Abruf).
+  vorschau:
+    titel: "بطريقك — أرسل أغراضك مع مسافر موثوق"
+    # Was unter der Ueberschrift der Karte steht. Ohne diesen Wert zeigt
+    # Facebook dort die Domain - "go.b-tarikak.de" liest sich wie eine
+    # technische Adresse und nicht wie eine App. Leer heisst: der Titel.
+    seitenname: "بطريقك"
+    beschreibung: "منصة تربط المسافرين من وإلى سوريا بمن يريد إرسال أوراق أو أدوية أو أغراض صغيرة. بلا وسيط، وبلا شحن مكلف."
+    bild: https://b-tarikak.de/icons/Icon-512.png
+
   # Wohin ein **Browser-Code** fuehrt (``FB-SYR-BER-010-B``).
   #
   # Seit dem 31.08.2026 traegt jedes Paar zwei Codes: der bestehende zum Play
@@ -94,6 +122,202 @@ marketing:
     produkt: >-
       B-Tarikak (بطريقك) - App, ueber die Reisende und Menschen, die etwas
       mitgeben moechten, zueinander finden.
+
+  # --- Wie viel von uns in einem Kommentar stehen darf (13.09.2026) ------
+  #
+  # Drei Stufen, von wenig nach viel:
+  #
+  #   no_link         nicht einmal der Name
+  #   app_name_only   "بطريقك" wird genannt, ohne Adresse
+  #   tracking_link   mit Link
+  #
+  # Welche Stufe ein einzelner Kommentar bekommt, entscheidet die Antwortart
+  # (marketing/entscheidung.py). Dieser Wert ist ein **Deckel** darueber: Er
+  # kann nur nach unten wirken. Was die Gruppe verbietet, bleibt verboten;
+  # was sie erlaubt, darf man trotzdem sein lassen.
+  #
+  # "tracking_link" heisst NICHT "immer ein Link". Ein Link geht nur hinaus,
+  # wenn die Regeln der Gruppe gelesen sind und keinen verbieten, die Gruppe
+  # Links nicht wiederholt abgelehnt hat, der Bezug belegt ist und das Thema
+  # die App betrifft. Das sind genau die Bedingungen der Anforderung.
+  #
+  # "app_name_only" schaltet den Link in Kommentaren **ganz** ab. Das ist eine
+  # bewusste Entscheidung mit Preis: Ein Kommentar ohne Link bekommt nie einen
+  # Klick gutgeschrieben, und die Zuordnung haengt dann allein am eigenen
+  # Beitrag daneben (der traegt seinen Link immer).
+  linkmodus_max: tracking_link
+
+  # Braucht ein Kommentar einen erkannten **Anlass**, oder genuegt der blosse
+  # Bezug? (13.09.2026)
+  #
+  # Eingeschaltet wird nur geantwortet, wo der Beitrag einen der vorbereiteten
+  # Faelle nennt (``marketing/inhalt.Anlass``): jemand sucht einen Reisenden,
+  # jemand hat Platz im Koffer, jemand will eine Hoerhilfe, ein Dokument, eine
+  # Hodie schicken. "Ich fliege naechste Woche nach Syrien" ist **kein**
+  # Anlass - es ist eine Mitteilung, und ein Kommentar darunter waere
+  # eingeworfene Werbung.
+  #
+  # Ausgeschaltet gilt die alte Regel: Der vorbereitete Text der Fassung geht
+  # hinaus, sobald die Relevanz reicht. Der Schalter steht hier, weil die
+  # Erkennung eng gefasst ist - wer feststellt, dass zu wenig hinausgeht,
+  # aendert eine Zahl und keinen Code.
+  anlass_pflicht: false
+
+  # --- Zielprioritaet: welche Gruppen zuerst? (13.09.2026) --------------
+  #
+  # "Wir kennen 314 Gruppen" heisst nicht "alle 314 sind gleich viel wert".
+  # Die Kampagne bewirbt einen Weg - Deutschland nach Syrien, kleine
+  # Gegenstaende, freier Platz im Koffer. Eine Reise- oder Versandgruppe ist
+  # dafuer der richtige Platz; eine allgemeine Gemeinschaftsgruppe ist es nur
+  # dann, wenn dort gerade jemand genau danach fragt.
+  #
+  # Vorher sortierte der Lauf allein nach Score. Das ist die Antwort auf
+  # "welche Gruppe ist gut?" und nicht auf "welche Gruppe ist die richtige":
+  # Eine Gemeinschaftsgruppe mit 40.000 Mitgliedern steht damit vor einer
+  # Reisegruppe mit 900 - und die 900 sind genau die Menschen, die suchen.
+  #
+  # Gerechnet wird die Einstufung in ``marketing/zielgruppe.py``, aus dem, was
+  # ohnehin im Bestand steht (Name, Beschreibung, Kategorie, Zielgruppe,
+  # Stadt). **Nicht gespeichert**: Ein Urteil neben seinen eigenen Grundlagen
+  # laeuft von ihnen weg, sobald sich eine aendert - dieselbe Ueberlegung wie
+  # bei ``qualifikation.beurteile``.
+  zielprioritaet:
+    # A - der eigentliche Zielmarkt: Reise- und Versandgruppen mit einem
+    # genannten Ziel. Die Kategorien kommen aus categories.yaml; ein
+    # Kategoriename, den es dort nicht gibt, ist ein Tippfehler und wird von
+    # "config-check" gemeldet.
+    kategorien: [versand, reise]
+
+    # Wohin der Weg geht. Ohne eines dieser Worte ist "Reisegruppe" keine
+    # Gruppe fuer uns - "Reisen nach Thailand" traegt dieselbe Kategorie und
+    # meint etwas anderes. Arabisch wird als Teilstring verglichen (Artikel
+    # und Praepositionen haengen am Wort), lateinisch mit Wortgrenze.
+    ziele: [Syrien, Syria, Damaskus, Damascus, Aleppo, Homs, Latakia,
+            سوريا, سورية, الشام, دمشق, حلب, حمص, اللاذقية, طرطوس]
+
+    # Woher. Ein Weg hat zwei Enden; eine Gruppe, die beide nennt, beschreibt
+    # genau den Markt der App. Fehlt die Herkunft, bleibt es bei A - eine
+    # syrische Reisegruppe in Deutschland nennt Deutschland nicht immer.
+    #
+    # Diese Liste belegt zugleich "Region.DE" - den ersten Platz der
+    # geografischen Rangfolge.
+    herkunft: [Deutschland, Germany, Almanya, المانيا, ألمانيا, ألمانيه]
+
+    # --- Der geografische Vorrang innerhalb von A (14.09.2026) ------------
+    #
+    # Die Klasse sagt "worum geht es dort?", und das genuegte nicht:
+    # "نقل من لبنان إلى سورية" ist eine lupenreine Versandgruppe mit
+    # genanntem Ziel - und beschreibt eine Strecke, auf der diese App
+    # niemandem hilft, denn ihre Nutzer sitzen in Europa.
+    #
+    # Gearbeitet wird deshalb in dieser Reihenfolge:
+    #
+    #   1. A in Deutschland        (herkunft, oder eine Stadt aus cities.yaml)
+    #   2. A im uebrigen Europa    (europa)
+    #   3. A ohne genanntes Land   (der Regelfall - kein Mangel, siehe unten)
+    #   ... und erst danach B.
+    #
+    # "Kein Land genannt" steht VOR "ausserhalb Europas" und nicht dahinter:
+    # Die meisten deutschen Gruppen heissen "شحن الى سوريا" und schreiben
+    # Deutschland nirgends hin. Sie hinter eine libanesische Versandgruppe zu
+    # stellen hiesse, sie fuer eine Auslassung zu bestrafen.
+    #
+    # Das uebrige Europa. Zweite Wahl und nicht dritte: Ein Mitnehmer von Wien
+    # nach Damaskus nimmt dieselbe Sendung mit wie einer von Berlin - er ist
+    # nur nicht der Markt, in dem die Kampagne zuerst arbeitet.
+    europa: [Österreich, Oesterreich, Austria, النمسا, فيينا, Wien,
+             Schweden, Sweden, السويد, Stockholm, ستوكهولم,
+             Niederlande, Netherlands, Holland, هولندا, Amsterdam, أمستردام,
+             Belgien, Belgium, بلجيكا, Brüssel, Bruessel, بروكسل,
+             Dänemark, Daenemark, Denmark, الدنمارك, الدنمرك,
+             Norwegen, Norway, النرويج, Finnland, Finland, فنلندا,
+             Schweiz, Switzerland, سويسرا, Zürich, Zuerich,
+             Frankreich, France, فرنسا, Paris, باريس,
+             Großbritannien, Grossbritannien, England, بريطانيا, لندن, London,
+             Italien, Italy, ايطاليا, إيطاليا, Spanien, Spain, اسبانيا, إسبانيا,
+             Polen, Poland, بولندا, Tschechien, التشيك,
+             Griechenland, Greece, اليونان, Portugal, البرتغال,
+             Irland, Ireland, ايرلندا, إيرلندا, Europa, أوروبا, اوروبا]
+
+    # Laender, die den Weg AN EUROPA VORBEI beschreiben. Sie sind der Grund,
+    # warum es diese Achse gibt - und sie wirken staerker als die uebrigen
+    # Listen: Eine Gruppe, die NUR eines dieser Laender nennt, faellt aus der
+    # Klasse A heraus (nach C, nicht nach D - ein einzelner Beitrag aus
+    # Deutschland bleibt dort erreichbar).
+    #
+    # Ein europaeisches Wort schlaegt ein aussereuropaeisches: "Mitnahme
+    # Berlin - Beirut - Damaskus" bleibt eine deutsche Gruppe. Nur wer allein
+    # die andere Seite nennt, meint die andere Strecke.
+    #
+    # SYRIEN STEHT HIER NICHT. Es ist das Ziel und wird von jeder Gruppe des
+    # Zielmarkts genannt; stuende es hier, waere der ganze Zielmarkt
+    # aussereuropaeisch. Dasselbe gilt fuer die syrischen Staedte - sie stehen
+    # in "ziele".
+    ausserhalb: [Libanon, Lebanon, لبنان, Beirut, بيروت,
+                 Türkei, Tuerkei, Turkey, تركيا, İstanbul, Istanbul, اسطنبول,
+                 Ägypten, Aegypten, Egypt, مصر, القاهرة, Kairo, Cairo,
+                 Jordanien, Jordan, الأردن, الاردن, عمان,
+                 Irak, Iraq, العراق, بغداد, Bagdad, أربيل,
+                 Saudi, السعودية, الرياض, جدة,
+                 Emirate, Dubai, دبي, الإمارات, الامارات, أبوظبي,
+                 Kuwait, الكويت, Katar, Qatar, قطر, الدوحة,
+                 Bahrain, البحرين, Jemen, اليمن,
+                 Sudan, السودان, Libyen, ليبيا, Tunesien, تونس,
+                 Algerien, الجزائر, Marokko, المغرب,
+                 Kanada, Canada, كندا, Amerika, USA, أمريكا, امريكا,
+                 Australien, Australia, أستراليا, استراليا]
+
+    # B - die syrischen und arabischen Gemeinschaftsgruppen. Sie sind
+    # sekundaer: Dort wird nur kommentiert, wo ein einzelner Beitrag einen
+    # konkreten Reise- oder Versandbedarf nennt.
+    audiences: [syrians, arabs]
+
+    # Welche Relevanz ein einzelner Beitrag mindestens haben muss, damit in
+    # einer Gruppe dieser Klasse ueberhaupt geantwortet wird. Die Stufen sind
+    # die aus ``marketing/inhalt.Relevanz``.
+    #
+    # A: "mittel" genuegt - wer in einer Reisegruppe nach einem Koffer fragt,
+    #    meint uns, auch ohne das Wort "Syrien" im selben Satz.
+    # B: "hoch" - in einer Gemeinschaftsgruppe ist das Gespraech ueber alles
+    #    moegliche; nur ein belegter Bezug ist ein Anlass.
+    # C: "hoch" UND die genannte Strecke - der klare, konkrete Einzelfall.
+    # D: gar nicht (steht nicht in der Liste).
+    mindestrelevanz:
+      a: mittel
+      b: hoch
+      c: hoch
+    # Verlangt Klasse C zusaetzlich, dass Beitrag Herkunft UND Ziel nennt?
+    c_verlangt_strecke: true
+
+# --- Der Waechter (15.09.2026) ------------------------------------------
+#
+# Sorgt dafuer, dass **ein** `campaign automatik` laeuft, und sonst nichts.
+# Einmal starten, dann laeuft er:
+#
+#     fbgroups campaign watchdog --server http://127.0.0.1:8090
+#
+# Er enthaelt keine Kampagnenlogik: keine Warteschlange, keine Rangfolge,
+# keinen Takt. Er sieht nach, ob ein Lauf die Sperre haelt - und startet
+# genau den Befehl, den man sonst von Hand eintippt. Kein `--neu`, also
+# wird der offene Lauf fortgesetzt und keine Kampagne von vorn begonnen.
+watchdog:
+  enabled: true
+
+  # Sekunden zwischen zwei Blicken. Fuenf Minuten sind der Kompromiss aus
+  # "merkt einen Absturz schnell" und "steht nicht staendig im Weg": Ein
+  # Lauf, der gerade seinen Takt abwartet, haelt die Sperre, also kostet ein
+  # Blick nichts. Unter 30 Sekunden wird nicht gegangen - das schuetzt vor
+  # einem Tippfehler, nicht vor einer Entscheidung.
+  check_interval_seconds: 300
+
+  # Wird an den Lauf durchgereicht und **vorher geprueft**: Antwortet der
+  # Port nicht, wird gewartet statt gestartet. Ein geschlossener SSH-Tunnel
+  # ist kein Fehlschlag der Kampagne - ein Lauf ohne Tunnel scheiterte an
+  # der ersten Anfrage, ohne etwas zu buchen.
+  #
+  # Leer heisst: oertlicher Lauf, kein Dienst noetig. `--server` auf der
+  # Kommandozeile geht vor.
+  server: http://127.0.0.1:8090
 
 dedupe:
   # Unscharfer Namensabgleich: ab diesem Wert (0-100) gilt ein Paar als
@@ -282,13 +506,32 @@ scoring:
 # Kaltmodus teilt vorher zu: Die Arbeitsliste enthaelt nur die heutigen, und
 # hinter ihnen steht keine Wand, gegen die man laufen koennte.
 kaltmodus:
-  # Voreingestellt aus: Ein Update soll das Verhalten von gestern nicht
-  # stillschweigend aendern. Einschalten ist eine Entscheidung.
-  aktiv: true
+  # Vom Nutzer am 11.09.2026 abgeschaltet - ausdruecklich und mit Kenntnis der
+  # Begruendung darueber ("mach alles ohne limit").
+  #
+  # ``aktiv: false`` hebt **beides** auf: die Tagesmenge und den Mindestabstand.
+  # Es gibt danach keine gezaehlte Grenze mehr und keine Wartezeit - weder auf
+  # der Arbeitsseite, noch bei ``campaign auto``, noch am Knopf "Automatisch
+  # posten". Die Anzeige "Heute: 0 von 25" verschwindet, weil es nichts mehr
+  # zu zaehlen gibt.
+  #
+  # ``beitraege_pro_tag: 0`` waere dafuer der falsche Weg gewesen: 0 heisst
+  # nicht "ohne Grenze", sondern "keiner mehr heute" - ``tagesportion`` liefert
+  # dann eine leere Liste und ``kalt_limit_erreicht`` wird wahr. Der Schalter
+  # ist der einzige Weg, der wirklich nichts begrenzt.
+  #
+  # Unberuehrt bleibt ``campaign automatik``: Der Dauerlauf hat die Tagesmenge
+  # noch nie gelesen (``automatik.py``: ``aktiv, _pro_tag, abstand``) und
+  # richtete sich allein nach dem Abstand. Mit ``aktiv: false`` faellt auch der
+  # weg; begrenzt wird ein Lauf jetzt nur noch durch ``--limit N``.
+  aktiv: false
 
-  # Beitraege je Tag ueber alle Kampagnen. 25 bei 310 Gruppen sind knapp
-  # dreizehn Tage - die Zahl darf steigen, aber jede Erhoehung ist genau der
-  # Handel, den dieser Block beschreibt.
+  # Beitraege je Tag ueber alle Kampagnen - gezaehlt wurden Beitraege **und**
+  # Kommentare, Erfolge wie Fehlschlaege (``store.versuche_heute`` filtert
+  # ``texttyp`` nicht). Bei einem Beitrag und zehn Kommentaren je Gruppe sind
+  # das elf Vorgaenge, 25 am Tag also gut zwei Gruppen und bei 314 Gruppen rund
+  # 136 Tage - die Zahl, die zur Abschaltung gefuehrt hat. Sie steht hier
+  # weiterhin fuer den Fall, dass der Takt zurueckkommt.
   beitraege_pro_tag: 25
 
   # Minuten zwischen zwei Beitraegen - die Grundzeit, nicht die gemessene.
@@ -301,6 +544,8 @@ kaltmodus:
   # acht Beitraegen eine laengere ein. Der Kommentar beschrieb damit das
   # Gegenteil des Codes - und ein Kommentar, dem man nicht glauben kann, ist
   # schlechter als keiner.
+  #
+  # Wirkt nur bei ``aktiv: true`` - siehe oben.
   mindestabstand_minuten: 4
 
 # --- Beitrittsanfragen ------------------------------------------------------
@@ -312,10 +557,225 @@ kaltmodus:
 # Gruppen mit Beitrittsfragen werden uebersprungen, nicht beantwortet: Eine
 # Antwort im Namen des Nutzers zu erfinden ist etwas anderes, als einen Knopf
 # zu druecken.
+# --- Grenzen je Aktion --------------------------------------------------------
+# Wie viel an einem Tag, und wie schnell hintereinander. Gerechnet wird das in
+# ``marketing/grenzen.py``; jede Aktion hat ihre eigene Menge, ihren eigenen
+# Takt und ihre eigene Sperre.
+#
+# WICHTIG: Das sind **Planungswerte dieses Programms**, keine offiziellen
+# Grenzen von Facebook. Die veroeffentlicht niemand. Sie beschreiben, wie
+# vorsichtig wir sein wollen - nicht, was die Gegenseite zulaesst.
+#
+# Ein Limit fuer Kommentare ist kein Limit fuer Beitraege und erst recht keines
+# fuer den ganzen Lauf: Wird eine Aktion gebremst, pausiert nur sie.
+#
+# `daily: 0` schaltet eine Aktion ganz ab - nicht "unbegrenzt", sondern "gar
+# nicht"; dieselbe Bedeutung wie Gewicht 0 im Scoring.
+limits:
+  join_requests:
+    # Vom Nutzer am 13.09.2026 auf 50 gesetzt - dieselbe Zahl, die vor der
+    # Umstellung unter `beitritt.anfragen_pro_tag` stand (31.08.2026).
+    daily: 50
+
+  comments:
+    # Vom Nutzer am 13.09.2026 auf 100 gesetzt. Der Anlass ist Arithmetik:
+    # 254 Gruppen x 10 Fassungen = 2.540 Kommentare. Bei 5 am Tag waere die
+    # Kampagne in gut anderthalb Jahren durch.
+    #
+    # ACHTUNG: Diese Zahl allein erreicht nichts. Was tatsaechlich begrenzt,
+    # ist `delays.comment` - bei 20-60 Minuten Abstand passen 36 Kommentare in
+    # einen Tag, gleich was hier steht. Die beiden Werte gehoeren zusammen
+    # gelesen; wer nur einen aendert, aendert nichts.
+    daily: 100
+
+    # Hoechstens so viele Kommentare in **derselben** Gruppe an einem Tag.
+    # Die Tagesmenge darueber schuetzt das Konto, diese Zahl die Gruppe: Fuenf
+    # Kommentare am Tag, alle in derselben Gruppe, sind fuer deren Leser
+    # dasselbe Bild wie fuenfzig - und zwei Kommentare unter zwei Beitraegen
+    # desselben Menschen sind eine Ansprache zu viel.
+    #
+    # Sie greift **vor** der Vorlagenwahl: Ist die Zahl erreicht, wird die
+    # Gruppe fuer heute uebersprungen und nicht als erschoepft vermerkt - das
+    # waere ein Urteil ueber sie statt ueber unseren Takt.
+    #
+    # 0 schaltet die Grenze ab (unbegrenzt je Gruppe), anders als bei
+    # ``daily``: Dort heisst 0 "gar nicht". Der Unterschied ist gewollt - eine
+    # Aktion abzuschalten ist eine Entscheidung, eine Schranke wegzulassen
+    # heisst nur, dass die Tagesmenge allein zaehlt.
+    # Gemeint ist: **ein Kommentar je Gruppe und Tag** - bei 24 Gruppen also
+    # bis zu 24 am Tag, nicht einer insgesamt. Die Zahl ist eine Obergrenze
+    # je Gruppe; dass jede Gruppe ihren bekommt, sorgt die Arbeitsliste
+    # (sie geht alle durch). Ein Mindestwert waere hier nicht ehrlich: Steht
+    # in einer Gruppe heute kein passender Beitrag, gibt es keinen Kommentar,
+    # und den zu erzwingen hiesse, unter irgendetwas zu schreiben.
+    #
+    # Gezaehlt werden Versuche, aber **keine technischen Fehlschlaege**
+    # (14.09.2026): Bei 1 je Gruppe kostete sonst ein einziges geschlossenes
+    # Browserfenster die Gruppe den ganzen Tag.
+    je_gruppe_taeglich: 10
+
+  posts:
+    daily: 3
+
+# Mindestabstaende in Minuten, gestreut zwischen min und max. Der Beitrag ist
+# deutlich langsamer getaktet als der Kommentar: Er steht oben in der Gruppe
+# und faellt jedem auf, der sie oeffnet.
+delays:
+  join_request:
+    # Am 13.09.2026 zuerst auf 15-42 gesetzt und noch am selben Tag wieder auf
+    # 3-8 zurueck - den Wert vom 31.08.2026. Der Grund stand sofort im Bild:
+    #
+    #   "Beitrittstakt: noch 31 Min"
+    #
+    # Der Lauf **wartet** den Beitrittstakt ab, statt inzwischen zu posten
+    # (`lauf.naechster_schritt`, Phase BEITRITT). Das ist die geforderte
+    # Reihenfolge - erst Beitritt, dann Arbeit - und richtig, solange der
+    # Abstand klein ist. Bei 28,5 Minuten Mittel und 50 offenen Anfragen wird
+    # daraus: 23,8 Stunden warten, EIN Kommentar am Tag.
+    #
+    # Die Rechnung, die diese Zahlen traegt:
+    #
+    #   3-8 Min   ->  50 Anfragen in  4,6 h, danach 83 Kommentare
+    #   5-12 Min  ->  50 Anfragen in  7,1 h, danach 72 Kommentare
+    #   15-42 Min ->  50 Anfragen in 23,8 h, danach  1 Kommentar
+    #
+    # Wer hier wieder hochgeht, senkt `limits.join_requests.daily` mit -
+    # sonst frisst die Warterei den Tag.
+    min_minutes: 3
+    max_minutes: 8
+
+  comment:
+    # --- Die Rechnung zum Ziel "100 Kommentare am Tag" (15.09.2026) ------
+    #
+    # ZWEI Schranken, und nur eine davon steht hier. Wer nur an dieser dreht,
+    # aendert nichts - derselbe Fehler wie bei `limits.comments.daily`.
+    #
+    # Schranke 1, der Takt (diese Zahlen):
+    #
+    #     8-20 Min (Mittel 14,0)  ->  24 h: 103   16 h:  69   12 h:  51
+    #     5-12 Min (Mittel  8,5)  ->  24 h: 169   16 h: 113   12 h:  85
+    #
+    # Am 13.09.2026 stand hier 8-20 mit der Begruendung "genau so passen die
+    # 100 in einen Tag". Die Rechnung stimmte nur fuer **durchgehenden
+    # Betrieb rund um die Uhr** - der Lauf laeuft aber im sichtbaren Browser
+    # des Nutzers, also nicht nachts. Bei realistischen 16 Stunden kam er auf
+    # 69 und konnte das Ziel nie erreichen, gleich wie gut die Warteschlange
+    # arbeitete.
+    #
+    # 5-12 ergibt bei 16 Stunden 113 - Luft fuer Fehlschlaege, ohne den Takt
+    # auf etwas zu druecken, das nach Maschine aussieht. Der Abstand bleibt
+    # gestreut, und die Untergrenze von fuenf Minuten ist bewusst keine
+    # Sekundenzahl: Zwei Kommentare im selben Minutentakt sind genau das
+    # Muster, nach dem gesucht wird.
+    #
+    # Schranke 2, die Gruppen (`limits.comments.je_gruppe_taeglich`):
+    #
+    #     24 Gruppen x 1/Tag =  24      100 Gruppen x 1/Tag = 100
+    #     50 Gruppen x 1/Tag =  50      254 Gruppen x 1/Tag = 254
+    #
+    # **Das ist der tatsaechliche Engpass.** Bei einem Kommentar je Gruppe
+    # und Tag braucht es rund hundert zugeordnete, geeignete Gruppen. Am
+    # 14.09.2026 hatte die Kampagne 24 - damit waren 24 das Maximum, und kein
+    # Takt haette daran etwas geaendert. Der Hebel ist `campaign sync` (mehr
+    # A-Gruppen zuordnen), nicht diese Datei.
+    min_minutes: 5
+    max_minutes: 12
+
+  post:
+    min_minutes: 15
+    max_minutes: 30
+
 beitritt:
+  # ACHTUNG: Diese beiden Werte sind seit dem 12.09.2026 nur noch der
+  # Rueckfall. Gelesen wird `limits.join_requests.daily` und
+  # `delays.join_request.min_minutes`; die Zahlen hier gelten nur, solange die
+  # neuen Schluessel fehlen. So verhaelt sich eine bestehende Installation
+  # durch ein Update nicht anders als gestern - aber wer etwas aendern will,
+  # aendert es oben.
+  #
   # Anfragen je Tag. Vom Nutzer am 31.08.2026 auf 50 gesetzt.
+  #
+  # Seit dem 12.09.2026 gilt die Zahl auch im Kampagnenlauf: Der Lauf stellt
+  # die offenen Anfragen einer Kampagne, bevor er in ihr arbeitet, und hoert
+  # damit auf, wenn die Tagesmenge erreicht ist - dann geht es mit der
+  # Bewertung und der Arbeit weiter. `0` nimmt die Beitrittsanfragen ganz aus
+  # dem Lauf; einen zweiten Schalter dafuer gibt es bewusst nicht.
   anfragen_pro_tag: 50
+
+  # Muessen die Regeln einer Gruppe gelesen sein, bevor eine Anfrage hinausgeht?
+  # (13.09.2026)
+  #
+  # Die geforderte Reihenfolge lautet: finden, Relevanz bewerten, Prioritaet
+  # bestimmen, Regeln und Berechtigungen pruefen - **dann erst** anfragen. Bis
+  # hierher war es umgekehrt: Die Anfrage ging an jede Gruppe, und ob dort
+  # ueberhaupt kommentiert werden darf, stellte sich Tage spaeter heraus -
+  # nach der Aufnahme, nach dem ersten Versuch, nach dem ersten Fehlschlag.
+  #
+  # Der Regelschritt kostet einen Seitenabruf und keine Handlung in der
+  # Gruppe; er laeuft im Lauf als eigener Schritt (``Schrittart.REGELN``).
+  #
+  # Abschalten hat einen echten Anlass: Laesst sich eine Gruppenseite nicht
+  # lesen - Anmeldewand, geschlossene Gruppe -, bliebe ``regeln_gelesen_am``
+  # leer, und die Anfrage ginge nie hinaus. Dann gilt wieder die alte
+  # Reihenfolge.
+  regeln_zuerst: true
 
   # Minuten zwischen zwei Anfragen. Gestreut wie beim Kaltmodus - fuenfzig in
   # zehn Minuten waeren dasselbe Muster, nur schneller.
+  #
+  # Im Lauf **wartet** die Automatik diesen Abstand ab, statt inzwischen
+  # Beitraege abzusetzen: Sonst waere die geforderte Reihenfolge (erst
+  # Beitritt, dann Arbeit) eine Empfehlung, die jeder Mindestabstand
+  # aushebelt. Bei 50 Anfragen sind das gut zweieinhalb Stunden - wer das
+  # nicht will, setzt `anfragen_pro_tag` niedriger.
   mindestabstand_minuten: 3
+
+# --- Qualifikation: die Frage vor dem Text ------------------------------------
+# "Wir kennen 314 Gruppen" heisst nicht "wir posten in 314 Gruppen". Vor jedem
+# Beitrag und jedem Kommentar steht die Frage, ob diese Gruppe das ueberhaupt
+# zulaesst: Sind wir Mitglied? Was sagen ihre Regeln? Und was kam bei den
+# bisherigen Versuchen heraus?
+#
+# Gerechnet wird das in ``marketing/qualifikation.py`` - aus Mitgliedschaft,
+# gelesenen Gruppenregeln und dem Versuchsprotokoll. Nichts davon wird als
+# Urteil gespeichert; gespeichert ist allein, was auf der Gruppenseite stand.
+qualifikation:
+  # Sperren auch die BEITRITTSSTUFEN - oder nur die Regeln der Gruppe?
+  #
+  # Seit dem 12.09.2026 ist das die ganze Frage, die dieser Schalter noch
+  # stellt. Was die Gruppe selbst erlaubt, bindet ohne ihn: kein Link, wo
+  # Links verboten sind, kein Kommentar, wo Kommentare wiederholt abgelehnt
+  # wurden, gar nichts in einer Gruppe, deren Regeln Werbung verbieten
+  # (`qualifikation.darf_nach_regeln`). Ein Schalter, der das aufhoebe, waere
+  # ein Schalter zum Regelbruch - und die Regeln der Gruppe zu umgehen ist
+  # ausdruecklich nicht das Ziel.
+  #
+  # Uebrig bleibt die Frage nach der Mitgliedschaft, und dort ist die Vorgabe
+  # weiterhin **aus**: Am 11.09.2026 stand keine einzige Gruppe auf "geeignet",
+  # weil noch nie jemand ihre Regeln gelesen hat. Sofort scharf geschaltet
+  # haette der Schalter jede laufende Kampagne angehalten, bis eine
+  # vollstaendige Runde aus Beitritt und Bewertung durch ist - bei 50 Anfragen
+  # am Tag also tagelang. Er ueberschneidet sich darin mit
+  # `automatik.mitgliedschaft_pflicht`; es genuegt, einen von beiden
+  # einzuschalten.
+  pflicht: false
+
+# --- Kommentarautomatik -------------------------------------------------------
+automatik:
+  # Muss das Konto als Mitglied vermerkt sein, bevor die Automatik es in einer
+  # Gruppe versucht?
+  #
+  # Am 31.08.2026 eingefuehrt, am 01.09.2026 vom Nutzer abgeschaltet. Der
+  # Grund fuer beides steht in derselben Beobachtung: In
+  # "Betaraqiq-Test Syrer in Berlin" standen drei veroeffentlichte Kommentare,
+  # waehrend der Stand auf "beitritt_angefragt" stand. Der Vermerk ist also
+  # eine Angabe ueber *unseren* Arbeitsstand und nicht darueber, ob Facebook
+  # dort schreiben laesst - und als Vorbedingung hielt er einen Lauf auf, der
+  # nachweislich moeglich war.
+  #
+  # Auf "true" gestellt gilt wieder die alte Regel: Gruppen ohne Mitgliedschaft
+  # werden uebersprungen statt versucht. Das ist der Schutz gegen eine Folge
+  # sicher scheiternder Versuche aus einem Konto - das Muster, das zur Sperre
+  # fuehrt. Ausgeschaltet begrenzen ihn nur noch MAX_VERSUCHE_JE_FASSUNG (3)
+  # und danach "erschoepft".
+  mitgliedschaft_pflicht: false

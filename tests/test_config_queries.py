@@ -54,10 +54,16 @@ def test_anzahl_geplanter_anfragen(config) -> None:
     Geprueft wird die Rechnung - jedes Muster kostet so viele Credits, wie es
     freigeschaltete Staedte gibt -, nicht ein bestimmter Ausbaustand. Sonst
     braeche jede neue Formulierung einen Test, ohne dass etwas kaputt waere.
+
+    **Zwei** bundesweite Bloecke seit dem 13.09.2026: ``reise_versand`` sucht
+    den Zielmarkt (Reise- und Versandgruppen), ``nationwide`` die
+    Gemeinschaften. Getrennt, damit sich die Kosten einzeln ablesen lassen.
     """
     staedte = len(config.cities_for_phase(1))
-    bundesweit = len(config.queries["nationwide"])
-    muster = len(config.queries["city_patterns"])
+    bundesweit = len(config.queries["nationwide"]) + len(config.queries["reise_versand"])
+    muster = len(config.queries["city_patterns"]) + len(
+        config.queries["city_patterns_reise_versand"]
+    )
     planned = build_queries(config, phase=1)
 
     assert len([q for q in planned if q.scope == "nationwide"]) == bundesweit
@@ -71,12 +77,46 @@ def test_bundesweite_anfragen_stehen_in_der_konfiguration(config) -> None:
     Verglichen wird gegen die Datei selbst statt gegen eine Liste im Test -
     eine zweite Liste hier waere eine zweite Wahrheit ueber dieselben Anfragen.
     """
-    aus_datei = {eintrag["text"] for eintrag in config.queries["nationwide"]}
+    aus_datei = {
+        eintrag["text"]
+        for block in ("nationwide", "reise_versand")
+        for eintrag in config.queries[block]
+    }
     gebaut = {q.text for q in build_queries(config, phase=1) if q.scope == "nationwide"}
 
     assert gebaut == aus_datei
     assert "Syrer Deutschland" in gebaut  # Grundanfrage bleibt bestehen
     assert "السوريين في ألمانيا" in gebaut
+
+
+def test_der_zielmarkt_wird_zuerst_gesucht(config) -> None:
+    """Reise- und Versandanfragen stehen vor den Gemeinschaftsanfragen.
+
+    Die Reihenfolge ist die Rangfolge der Kampagne, und sie wird erst
+    sichtbar, wenn das Guthaben nicht fuer alle Anfragen reicht: Wer mit
+    ``--limit 20`` sucht, soll die zwanzig bekommen, die den Zielmarkt
+    treffen - Gruppen fuer Reisen und Versand nach Syrien -, und nicht
+    zwanzig weitere Gemeinschaftsgruppen, von denen schon 300 im Bestand
+    stehen.
+    """
+    planned = build_queries(config, phase=1)
+    zielmarkt = {
+        eintrag["id"]
+        for block in ("reise_versand", "city_patterns_reise_versand")
+        for eintrag in config.queries[block]
+    }
+
+    # Alle Anfragen des Zielmarkts stehen **vorn**, ohne eine einzige
+    # Gemeinschaftsanfrage dazwischen. Das ist der Punkt: Wer nur einen Teil
+    # bezahlen kann, soll den Teil bekommen, der etwas Neues sucht.
+    neu = [i for i, q in enumerate(planned, 1) if q.template_id in zielmarkt]
+    assert neu == list(range(1, len(neu) + 1)), "der Zielmarkt steht nicht lueckenlos vorn"
+
+    # Und die Zahl ist die, die "max_queries_per_run" traegt: ein Lauf mit
+    # --limit 106 holt den Zielmarkt vollstaendig.
+    assert len(neu) == len(config.queries["reise_versand"]) + len(
+        config.queries["city_patterns_reise_versand"]
+    ) * len(config.cities_for_phase(1))
 
 
 def test_stadtplatzhalter_werden_ersetzt(config) -> None:

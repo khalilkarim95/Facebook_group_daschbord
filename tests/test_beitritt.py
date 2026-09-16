@@ -177,10 +177,23 @@ def _client(bestand: Path):
 
 
 def test_der_server_nennt_die_naechsten_gruppen(bestand: Path) -> None:
+    """Die besten zuerst - und die Tagesmenge kommt aus der Konfiguration.
+
+    Die Zahl stand hier frueher als ``50`` im Test. Seit die Grenzen je
+    Aktion in ``limits`` stehen (12.09.2026), waere das eine zweite Wahrheit:
+    Wer die Menge in ``settings.yaml`` aendert, haette einen Test
+    umgeworfen, der mit seiner Aenderung nichts zu tun hat.
+    """
+    from fbgroups.config import load_config
+    from fbgroups.marketing import beitritt
+
+    erwartet, _abstand = beitritt.einstellungen(load_config())
+
     daten = _client(bestand).post("/automatik/beitritt/naechste", json={}).json()
+
     assert [g["group_id"] for g in daten["gruppen"]] == ["g1", "g2", "g3"]
     assert daten["heute"] == 0
-    assert daten["pro_tag"] == 50
+    assert daten["pro_tag"] == erwartet
 
 
 def test_die_tagesmenge_bestimmt_der_server(bestand: Path) -> None:

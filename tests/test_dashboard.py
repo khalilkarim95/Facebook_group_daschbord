@@ -690,13 +690,21 @@ def test_seite_hat_ausgeglichene_abschnitte(bestand: Path, config) -> None:
     assert seite.count("<section") == seite.count("</section>")
     assert seite.count("<details") == seite.count("</details>")
 
-    # Die Kampagnen stehen seit dem Aufraeumen fuer sich und in voller Breite:
-    # In der halben lief die Tabelle bei mehreren Kampagnen ueber, und
-    # ausgerechnet die Knopfspalte verschwand im waagerechten Bildlauf.
-    assert seite.index("kampagnen-block") < seite.index('class="spalten"')
+    # Der Trichter steht seit dem 01.09.2026 **oben**, gleich unter den
+    # Kacheln und neben der Datenabdeckung - vorher lag er als eigene Spalte
+    # ganz unten, hinter der Gruppentabelle und der Kampagnenliste. Wer die
+    # Wirkung der veroeffentlichten Beitraege sehen wollte, scrollte an
+    # dreihundert Zeilen vorbei.
+    # Gesucht wird die Auszeichnung, nicht der Name: "kampagnen-block" steht
+    # auch im Stilblock im Kopf der Seite, und der kommt vor allem anderen.
+    block = seite.index('<section class="kampagnen-block">')
+    assert seite.index('class="oben"') < block
+    assert seite.index('class="kacheln"') < seite.index('class="oben"')
 
-    spalten = seite[seite.index('class="spalten"'):]
-    assert spalten.count("<section") == 1  # nur noch der Trichter
+    oben = seite[seite.index('class="oben"'):block]
+    assert oben.count("<section") == 1  # nur der Trichter
+    assert "Trichter" in oben
+    assert "Datenabdeckung" in oben
 
 
 # --- Auswahlregel je Kampagne ------------------------------------------

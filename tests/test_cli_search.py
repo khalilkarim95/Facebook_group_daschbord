@@ -33,6 +33,12 @@ def projekt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     providers = yaml.safe_load((tmp_path / "config" / "providers.yaml").read_text("utf-8"))
     providers["active"] = "fixture"
     providers["providers"]["fixture"]["fixtures_dir"] = str(FIXTURES)
+    # Die Obergrenze des Projekts entspricht seit dem 13.09.2026 genau dem
+    # Zielmarkt (106 Anfragen) - die Fixtures dieser Tests liegen dahinter.
+    # Sie wird hier geweitet und nicht in der Konfiguration: Was der Test
+    # braucht, ist eine Angabe des Tests und keine Eigenschaft des Projekts
+    # (dieselbe Ueberlegung wie bei ``_ohne_env_datei`` in conftest.py).
+    providers["limits"]["max_queries_per_run"] = 400
     (tmp_path / "config" / "providers.yaml").write_text(
         yaml.safe_dump(providers, allow_unicode=True), encoding="utf-8"
     )

@@ -96,10 +96,17 @@ def test_klick_leitet_weiter_und_wird_gezaehlt(client: TestClient, bestand: Path
 
     assert antwort.status_code == 302
     assert antwort.headers["location"].startswith("https://batreeq.example/start")
-    assert f"ref={CODE_A}" in antwort.headers["location"]
 
     with MarketingStore(bestand) as store:
         assert store.event_counts().get("click") == 1
+        # ``ref`` traegt den **oeffentlichen** Code: Er landet in der
+        # Adresszeile des Besuchers, und dort gehoert die Kampagnenbuchhaltung
+        # nicht hin. Gespeichert wird trotzdem der innere - sonst zerfiele
+        # jede Auswertung in zwei Haelften.
+        treffer = store.aufloesen(CODE_A)
+        assert treffer is not None
+    assert f"ref={treffer.oeffentlicher_code}" in antwort.headers["location"]
+    assert CODE_A not in antwort.headers["location"]
 
 
 def test_klick_kennt_gruppe_und_kampagne(client: TestClient, bestand: Path) -> None:
@@ -139,9 +146,38 @@ def test_linkvorschau_von_facebook_zaehlt_nicht_als_klick(
         },
     )
 
-    assert antwort.status_code == 302  # die Vorschau bekommt ihr Ziel trotzdem
+    # 200 mit der Vorschaukarte, seit marketing.vorschau.bild eingetragen
+    # ist: Der Abruf bekommt eine Antwort, aber keinen Zaehlerstand.
+    assert antwort.status_code == 200
     with MarketingStore(bestand) as store:
         assert store.event_counts().get("click") is None
+
+
+def test_die_linkvorschau_bekommt_das_logo_der_app(client: TestClient) -> None:
+    """Im Beitrag soll die App stehen, nicht ihr Tracking-Code.
+
+    Ohne diese Karte zeigt Facebook nur die nackte Adresse
+    ("go.b-tarikak.de/r/FB-SYR-BER-010-B") - sie liest sich wie ein Code und
+    nicht wie eine App. ``og:url`` bleibt dabei die **eigene** Adresse: Sonst
+    fuehrte die Karte am Zaehler vorbei.
+    """
+    antwort = client.get(f"/r/{CODE_A}", headers={"user-agent": "facebookexternalhit/1.1"})
+    seite = antwort.text
+
+    assert "og:image" in seite
+    assert "b-tarikak.de/icons/Icon-512.png" in seite
+    assert f"/r/{CODE_A}" in seite, "og:url zeigt auf die zaehlende Adresse"
+
+
+def test_ein_mensch_bekommt_weiterhin_die_weiterleitung(client: TestClient) -> None:
+    """Die Karte ist fuer die Abrufer der Plattformen - nicht fuer den Leser."""
+    antwort = client.get(
+        f"/r/{CODE_A}",
+        headers={"user-agent": "Mozilla/5.0 (Linux; Android 14) Chrome/128.0"},
+        follow_redirects=False,
+    )
+
+    assert antwort.status_code == 302
 
 
 def test_weitere_vorschau_crawler_zaehlen_auch_nicht(client: TestClient, bestand: Path) -> None:

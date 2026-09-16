@@ -141,6 +141,23 @@ class GroupMarketing(BaseModel):
     bearbeiten: bool = True
     ausschlussgrund: str = ""
     notes: str = ""
+    # --- Was die Regeln DIESER Gruppe erlauben --------------------------
+    #
+    # Nur das Ergebnis eines Abrufs der Gruppenseite, nicht das Urteil
+    # darueber: Die Qualifikation wird bei jedem Lesen aus Mitgliedschaft,
+    # Regeln und Versuchsprotokoll gerechnet (``qualifikation.beurteile``).
+    # Ein gespeichertes Urteil neben seinen eigenen Grundlagen laeuft von
+    # ihnen weg, sobald sich eine davon aendert.
+    #
+    # ``regeln_gelesen_am`` traegt die Unterscheidung, auf die alles
+    # ankommt: ``None`` heisst "nicht nachgesehen" und nicht "nichts
+    # verboten". Ohne sie waere die Abwesenheit einer Regel eine Erlaubnis,
+    # die niemand erteilt hat.
+    regeln_gelesen_am: datetime | None = None
+    regel_keine_links: bool = False
+    regel_keine_werbung: bool = False
+    regel_freigabe_noetig: bool = False
+    regel_neue_ohne_links: bool = False
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -560,6 +577,35 @@ class KampagnenLaufStatus(StrEnum):
     FERTIG = "fertig"
     GESCHEITERT = "gescheitert"
 
+    # --- Drei Zustaende fuer "gerade geht hier nichts" (12.09.2026) -------
+    #
+    # Sie sind der Gegenentwurf zu einem ``FERTIG``, das nur bedeutete: Der
+    # Lauf hat aufgehoert, hier etwas zu versuchen. Eine Kampagne, in der
+    # dreiundzwanzig Gruppen auf eine Beitrittsfreigabe warten, ist nicht
+    # abgeschlossen - sie hat noch nicht angefangen.
+    WARTET_AUF_BEITRITT = "wartet_auf_beitritt"
+    """Die Gruppen sind zugeordnet, aber das Konto ist noch nicht drin.
+
+    Der haeufigste Grund, warum eine frische Kampagne nichts hergibt - und
+    der einzige, der sich von selbst aufloest: Eine Freigabe kommt, oder sie
+    kommt nicht.
+    """
+
+    ERSCHOEPFT_VORERST = "erschoepft_vorerst"
+    """Aktuell nichts mehr zu tun - aber spaeter wieder.
+
+    Keine Gruppe gibt heute etwas her (alle Fassungen durch, kein passender
+    Beitrag zum Kommentieren). Morgen stehen neue Beitraege in denselben
+    Gruppen; das ist der Unterschied zu ``FERTIG``.
+    """
+
+    VORERST_GEBREMST = "vorerst_gebremst"
+    """Eine Aktion ruht - Tagesmenge, Takt oder Bremse der Gegenseite.
+
+    Eine Aussage ueber **uns** und den heutigen Tag, nicht ueber die
+    Kampagne. Sie faellt weg, sobald die Sperre ablaeuft.
+    """
+
 
 class QueueZustand(StrEnum):
     """Ob die Warteschlange einer Kampagne gerade laufen darf.
@@ -636,18 +682,60 @@ class CampaignGroup(BaseModel):
     tracking_code_browser: str = ""
     tracking_url_browser: str = ""
 
+    # Der oeffentliche Deckname beider Codes - das, was in einem Beitrag
+    # steht. ``FB-SYR-DUE-004-B`` nennt einem Leser Kanal, Zielgruppe, Stadt
+    # und laufende Nummer; die Kampagnenbuchhaltung gehoert nicht in die
+    # Gruppe. Gezaehlt wird unverandert unter dem inneren Code - der
+    # Kurzcode loest sich in der Weiterleitung auf und taucht in keiner
+    # Auswertung auf (``marketing/kurzcode.py``).
+    #
+    # Leer heisst "noch nicht vergeben": Ein alter Datensatz traegt dann
+    # weiterhin die lange Adresse, und das ist der richtige Rueckfall - eine
+    # Adresse, die laenger ist als noetig, ist besser als keine.
+    public_code: str = ""
+    public_url: str = ""
+    public_code_browser: str = ""
+    public_url_browser: str = ""
+
     def code_fuer(self, ziel: str) -> str:
-        """Der Code fuer ein Ziel - ``browser`` oder ``store``.
+        """Der **innere** Code fuer ein Ziel - ``browser`` oder ``store``.
 
         Faellt auf den Store-Code zurueck, wenn der Browser-Code fehlt: Ein
         Beitrag ohne Link waere schlimmer als einer mit dem anderen Ziel.
+
+        Dieser Code gehoert in die Datenbank und in jede Auswertung, **nicht**
+        in einen Beitrag. Was dort steht, liefert ``oeffentlicher_code_fuer``.
         """
         if ziel == "browser" and self.tracking_code_browser:
             return self.tracking_code_browser
         return self.tracking_code
 
+    def oeffentlicher_code_fuer(self, ziel: str) -> str:
+        """Der Code, den ein Mensch zu sehen bekommt.
+
+        Der Kurzcode, solange es einen gibt - sonst der innere. Der Rueckfall
+        ist Absicht und keine Luecke: Ein Datensatz aus der Zeit vor den
+        Kurzcodes soll einen Beitrag bekommen, der funktioniert, und nicht
+        einen ohne Link.
+        """
+        if ziel == "browser" and self.tracking_code_browser:
+            return self.public_code_browser or self.tracking_code_browser
+        return self.public_code or self.tracking_code
+
     def url_fuer(self, ziel: str) -> str:
-        """Die Weiterleitungsadresse fuer ein Ziel. Siehe ``code_fuer``."""
+        """Die Adresse, die in den Beitrag geht. Siehe ``oeffentlicher_code_fuer``."""
+        if ziel == "browser" and self.tracking_code_browser:
+            return self.public_url_browser or self.tracking_url_browser
+        return self.public_url or self.tracking_url
+
+    def interne_url_fuer(self, ziel: str) -> str:
+        """Die Adresse mit dem **inneren** Code - fuer Protokolle und Listen.
+
+        Getrennt von ``url_fuer``, weil beide verschiedene Fragen beantworten:
+        "Was geht hinaus?" und "Welcher Datensatz ist das?". Zusammengelegt
+        stuende die Kampagnenbuchhaltung wieder im Beitrag, sobald irgendwo
+        die falsche der beiden gelesen wird.
+        """
         if ziel == "browser" and self.tracking_url_browser:
             return self.tracking_url_browser
         return self.tracking_url

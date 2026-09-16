@@ -254,12 +254,12 @@ def test_beitrag_und_kommentar_kommen_aus_getrennten_toepfen(
     assert link.kommentar_vorlage_key.startswith("ar/kommentar/")
     assert link.kommentar_text.strip()
     assert link.kommentar_text != link.post_text
-    # Beide gefuellt, beide mit Platzhalter - der Code kommt erst beim Lesen
-    # hinein. Nicht auf einen Stadtnamen geprueft: Eine Kommentarvorlage darf
-    # ohne Stadt auskommen und im Topf "mit_stadt" stehen; nur umgekehrt waere
-    # es ein Fehler. Was zaehlt, ist, dass kein Platzhalter offen bleibt.
+    # Beide gefuellt, kein Platzhalter offen. Nicht auf einen Stadtnamen
+    # geprueft: Eine Kommentarvorlage darf ohne Stadt auskommen und im Topf
+    # "mit_stadt" stehen; nur umgekehrt waere es ein Fehler.
     assert "{stadt}" not in link.kommentar_text
     assert "{zielgruppe}" not in link.kommentar_text
+    assert "{link}" in link.post_text
     assert "{link}" in link.kommentar_text
     assert link.tracking_code not in link.kommentar_text
 
@@ -568,9 +568,12 @@ def test_jede_spalte_hat_ihren_eigenen_kopierknopf(
     seite = _seite(client, bestand)
     assert "id='kopieren-post'" in seite
     assert "id='kopieren-kommentar'" in seite
-    # Welche Gruppe oben steht, entscheidet der Score - der Code ist deshalb
-    # nicht vorhersagbar, das Praefix schon.
-    assert "go.b-tarikak.de/r/FB-SYR-BON-00" in seite
+    # Die Adresse steht auf der Seite - aber als kurze, oeffentliche. Welche
+    # Gruppe oben steht, entscheidet der Score; der Kurzcode ist deshalb
+    # nicht vorhersagbar, der Vorspann schon.
+    assert "go.b-tarikak.de/r/" in seite
+    # Und der Tracking-Code steht in keinem Text, der gleich kopiert wird.
+    assert "go.b-tarikak.de/r/FB-SYR-BON-00" not in seite
 
 
 def test_beide_spalten_melden_ihren_eigenen_ausgang(

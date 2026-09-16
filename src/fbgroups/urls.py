@@ -7,6 +7,7 @@ von Facebook abgerufen - diese Modul arbeitet rein auf dem uebergebenen String.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from urllib.parse import unquote, urlsplit
 
@@ -131,14 +132,59 @@ def canonical_post_url(raw_url: str, group_id: str) -> str | None:
         post_id = None
         if "multi_permalinks" in qs and qs["multi_permalinks"]:
             post_id = qs["multi_permalinks"][0].split(",")[0]
+        elif "story_fbid" in qs and qs["story_fbid"]:
+            post_id = qs["story_fbid"][0]
         else:
-            match = re.search(r"/(?:posts|permalink)/(\d+)", parsed.path)
+            # Auch nicht-numerische Kennungen: Facebook vergibt seit 2022
+            # "pfbid..."-Kennungen. Die alte Fassung verlangte Ziffern und
+            # liess solche Verweise als Rohadresse stehen - samt der
+            # Parameter __cft__ und __tn__, die sich bei jedem Laden
+            # aendern. Derselbe Beitrag sah damit bei jedem Durchgang neu
+            # aus, und ein bereits kommentierter galt als unkommentiert.
+            match = re.search(r"/(?:posts|permalink)/([0-9A-Za-z]+)", parsed.path)
             if match:
                 post_id = match.group(1)
-                
+
         if post_id:
             return f"https://www.facebook.com/groups/{group_id}/posts/{post_id}/"
+
+        # Keine Beitragskennung gefunden: wenigstens die wechselnden
+        # Parameter abschneiden, damit zweimal dieselbe Seite auch zweimal
+        # dieselbe Zeichenkette ergibt.
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
     except Exception:
         pass
         
     return raw_url
+
+
+#: Woran ein Verweis als Beitrag zu erkennen ist. Facebook schreibt dieselbe
+#: Stelle je nach Ansicht verschieden - aus der Gruppenansicht heraus als
+#: ``multi_permalinks``, aus der Einzelansicht als ``/posts/``.
+BEITRAGSMUSTER = ("/posts/", "/permalink/", "multi_permalinks", "story_fbid", "/share/p/")
+
+
+def beitragslinks(hrefs: Iterable[str | None], group_id: str) -> list[str]:
+    """Aus den Verweisen einer Seite die Beitragsadressen - kanonisch, ohne Dubletten.
+
+    Rein und ohne Browser, damit sie pruefbar ist: Der Teil, der am haeufigsten
+    danebengreift, ist die Erkennung des Verweises - und den kann man nur
+    pruefen, wenn er nicht in Playwright-Code eingewachsen ist.
+
+    Die Reihenfolge der Seite bleibt erhalten: Facebook stellt oben hin, was
+    es fuer das Wichtigste haelt, und diese Reihenfolge ist eine Auskunft.
+    """
+    heraus: list[str] = []
+    gesehen: set[str] = set()
+    for href in hrefs:
+        if not href or "/groups/" not in href:
+            continue
+        if not any(muster in href for muster in BEITRAGSMUSTER):
+            continue
+        url = canonical_post_url(href, group_id) or href
+        if url in gesehen:
+            continue
+        gesehen.add(url)
+        heraus.append(url)
+    return heraus

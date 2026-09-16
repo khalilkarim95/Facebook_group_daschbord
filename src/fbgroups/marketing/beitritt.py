@@ -31,12 +31,22 @@ STANDARD_ABSTAND_MINUTEN = 3
 
 
 def einstellungen(config) -> tuple[int, int]:
-    """``(Anfragen je Tag, Mindestabstand in Minuten)`` aus ``settings.yaml``."""
-    pro_tag = int(config.get("beitritt", "anfragen_pro_tag", default=STANDARD_PRO_TAG))
-    abstand = int(
-        config.get("beitritt", "mindestabstand_minuten", default=STANDARD_ABSTAND_MINUTEN)
-    )
-    return pro_tag, abstand
+    """``(Anfragen je Tag, Mindestabstand in Minuten)`` - gelesen in ``grenzen``.
+
+    Seit dem 12.09.2026 steht die Zahl nicht mehr hier, sondern in
+    ``grenzen.einstellungen``: Dort haben alle drei Aktionen ihre Tagesmenge,
+    und zwei Zahlen fuer dieselbe Frage waeren zwei Wahrheiten - eine
+    Aenderung an einer von beiden haette die andere still ueberstimmt, je
+    nachdem, welcher Aufrufer gerade fragt.
+
+    Die Funktion bleibt, weil ihre Aufrufer bleiben; sie reicht jetzt durch.
+    Die alten Schluessel (``beitritt.anfragen_pro_tag``) gelten dort als
+    Rueckfall weiter.
+    """
+    from fbgroups.marketing import grenzen
+
+    grenze = grenzen.einstellungen(config).fuer(grenzen.Aktion.BEITRITT)
+    return grenze.pro_tag, grenze.abstand_min
 
 
 def naechster_zeitpunkt(

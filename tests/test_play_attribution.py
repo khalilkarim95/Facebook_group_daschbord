@@ -106,14 +106,22 @@ def test_der_code_wird_prozentkodiert(config) -> None:
 
 # --- Der Klick ------------------------------------------------------------
 
-def test_klick_fuehrt_direkt_zum_play_store(client: TestClient) -> None:
+def test_klick_fuehrt_direkt_zum_play_store(client: TestClient, bestand: Path) -> None:
     """Niemand muss mehr ueber b-tarikak.de gehen."""
     antwort = client.get(f"/r/{CODE}")
 
     assert antwort.status_code == 302
     ziel = antwort.headers["location"]
     assert ziel.startswith("https://play.google.com/store/apps/details?")
-    assert f"referrer={CODE}" in ziel
+
+    # Der ``referrer`` traegt den oeffentlichen Code. Er steht in der
+    # Adresszeile des Menschen und geht spaeter durch Google zurueck an die
+    # App; ``POST /events`` loest ihn dort wieder auf.
+    with MarketingStore(bestand) as store:
+        treffer = store.aufloesen(CODE)
+        assert treffer is not None
+    assert f"referrer={treffer.oeffentlicher_code}" in ziel
+    assert CODE not in ziel
 
 
 def test_der_klick_wird_trotzdem_gezaehlt(client: TestClient, bestand: Path) -> None:
@@ -143,14 +151,19 @@ def test_store_visit_ist_keine_installation(client: TestClient, bestand: Path) -
     assert zahlen.get(EventType.ACTIVATION.value, 0) == 0
 
 
-def test_kein_zweites_ref_an_der_play_adresse(client: TestClient) -> None:
+def test_kein_zweites_ref_an_der_play_adresse(client: TestClient, bestand: Path) -> None:
     """Google reichte es nicht weiter - es waere Zierrat mit Verwechslungsgefahr."""
     ziel = client.get(f"/r/{CODE}").headers["location"]
 
     from urllib.parse import parse_qs, urlparse
 
+    with MarketingStore(bestand) as store:
+        treffer = store.aufloesen(CODE)
+        assert treffer is not None
+
     felder = parse_qs(urlparse(ziel).query)
-    assert felder["referrer"] == [CODE]        # das Feld, das die Installation ueberlebt
+    # Das Feld, das die Installation ueberlebt - mit dem oeffentlichen Code.
+    assert felder["referrer"] == [treffer.oeffentlicher_code]
     assert "ref" not in felder                 # und kein zweites daneben
 
 
@@ -314,9 +327,11 @@ def test_landing_bleibt_moeglich(bestand: Path, config) -> None:
     antwort = client.get(f"/r/{CODE}")
 
     assert antwort.headers["location"].startswith("https://b-tarikak.de/")
-    assert f"ref={CODE}" in antwort.headers["location"]
     with MarketingStore(bestand) as store:
         assert store.event_counts().get(EventType.STORE_VISIT.value, 0) == 0
+        treffer = store.aufloesen(CODE)
+        assert treffer is not None
+    assert f"ref={treffer.oeffentlicher_code}" in antwort.headers["location"]
 
 
 def test_ohne_package_id_wird_nicht_ins_leere_geleitet(bestand: Path, config) -> None:

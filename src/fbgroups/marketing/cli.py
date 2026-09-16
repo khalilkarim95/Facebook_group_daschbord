@@ -13,7 +13,9 @@ Browser - einfuegen und abschicken muss beides ein Mensch.
 
 from __future__ import annotations
 
+import atexit
 import csv
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -697,6 +699,10 @@ def campaign_links(
     gruppen_store, store = _stores(config)
     try:
         _kampagne_oder_ende(store, campaign_id)
+        # Fehlende Kurzcodes nachtragen, bevor die Liste entsteht: Wer die
+        # CSV nimmt, um von Hand zu posten, soll dieselbe kurze Adresse
+        # bekommen wie die Automatik - nicht die mit dem Kampagnencode.
+        store.kurzcodes_nachtragen(campaign_id)
         links = store.links_for_campaign(campaign_id)
         namen = {g.group_id: g for g in gruppen_store.load_groups()}
     finally:
@@ -712,7 +718,16 @@ def campaign_links(
         # utf-8-sig und ';' - sonst zeigt Excel Arabisch und Spalten falsch an.
         with output.open("w", encoding="utf-8-sig", newline="") as fh:
             writer = csv.writer(fh, delimiter=";")
-            writer.writerow(["tracking_code", "tracking_url", "group_id", "name", "stadt", "url"])
+            # ``public_url`` steht **hinten** angehaengt: Die bisherigen
+            # sechs Spalten behalten ihre Stellung, damit eine Tabelle, die
+            # jemand schon gebaut hat, weiter passt. Sie ist die Adresse, die
+            # in einen Beitrag gehoert - die davor ist die des Datensatzes.
+            writer.writerow(
+                [
+                    "tracking_code", "tracking_url", "group_id", "name", "stadt", "url",
+                    "public_url",
+                ]
+            )
             for link in links:
                 group = namen.get(link.group_id)
                 writer.writerow(
@@ -723,12 +738,45 @@ def campaign_links(
                         group.name if group else "",
                         (group.city if group else "") or "",
                         group.url_canonical if group else "",
+                        link.url_fuer("store"),
                     ]
                 )
         console.print(f"[green]CSV:[/green] {output}  ({len(links)} Links)")
         return
 
     _links_tabelle(links, namen)
+
+
+@campaign_app.command("kurzlinks")
+def campaign_kurzlinks(
+    campaign_id: str = typer.Argument(
+        "", help="Nur diese Kampagne. Ohne Angabe: der ganze Bestand."
+    ),
+) -> None:
+    """Traegt die oeffentlichen Kurzcodes nach - fuer Zuordnungen von frueher.
+
+    Neue Zuordnungen bringen ihren Deckname selbst mit; was hier noch fehlt,
+    stammt aus der Zeit vor dem 14.09.2026. Der Befehl ist wiederholbar und
+    fasst Vorhandenes nie an: Ein vergebener Kurzcode steht moeglicherweise
+    schon in einem Beitrag, und ein Klick darauf muss ankommen.
+
+    Er **aendert keine Tracking-Codes** und keine Auswertung. Was sich
+    aendert, ist allein die Adresse, die ab dem naechsten Beitrag hinausgeht.
+    """
+    config = _config()
+    with MarketingStore(config.path("sqlite_path")) as store:
+        if campaign_id:
+            _kampagne_oder_ende(store, campaign_id)
+        anzahl = store.kurzcodes_nachtragen(campaign_id)
+
+    umfang = f"Kampagne {campaign_id}" if campaign_id else "dem ganzen Bestand"
+    if not anzahl:
+        console.print(f"[green]In {umfang} hat jede Zuordnung ihre kurze Adresse.[/green]")
+        return
+    console.print(
+        f"[green]{anzahl}[/green] Zuordnung(en) in {umfang} haben eine kurze Adresse "
+        "bekommen. Die Tracking-Codes und alle Auswertungen bleiben unveraendert."
+    )
 
 
 @campaign_app.command("refresh-urls")
@@ -960,7 +1008,7 @@ def campaign_kaltmodus(campaign_id: str = typer.Argument(...)) -> None:
         gruppen = {g.group_id: g for g in bestand.load_groups()}
     with MarketingStore(config.path("sqlite_path")) as store:
         campaign = _kampagne_oder_ende(store, campaign_id)
-        reihe = arbeitsreihenfolge(store, campaign_id, gruppen)
+        reihe = arbeitsreihenfolge(store, campaign_id, gruppen, config)
         heute = store.versuche_heute(jetzt.date().isoformat())
         roh = store.letzter_versuch()
 
@@ -1036,12 +1084,26 @@ def campaign_posted(
 
 @campaign_app.command("retry")
 def campaign_retry(
-    campaign_id: str = typer.Argument(...),
+    campaign_id: str = typer.Argument(
+        "",
+        help="Kennung - oder weglassen fuer ALLE Kampagnen.",
+    ),
     alle: bool = typer.Option(
         False, "--alle", help="Auch die, die ihre Versuche aufgebraucht haben."
     ),
+    kommentare: bool = typer.Option(
+        False,
+        "--kommentare",
+        help="Zusaetzlich die gescheiterten Kommentarfassungen zuruecksetzen.",
+    ),
 ) -> None:
     """Stellt die fehlgeschlagenen Beitraege zurueck in die Arbeitsliste.
+
+    **Ohne Kennung gilt es fuer alle Kampagnen.** Der Fall, fuer den es
+    gebraucht wird, ist naemlich nie einer: Ein geschlossenes Browserfenster
+    laesst nicht eine Kampagne scheitern, sondern die, an der gerade
+    gearbeitet wurde, und jede danach. Sieben Kampagnen einzeln aufzuzaehlen
+    ist derselbe Handgriff siebenmal - und beim achten vergisst man eine.
 
     ``uebersprungen`` bleibt stehen - dort hat ein Mensch entschieden, dass
     die Gruppe nicht passt.
@@ -1050,29 +1112,91 @@ def campaign_retry(
     wird am Ende genannt: "erlaubt keine Links" geht beim vierten Mal nicht
     anders aus als beim ersten, kostet aber jedes Mal einen Handgriff.
     ``--alle`` uebergeht die Grenze.
+
+    ``--kommentare`` geht eine Ebene tiefer und holt die gescheiterten
+    **Fassungen** zurueck. Der Beitrag steht am Paar, die zehn Kommentare
+    stehen einzeln - ein abgestuerzter Browser laesst beides scheitern, und
+    ohne diesen Schalter waere allein ``campaign reset`` die Antwort: das
+    setzt aber die ganze Kampagne auf Anfang, auch das bereits
+    Veroeffentlichte. Veroeffentlichte Fassungen bleiben hier unberuehrt.
     """
     config = _config()
     grenze = 0 if alle else int(config.get("marketing", "posting", "max_versuche", default=3) or 0)
-    with MarketingStore(config.path("sqlite_path")) as store:
-        _kampagne_oder_ende(store, campaign_id)
-        anzahl = store.fehlgeschlagene_zuruecksetzen(campaign_id, max_versuche=grenze)
-        stehengeblieben = store.aufgegeben(campaign_id, grenze)
 
-    console.print(f"[green]{anzahl}[/green] wieder offen. Uebersprungene bleiben unberuehrt.")
-    if stehengeblieben:
+    with MarketingStore(config.path("sqlite_path")) as store:
+        if campaign_id:
+            _kampagne_oder_ende(store, campaign_id)
+            kennungen = [campaign_id]
+        else:
+            # Alle, nicht nur die aktiven: Eine Kampagne, die der Lauf wegen
+            # lauter Fehlschlaegen auf ``completed`` gesetzt hat, ist gerade
+            # die, die zurueckgeholt werden muss.
+            kennungen = [k.campaign_id for k in store.load_campaigns()]
+            if not kennungen:
+                console.print("[yellow]Keine Kampagne vorhanden.[/yellow]")
+                return
+            console.print(f"[cyan]Alle {len(kennungen)} Kampagne(n).[/cyan]")
+
+        ergebnisse = []
+        for kennung in kennungen:
+            anzahl = store.fehlgeschlagene_zuruecksetzen(kennung, max_versuche=grenze)
+            stehengeblieben = store.aufgegeben(kennung, grenze)
+            fassungen, gruppen = (
+                store.gescheiterte_fassungen_zuruecksetzen(kennung)
+                if kommentare
+                else (0, 0)
+            )
+            ergebnisse.append((kennung, anzahl, fassungen, gruppen, stehengeblieben))
+
+    tabelle = Table(box=None)
+    tabelle.add_column("Kampagne")
+    tabelle.add_column("Beitraege", justify="right")
+    if kommentare:
+        tabelle.add_column("Fassungen", justify="right")
+        tabelle.add_column("Gruppen", justify="right")
+    tabelle.add_column("aufgebraucht", justify="right")
+    for kennung, anzahl, fassungen, gruppen, stehengeblieben in ergebnisse:
+        zeile = [kennung, str(anzahl)]
+        if kommentare:
+            zeile += [str(fassungen), str(gruppen)]
+        zeile.append(str(len(stehengeblieben)))
+        tabelle.add_row(*zeile)
+    console.print(tabelle)
+
+    summe_beitraege = sum(e[1] for e in ergebnisse)
+    summe_fassungen = sum(e[2] for e in ergebnisse)
+    summe_gruppen = sum(e[3] for e in ergebnisse)
+    if kommentare:
         console.print(
-            f"\n[yellow]{len(stehengeblieben)}[/yellow] haben {grenze} Versuche aufgebraucht "
+            f"[green]{summe_fassungen}[/green] Kommentarfassung(en) in "
+            f"[green]{summe_gruppen}[/green] Gruppe(n) wieder offen; "
+            "Erschoepfung aus diesen Versuchen zurueckgenommen."
+        )
+    console.print(
+        f"[green]{summe_beitraege}[/green] wieder offen. "
+        "Uebersprungene und Veroeffentlichte bleiben unberuehrt."
+    )
+
+    offen = [(k, s) for k, _a, _f, _g, s in ergebnisse if s]
+    if offen:
+        gesamt = sum(len(s) for _k, s in offen)
+        console.print(
+            f"\n[yellow]{gesamt}[/yellow] haben {grenze} Versuche aufgebraucht "
             "und warten auf eine Entscheidung:"
         )
-        for link in stehengeblieben[:10]:
-            console.print(
-                f"  [dim]{link.post_attempts}x[/dim] {link.group_id} - "
-                f"{link.post_error or 'ohne Angabe'}"
-            )
-        if len(stehengeblieben) > 10:
-            console.print(f"  [dim]... und {len(stehengeblieben) - 10} weitere[/dim]")
+        for kennung, stehengeblieben in offen:
+            for link in stehengeblieben[:5]:
+                console.print(
+                    f"  [dim]{kennung} · {link.post_attempts}x[/dim] {link.group_id} - "
+                    f"{link.post_error or 'ohne Angabe'}"
+                )
+            if len(stehengeblieben) > 5:
+                console.print(
+                    f"  [dim]{kennung} · ... und {len(stehengeblieben) - 5} weitere[/dim]"
+                )
         console.print(
-            f"[dim]Trotzdem erneut versuchen:  fbgroups campaign retry {campaign_id} --alle[/dim]"
+            "[dim]Trotzdem erneut versuchen:  fbgroups campaign retry "
+            f"{campaign_id or ''} --alle[/dim]".replace("retry  ", "retry ")
         )
 
 
@@ -1153,14 +1277,24 @@ def campaign_beitritt(
                     ausgang, bemerkung = "fehler", str(exc).splitlines()[0][:120]
 
                 gezaehlt[str(ausgang)] = gezaehlt.get(str(ausgang), 0) + 1
-                klient.post(
-                    f"{basis}/automatik/beitritt/ergebnis",
-                    json={
-                        "group_id": g["group_id"],
-                        "ausgang": str(ausgang),
-                        "bemerkung": bemerkung,
-                    },
-                ).raise_for_status()
+                try:
+                    klient.post(
+                        f"{basis}/automatik/beitritt/ergebnis",
+                        json={
+                            "group_id": g["group_id"],
+                            "ausgang": str(ausgang),
+                            "bemerkung": bemerkung,
+                        },
+                    ).raise_for_status()
+                except Exception as exc:  # noqa: BLE001 - eine Gruppe, nicht der Lauf
+                    # Eine Anfrage, die hinausging, aber nicht gebucht werden
+                    # konnte: Sie steht bei Facebook und fehlt im Bestand. Das
+                    # ist zu melden und kein Grund, die uebrigen Gruppen
+                    # ausfallen zu lassen.
+                    console.print(
+                        f"[red]  nicht gebucht ({str(exc).splitlines()[0][:80]}) - "
+                        "die Anfrage selbst ist heraus[/red]"
+                    )
 
                 # Der Takt gilt zwischen den Anfragen, nicht danach: Nach der
                 # letzten zu warten haelt nur den Menschen auf.
@@ -1270,6 +1404,97 @@ def campaign_abgleich(
     console.print(f"[green]{uebertragen} von {len(offen)} auf dem Server nachgetragen.[/green]")
 
 
+@campaign_app.command("watchdog")
+def campaign_watchdog(
+    server: str = typer.Option(
+        None,
+        "--server",
+        help="An den Lauf durchgereicht, z. B. http://127.0.0.1:8090. "
+        "Ohne Angabe gilt watchdog.server aus settings.yaml.",
+    ),
+    abstand: int = typer.Option(
+        0, "--abstand", help="Sekunden zwischen zwei Blicken (0 = aus settings.yaml)."
+    ),
+    einmal: bool = typer.Option(
+        False, "--einmal", help="Nur einmal nachsehen und melden - nichts ueberwachen."
+    ),
+) -> None:
+    """Sorgt dafuer, dass **ein** ``campaign automatik`` laeuft - dauerhaft.
+
+    Einmal starten, dann laeuft er:
+
+        fbgroups campaign watchdog --server http://127.0.0.1:8090
+
+    Alle paar Minuten sieht er nach. Laeuft ein Lauf, tut er nichts. Ist
+    keiner da - abgestuerzt, beendet, nie gestartet -, startet er genau den
+    Befehl, den Sie sonst von Hand eintippen.
+
+    **Er enthaelt keine Kampagnenlogik.** Keine Warteschlange, keine
+    Rangfolge, kein Takt, keine Entscheidung ueber eine Gruppe - das bleibt
+    alles, wo es ist. Er legt keine Kampagne an, setzt keine auf
+    ``completed`` und beginnt keine von vorn: ``campaign automatik`` ohne
+    ``--neu`` nimmt den offenen Lauf mitsamt Fortschritt wieder auf.
+
+    **Antwortet der Dienst nicht**, wird gewartet statt gestartet. Ein
+    geschlossener SSH-Tunnel ist kein Fehlschlag der Kampagne, und ein Lauf
+    ohne Tunnel scheiterte an der ersten Anfrage, ohne etwas zu buchen.
+
+    Beenden mit Strg+C. Soll er einen Neustart des Rechners ueberleben,
+    gehoert er in einen Dienst (systemd, Aufgabenplanung) - das ist eine
+    Entscheidung ueber den Rechner und keine dieses Programms.
+    """
+    from fbgroups.marketing import watchdog
+
+    config = _config()
+    einst = watchdog.einstellungen(config)
+    if server:
+        einst = replace(einst, server=server)
+    if abstand:
+        einst = replace(einst, abstand_sekunden=abstand)
+
+    sperre = watchdog.sperre_fuer(config)
+
+    if not einst.aktiv and not einmal:
+        console.print(
+            "[yellow]Der Waechter ist abgeschaltet[/yellow] "
+            "(watchdog.enabled: false in config/settings.yaml)."
+        )
+        raise typer.Exit(code=2)
+
+    farbe = {
+        "laeuft": "green",
+        "gestartet": "cyan",
+        "dienst_weg": "yellow",
+        "abgeschaltet": "yellow",
+    }
+
+    def melde(blick: watchdog.Blick) -> None:
+        # Jede Zeile mit Zeitstempel: Der Waechter laeuft tagelang, und die
+        # Frage an sein Protokoll ist immer "wann war das?".
+        jetzt = datetime.now().strftime("%d.%m. %H:%M:%S")
+        console.print(
+            f"[dim]{jetzt}[/dim] [{farbe.get(blick.art, 'white')}]"
+            f"{blick.art}[/{farbe.get(blick.art, 'white')}]  {blick.meldung}"
+        )
+
+    if not einmal:
+        console.print(
+            f"[cyan]Waechter laeuft.[/cyan] Blick alle "
+            f"{int(einst.abstand)} Sekunden"
+            + (f", Dienst {einst.server}" if einst.server else "")
+            + ".\n[dim]Beenden mit Strg+C. Es wird nichts gestartet, solange "
+            "ein Lauf die Sperre haelt.[/dim]"
+        )
+
+    try:
+        watchdog.wache(sperre, einst, melde=melde, durchgaenge=1 if einmal else 0)
+    except KeyboardInterrupt:
+        # Der laufende Lauf bleibt laufen - der Waechter ist nur sein
+        # Aufpasser, nicht sein Besitzer.
+        console.print("\n[yellow]Waechter beendet.[/yellow] "
+                      "[dim]Ein laufender campaign automatik laeuft weiter.[/dim]")
+
+
 @campaign_app.command("automatik")
 def campaign_automatik(
     dry_run: bool = typer.Option(False, "--dry-run", help="Nur zeigen, was liefe."),
@@ -1287,20 +1512,76 @@ def campaign_automatik(
         "--kampagne",
         help="Nur diese Kampagne(n) - wirkt nur beim Start eines neuen Laufs.",
     ),
+    frisch: bool = typer.Option(
+        False,
+        "--neu",
+        help="Offenen Lauf abschliessen und die Kampagnenliste neu einfrieren.",
+    ),
 ) -> None:
-    """Arbeitet ALLE aktiven Kampagnen ab - Gruppe fuer Gruppe, Kommentar fuer Kommentar.
+    """Arbeitet ALLE aktiven Kampagnen ab - Kampagne fuer Kampagne, in fester Folge.
 
     Der eine Startpunkt: Kampagnenliste einfrieren, dann streng der Reihe nach.
-    Erst wenn eine Kampagne vollstaendig durch ist, beginnt die naechste.
+    Je Kampagne gilt diese Reihenfolge, und zwar nicht nur in der Anzeige:
+
+    1. **Beitrittsanfragen** an die Gruppen dieser Kampagne, soweit die
+       Tagesmenge es zulaesst (``beitritt.anfragen_pro_tag``). Zwischen zwei
+       Anfragen wartet der Lauf den Mindestabstand ab, statt Beitraege
+       vorzuziehen.
+    2. **Neubewertung** ihrer Gruppen - erst danach steht die Rangfolge fest.
+    3. **Die besten qualifizierten Gruppen zuerst**: Wo Beitrag *und*
+       Kommentare moeglich sind, vor "nur eines von beiden". Wo nichts
+       moeglich ist, wird uebersprungen - das ist kein Urteil, die Gruppe wird
+       im naechsten Lauf neu beurteilt.
+    4. In jeder Gruppe zuerst der eigene **Beitrag**, danach die zehn
+       **Kommentare**. Geht der Beitrag nicht, wird er vermerkt und der Lauf
+       macht mit den Kommentaren weiter; zurueckgeholt wird er mit
+       ``campaign retry``.
+    5. Erst wenn die Kampagne durch ist, beginnt die naechste.
+
+    Dabei werden die Regeln der Gruppe eingehalten: kein Link, wo Links
+    verboten sind, kein Kommentar, wo Kommentare abgelehnt werden.
+
+    **Ein Fehler bei einer Gruppe beendet den Lauf nicht.** Er wird gemeldet,
+    die Gruppe fuer diesen Lauf beiseitegelegt, und es geht mit der naechsten
+    weiter - und wenn die Kampagne nichts mehr hergibt, mit der naechsten
+    Kampagne.
 
     Fortgesetzt statt neu begonnen: Ein unterbrochener Lauf wird beim naechsten
     Aufruf dort aufgenommen, wo er stand - der Fortschritt steht in den
     Fassungen selbst und nicht in einem Zaehler, der veralten koennte.
     """
-    from fbgroups.marketing import automatik, lauf
+    from fbgroups.marketing import automatik, grenzen, lauf
     from fbgroups.marketing.models import CampaignStatus
 
     config = _config()
+
+    # --- Genau ein Lauf zur selben Zeit --------------------------------
+    #
+    # Die Sperre gehoert **dem Lauf**, nicht dem Waechter (15.09.2026). Der
+    # Unterschied ist der zwischen "der Waechter startet keinen zweiten" und
+    # "es gibt keinen zweiten": Auch ein von Hand gestarteter Lauf haelt sie,
+    # und der Waechter sieht ihn. Merkte der Waechter sich nur seine eigenen
+    # Kinder, blieben zwei Fenster nebeneinander unsichtbar - und zwei
+    # Browser arbeiteten in derselben Gruppe.
+    #
+    # ``--status`` und ``--dry-run`` nehmen sie nicht: Sie sehen nur nach.
+    from fbgroups.marketing import watchdog
+
+    sperre = watchdog.sperre_fuer(config)
+    if not (status or dry_run):
+        if not sperre.nimm():
+            gehalten = sperre.lies() or {}
+            console.print(
+                f"[yellow]Es laeuft bereits ein Lauf (PID {gehalten.get('pid', '?')}).[/yellow]\n"
+                "[dim]Zwei gleichzeitige Laeufe wuerden denselben Kommentar zweimal "
+                "absetzen. Warten, oder den anderen beenden.[/dim]"
+            )
+            raise typer.Exit(code=3)
+        # Freigeben, was immer danach passiert - auch bei einem Abbruch mit
+        # Strg+C. Eine liegengebliebene Sperre spaerre den naechsten Lauf
+        # aus; ``lies`` faengt den Fall zwar ab (tote Kennung), aber erst
+        # nach dem naechsten Blick.
+        atexit.register(sperre.gib_frei)
 
     # --- Fernbetrieb: der Server haelt den Stand, dieser Rechner den Browser
     #
@@ -1323,23 +1604,80 @@ def campaign_automatik(
         console.print("[dim]Dieser Rechner steuert nur den Browser.[/dim]")
         if nur:
             console.print(f"[yellow]Eingeschraenkt auf: {', '.join(nur)}[/yellow]")
+        if frisch:
+            console.print(
+                "[yellow]--neu: Ein offener Lauf wird abgeschlossen, die "
+                "Kampagnenliste neu eingefroren.[/yellow]"
+            )
 
         with get_browser_context(config, headless=False) as context:
 
             def fern(
-                gruppen_url: str, group_id: str, text: str, bisherige: list[str]
+                gruppen_url: str,
+                group_id: str,
+                text: str,
+                bisherige: list[str],
+                texttyp: str = "kommentar",
+                vorgaben: dict | None = None,
+                link_url: str = "",
             ) -> automatik.Schrittergebnis:
                 try:
+                    if texttyp == "post":
+                        # Der Beitrag nimmt den vorbereiteten Text - er ist
+                        # bereits aufgeloest. Nur der Kommentar waehlt seinen
+                        # Text neu und braucht deshalb die Adresse.
+                        return automatik.browser_schritt_post(context, gruppen_url, text)
+                    # ``vorgaben`` traegt, was dieser Rechner nicht
+                    # nachschlagen kann: die gelesenen Gruppenregeln, die
+                    # Schwelle der Gruppenklasse und die schon benutzten
+                    # Vorlagen. Ohne sie nahm der Fernbetrieb bis zum
+                    # 14.09.2026 den lautesten Beitrag - ohne Inhaltsurteil.
                     return automatik.browser_schritt_fern(
-                        context, gruppen_url, group_id, text, bisherige
+                        context, gruppen_url, group_id, text, bisherige, vorgaben, link_url
                     )
                 except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Ausgang
                     return automatik.Schrittergebnis(
                         erfolg=False, fehler=str(exc).splitlines()[0][:120]
                     )
 
+            def beitritt(gruppen_url: str) -> tuple[str, str]:
+                """Schritt 2 des Ablaufs, im sichtbaren Browser dieses Rechners.
+
+                Ein Fehlschlag ist ein **Ausgang**, keine Ausnahme: Der Server
+                vermerkt dann nichts (es ist nichts abgeschickt worden) und
+                legt die Gruppe fuer diesen Lauf beiseite.
+                """
+                from fbgroups.automation.actions import request_join
+
+                try:
+                    ausgang, bemerkung = request_join(context, gruppen_url)
+                except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Ausgang
+                    return "fehler", str(exc).splitlines()[0][:120]
+                return str(ausgang), bemerkung
+
+            def regeln(gruppen_url: str) -> str:
+                """Schritt 1 des Ablaufs: die Gruppenseite lesen.
+
+                Ein Abruf, keine Handlung in der Gruppe. Scheitert er, kommt
+                ein leerer Text zurueck - ``lies_regeln`` macht daraus einen
+                **ungelesenen** Befund, und der schreibt nichts. Eine
+                Anmeldewand ist kein Beleg dafuer, dass eine Regel weg ist.
+                """
+                from fbgroups.automation.actions import fetch_group_html
+
+                try:
+                    return fetch_group_html(context, gruppen_url)
+                except Exception:  # noqa: BLE001 - nicht lesbar ist ein Befund
+                    return ""
+
             meldung = automatik.fuehre_lauf_fern_aus(
-                server, ausfuehren=fern, max_schritte=max_schritte, nur=list(nur or [])
+                server,
+                ausfuehren=fern,
+                beitreten=beitritt,
+                regeln_lesen=regeln,
+                max_schritte=max_schritte,
+                nur=list(nur or []),
+                frisch=frisch,
             )
         console.print(Panel(meldung, title="Automatik (Server)"))
         return
@@ -1356,8 +1694,105 @@ def campaign_automatik(
                 return
             with SqliteStore(config.path("sqlite_path")) as gruppen_store:
                 gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
-            fortschritt = lauf.lies_fortschritt(store, int(offen["lauf_id"]), gruppen)
+            # Mit der Tagesmenge, sonst zeigte die Anzeige nie den Abschnitt
+            # "Beitrittsanfragen" - und der ist der erste des Ablaufs.
+            lagen = automatik.aktionslage(store, config)
+            fortschritt = lauf.lies_fortschritt(
+                store,
+                int(offen["lauf_id"]),
+                gruppen,
+                aktionen=lagen,
+            )
         console.print(Panel(lauf.fortschrittstext(fortschritt), title="Automatik"))
+
+        # **Welche** Kampagnen der Lauf eingefroren hat - die Zahl allein sagt
+        # es nicht. Genau hier faellt auf, dass eine spaeter angelegte
+        # Kampagne nicht dabei ist; der Ausweg steht darunter.
+        tabelle = Table(title="Eingefrorene Kampagnenliste", box=None)
+        tabelle.add_column("Kampagne")
+        tabelle.add_column("Abschnitt")
+        tabelle.add_column("davon offen", justify="right")
+        tabelle.add_column("Gruppen", justify="right")
+        for k in fortschritt.kampagnen:
+            phase = k.phase(beitritt_frei=fortschritt.beitritt_frei)
+            # **Wie viele der Abschnitt noch vor sich hat.** Der Abschnittsname
+            # allein beantwortet die haeufigste Frage nicht: "Gruppenregeln
+            # lesen" sieht nach Stillstand aus, wenn man nicht weiss, ob noch
+            # drei oder dreihundert ausstehen. Beides ist derselbe Schritt,
+            # aber das eine dauert eine Minute und das andere eine Stunde.
+            offen_im_abschnitt = {
+                lauf.Phase.REGELN: len(k.regeln_offen),
+                lauf.Phase.BEITRITT: len(k.beitritt_offen),
+                lauf.Phase.ARBEIT: sum(1 for g in k.gruppen if g.bearbeitbar),
+            }.get(phase)
+            tabelle.add_row(
+                k.name,
+                lauf.PHASENTEXT[phase],
+                "-" if offen_im_abschnitt is None else str(offen_im_abschnitt),
+                f"{k.gruppen_fertig} / {k.gruppen_gesamt}",
+            )
+        console.print(tabelle)
+
+        # --- Was jede Aktion gerade darf ---------------------------------
+        #
+        # Die haeufigste Frage beim Nachsehen ist nicht "wie weit?", sondern
+        # "warum passiert nichts?" - und die Antwort steht fast immer hier.
+        aktionen = Table(title="Aktionen", box=None)
+        aktionen.add_column("Aktion")
+        aktionen.add_column("Lage")
+        aktionen.add_column("heute frei", justify="right")
+        for aktion in grenzen.Aktion:
+            lage = fortschritt.lage(aktion)
+            aktionen.add_row(
+                aktion.value,
+                "[green]moeglich[/green]"
+                if lage.moeglich
+                else f"[yellow]{lage.grund}{' - ' + lage.wartezeit if lage.wartezeit else ''}"
+                "[/yellow]",
+                str(lage.rest_heute),
+            )
+        console.print(aktionen)
+
+        # --- Was in diesem Lauf beiseiteliegt -----------------------------
+        #
+        # Mit Grund, nicht nur als Zahl: "kein Anlass" ist ein Ergebnis,
+        # "Browserfenster zu" ein Hinweis auf den Rechner, und die beiden
+        # verlangen Verschiedenes.
+        uebersprungen = [
+            (g.name, g.uebersprungen_grund)
+            for k in fortschritt.kampagnen
+            for g in k.gruppen
+            if g.uebersprungen
+        ]
+        if uebersprungen:
+            liste = Table(
+                title=f"In diesem Lauf uebersprungen ({len(uebersprungen)})", box=None
+            )
+            liste.add_column("Gruppe", max_width=34)
+            liste.add_column("Grund", max_width=56)
+            for name, grund in uebersprungen[:12]:
+                liste.add_row(name, grund or "ohne Angabe")
+            console.print(liste)
+            if len(uebersprungen) > 12:
+                console.print(f"[dim]... und {len(uebersprungen) - 12} weitere[/dim]")
+            console.print(
+                "[dim]Mit dem naechsten Lauf sind sie wieder dabei - der Vermerk "
+                "haengt an dieser lauf_id.[/dim]"
+            )
+
+        with MarketingStore(config.path("sqlite_path")) as store:
+            aktive = set(automatik.aktive_kampagnen(store))
+        fehlen = aktive - {k.campaign_id for k in fortschritt.kampagnen}
+        if fehlen:
+            console.print("")
+            console.print(
+                f"[yellow]{len(fehlen)} aktive Kampagne(n) stehen nicht in diesem "
+                f"Lauf:[/yellow] {', '.join(sorted(fehlen))}"
+            )
+            console.print(
+                "[dim]Ein Lauf behaelt seine Liste. Mit [bold]--neu[/bold] wird er "
+                "abgeschlossen und eine frische eingefroren.[/dim]"
+            )
         return
 
     if dry_run:
@@ -1382,14 +1817,29 @@ def campaign_automatik(
                 return
             with SqliteStore(config.path("sqlite_path")) as gruppen_store:
                 gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
-            fortschritt = lauf.lies_fortschritt(store, lauf_id, gruppen)
+            lagen = automatik.aktionslage(store, config)
+            fortschritt = lauf.lies_fortschritt(
+                store,
+                lauf_id,
+                gruppen,
+                aktionen=lagen,
+            )
             schritt = lauf.naechster_schritt(fortschritt)
         console.print(Panel(lauf.fortschrittstext(fortschritt), title="Automatik (dry-run)"))
         if schritt is not None:
-            console.print(
-                f"Als naechstes: {schritt.gruppe_name} - Kommentar "
-                f"{schritt.kommentar_nr}/{schritt.kommentar_ziel} (Fassung {schritt.nummer})"
+            # Die Art steht vorn: "Als naechstes: Gruppe X" laesst offen, ob
+            # dort eine Beitrittsanfrage, ein Beitrag oder ein Kommentar
+            # hingeht - und das ist gerade die Frage vor einem Lauf.
+            was = {
+                lauf.Schrittart.BEITRITT: "Beitrittsanfrage",
+                lauf.Schrittart.BEWERTEN: "Neubewertung der Kampagne",
+            }.get(
+                schritt.art,
+                f"{'Beitrag' if schritt.texttyp is Texttyp.POST else 'Kommentar'} "
+                f"{schritt.kommentar_nr}/{schritt.kommentar_ziel} "
+                f"(Fassung {schritt.nummer})",
             )
+            console.print(f"Als naechstes: {schritt.gruppe_name} - {was}")
         console.print("\n[dry-run] Es wird nichts abgesetzt.")
         return
 
@@ -1403,16 +1853,54 @@ def campaign_automatik(
     # Ein Browser fuer den ganzen Lauf, nicht einer je Kommentar.
     with get_browser_context(config, headless=False) as context:
 
-        def schritt(gruppen_url: str, group_id: str, text: str) -> automatik.Schrittergebnis:
+        def schritt(
+            gruppen_url: str,
+            group_id: str,
+            text: str,
+            texttyp: str = "kommentar",
+            link_url: str = "",
+        ) -> automatik.Schrittergebnis:
             try:
-                return automatik.browser_schritt(context, config, gruppen_url, group_id, text)
+                if texttyp == "post":
+                    # Der Beitrag nimmt den vorbereiteten Text - er ist
+                    # bereits aufgeloest. Nur der Kommentar waehlt seinen
+                    # Text neu und braucht deshalb die Adresse.
+                    return automatik.browser_schritt_post(context, gruppen_url, text)
+                return automatik.browser_schritt(
+                    context, config, gruppen_url, group_id, text, link_url
+                )
             except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Ausgang
                 return automatik.Schrittergebnis(
                     erfolg=False, fehler=str(exc).splitlines()[0][:120]
                 )
 
+        def beitritt(gruppen_url: str) -> tuple[str, str]:
+            """Schritt 2 des Ablaufs - vor allem anderen in dieser Kampagne."""
+            from fbgroups.automation.actions import request_join
+
+            try:
+                ausgang, bemerkung = request_join(context, gruppen_url)
+            except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Ausgang
+                return "fehler", str(exc).splitlines()[0][:120]
+            return str(ausgang), bemerkung
+
+        def regeln(gruppen_url: str) -> str:
+            """Schritt 1 des Ablaufs: die Gruppenseite lesen - vor der Anfrage."""
+            from fbgroups.automation.actions import fetch_group_html
+
+            try:
+                return fetch_group_html(context, gruppen_url)
+            except Exception:  # noqa: BLE001 - nicht lesbar ist ein Befund
+                return ""
+
         fortschritt = automatik.fuehre_lauf_aus(
-            config, ausfuehren=schritt, max_schritte=max_schritte
+            config,
+            ausfuehren=schritt,
+            beitreten=beitritt,
+            regeln_lesen=regeln,
+            max_schritte=max_schritte,
+            nur=list(nur or []),
+            frisch=frisch,
         )
 
     console.print(Panel(lauf.abschlusstext(fortschritt), title="Automatik"))
@@ -1450,7 +1938,7 @@ def campaign_auto(
 
             with SqliteStore(config.path("sqlite_path")) as gruppen_store:
                 gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
-            reihe = arbeitsreihenfolge(store, campaign_id, gruppen)
+            reihe = arbeitsreihenfolge(store, campaign_id, gruppen, config)
             offen = [link for link in reihe if link.post_status != PostStatus.VEROEFFENTLICHT]
             if not offen:
                 console.print("[green]Alle zugeordneten Gruppen sind abgearbeitet.[/green]")
@@ -1530,7 +2018,16 @@ def campaign_auto(
     try:
         with get_browser_context(config, headless=False) as context:
             if texttyp == Texttyp.POST:
-                erfolg = post_to_group(context, group.url_canonical, text)
+                ausgang = post_to_group(context, group.url_canonical, text)
+                erfolg = ausgang.erfolg
+                # Der Ausgang sagt mehr als "ging es?": ``link_sichtbar``
+                # heisst, dass die nackte Adresse im Beitrag steht, weil die
+                # Vorschaukarte ohne sie nicht gehalten hat. Kein Fehlschlag -
+                # der Beitrag steht und wird gezaehlt -, aber es gehoert ins
+                # Protokoll und nicht in die Stille.
+                if ausgang.hinweis:
+                    fehler_text = ausgang.hinweis
+                    console.print(f"[yellow]{ausgang.hinweis}[/yellow]")
             else:
                 console.print("[cyan]Fetching posts for commenting...[/cyan]")
                 raw_posts = fetch_top_posts(context, group.url_canonical, group.group_id)
@@ -1556,7 +2053,14 @@ def campaign_auto(
                     if offene_posts:
                         best_post = max(offene_posts, key=lambda p: p.interactions + p.comments)
                         used_post_url = best_post.post_url
-                        erfolg = comment_on_post(context, used_post_url, text)
+                        # ``comment_on_post`` liefert seit dem 12.09.2026
+                        # einen Ausgang statt eines ``bool``: Er sagt auch,
+                        # ob die Gruppe gerade nichts mehr annimmt oder der
+                        # Kommentar auf eine Freigabe wartet.
+                        ausgang = comment_on_post(context, used_post_url, text)
+                        erfolg = ausgang.erfolg
+                        if ausgang.hinweis:
+                            fehler_text = ausgang.hinweis[:100]
                     else:
                         fehler_text = "Alle aktuellen Beiträge wurden bereits kommentiert."
                 else:
@@ -2944,3 +3448,290 @@ def marketing_audit(limit: int = typer.Option(25, "--limit")) -> None:
             eintrag["detail"][:50],
         )
     console.print(table)
+
+
+@marketing_app.command("regeln")
+def marketing_regeln(
+    limit: int = typer.Option(0, "--limit", help="Hoechstens N Gruppenseiten lesen."),
+    alle: bool = typer.Option(False, "--alle", help="Alle offenen Gruppen."),
+    erneut: bool = typer.Option(
+        False, "--erneut", help="Auch Gruppen, deren Regeln schon gelesen sind."
+    ),
+) -> None:
+    """Liest die Regeln der Gruppenseiten - Beitritt, Links, Werbung, Freigabe.
+
+    **Startet nie beilaeufig.** Ohne ``--limit`` oder ``--alle`` bricht der
+    Befehl mit Exit-Code 2 ab, ohne etwas abzurufen - dieselbe Vorsicht wie
+    bei ``fbgroups enrich`` und aus demselben Grund: Es geht um das Konto des
+    Nutzers, nicht um Guthaben.
+
+    **Nur mit angemeldetem Browser.** Ueber ``httpx`` antwortet Facebook mit
+    einer Anmeldewand; dort steht keine Gruppenregel. Ein Weg, der
+    zuverlaessig nichts findet, waere schlimmer als keiner - er trueg "nichts
+    verboten" in den Bestand ein, und das ist eine Erlaubnis, die niemand
+    erteilt hat.
+
+    Ein **nicht gelesener** Befund schreibt nichts (``merke_regeln``): Eine
+    Anmeldewand ist kein Beleg dafuer, dass eine frueher gelesene Regel weg
+    ist.
+    """
+    from fbgroups.marketing.qualifikation import lies_regeln
+
+    if not limit and not alle:
+        console.print(
+            "[red]Kein Umfang angegeben.[/red] "
+            "Ein Abruf bei facebook.com beginnt nicht beilaeufig:\n"
+            "  --limit N   hoechstens N Gruppenseiten\n"
+            "  --alle      alle offenen"
+        )
+        raise typer.Exit(code=2)
+
+    config = _config()
+    with SqliteStore(config.path("sqlite_path")) as bestand:
+        gruppen = [g for g in bestand.load_groups() if g.url_canonical]
+    with MarketingStore(config.path("sqlite_path")) as store:
+        staende = store.load_all_marketing()
+
+    offen = [
+        g
+        for g in gruppen
+        if erneut
+        or (g.group_id not in staende)
+        or staende[g.group_id].regeln_gelesen_am is None
+    ]
+    wieviele = len(offen) if alle else min(limit, len(offen))
+    console.print(
+        f"{len(gruppen)} Gruppen, davon [bold]{len(offen)}[/bold] ohne gelesene Regeln. "
+        f"{wieviele} in diesem Lauf."
+    )
+    if not wieviele:
+        return
+
+    from fbgroups.automation.actions import fetch_group_html
+    from fbgroups.automation.browser import get_browser_context
+
+    console.print("[cyan]Mit angemeldetem Browser - das Fenster bleibt sichtbar.[/cyan]")
+    gelesen = mit_regel = 0
+    with get_browser_context(config, headless=False) as context, MarketingStore(
+        config.path("sqlite_path")
+    ) as store:
+        for gruppe in offen[:wieviele]:
+            try:
+                html = fetch_group_html(context, gruppe.url_canonical)
+            except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Befund
+                console.print(f"[red]{gruppe.group_id}: {str(exc).splitlines()[0][:80]}[/red]")
+                continue
+
+            befund = lies_regeln(html)
+            if not befund.gelesen:
+                console.print(f"[dim]{gruppe.name or gruppe.group_id}: nichts lesbar[/dim]")
+                continue
+
+            store.merke_regeln(gruppe.group_id, befund)
+            gelesen += 1
+            zusammenfassung = befund.zusammenfassung()
+            if zusammenfassung:
+                mit_regel += 1
+                console.print(
+                    f"[yellow]{gruppe.name or gruppe.group_id}: {zusammenfassung}[/yellow]"
+                )
+            else:
+                console.print(f"[green]{gruppe.name or gruppe.group_id}: nichts verboten[/green]")
+
+    console.print(
+        f"\n[green]{gelesen}[/green] Gruppenseiten gelesen, "
+        f"[yellow]{mit_regel}[/yellow] davon mit einer einschraenkenden Regel."
+    )
+
+
+@campaign_app.command("pruefe-inhalt")
+def campaign_pruefe_inhalt(
+    text: list[str] = typer.Argument(
+        None, help="Der Beitragstext. Mehrere Texte: mehrfach angeben."
+    ),
+    datei: Path = typer.Option(
+        None, "--datei", help="Texte aus einer Datei, ein Beitrag je Zeile."
+    ),
+    regeln: str = typer.Option(
+        "",
+        "--regeln",
+        help="Regeltext der Gruppe (z. B. 'Keine Links'). Leer = ungelesen.",
+    ),
+    mitglied: bool = typer.Option(
+        True, "--mitglied/--kein-mitglied", help="Ist das Konto in der Gruppe?"
+    ),
+) -> None:
+    """Zeigt, was der Runner in einem Beitrag sieht - **ohne Browser und Konto**.
+
+    Der Weg, die Erkennung an den eigenen Gruppen zu pruefen, bevor irgendwo
+    ein Kommentar steht. Er ruft nichts ab, schreibt nichts und braucht keine
+    Anmeldung: Der Text kommt von der Kommandozeile, und heraus kommt genau
+    das, was auch im Lauf entschieden wuerde.
+
+    Gezeigt wird beides - der **Befund** (worum geht es, was will die
+    Person, hat es mit uns zu tun) und die **Entscheidung** (welche Form
+    einer Antwort passt, mit oder ohne Link). Wer die Schlagwortlisten in
+    ``marketing/inhalt.py`` erweitert, prueft hier, ob es gewirkt hat.
+
+    ``--regeln`` stellt die Gruppe nach: Ohne Angabe gelten ihre Regeln als
+    **ungelesen**, und dann faellt die Entscheidung vorsichtiger aus - genau
+    wie im Betrieb.
+    """
+    from fbgroups.marketing import automatik, inhalt, qualifikation
+    from fbgroups.marketing.entscheidung import Erlaubnis, entscheide
+    from fbgroups.marketing.qualifikation import Regelbefund, beurteile, lies_regeln
+
+    texte = list(text or [])
+    if datei:
+        # utf-8-sig: Die Datei entsteht oft in Notepad, das ein BOM schreibt -
+        # ohne das haenge es am ersten Text.
+        texte += [
+            zeile.strip()
+            for zeile in datei.read_text(encoding="utf-8-sig").splitlines()
+            if zeile.strip()
+        ]
+    if not texte:
+        console.print(
+            "[red]Kein Text.[/red] Beispiel:\n"
+            '  fbgroups campaign pruefe-inhalt "كيف فيني ابعت غرض لسوريا؟"'
+        )
+        raise typer.Exit(code=2)
+
+    config = _config()
+    befund_regeln = lies_regeln(regeln) if regeln else Regelbefund()
+    urteil = beurteile(mitglied=mitglied, regeln=befund_regeln)
+    erlaubnis = Erlaubnis.aus_regeln(befund_regeln, urteil.qualifikation)
+
+    console.print(
+        Panel(
+            f"Gruppe: {urteil.beschriftung} - {urteil.grund}\n"
+            f"Erlaubt: Kommentare {'ja' if erlaubnis.kommentare else 'nein'} · "
+            f"Links {'ja' if erlaubnis.links else 'nein'} · "
+            f"Werbung {'ja' if erlaubnis.werbung else 'nein'} · "
+            f"Regeln {'gelesen' if erlaubnis.regeln_gelesen else 'UNGELESEN'}",
+            title="Angenommene Gruppe",
+        )
+    )
+
+    tabelle = Table(box=None)
+    tabelle.add_column("Beitrag", max_width=38)
+    tabelle.add_column("Thema")
+    tabelle.add_column("Absicht")
+    tabelle.add_column("Bezug")
+    tabelle.add_column("Entscheidung")
+    tabelle.add_column("Link")
+
+    for roh in texte:
+        befund = inhalt.lies(roh)
+        entscheidung = entscheide(befund, erlaubnis)
+        farbe = "green" if entscheidung.antwortet else "dim"
+        tabelle.add_row(
+            roh[:38],
+            befund.thema.value,
+            befund.absicht.value,
+            befund.relevanz.value,
+            f"[{farbe}]{entscheidung.art.value}[/{farbe}]",
+            "ja" if entscheidung.mit_link else "-",
+        )
+    console.print(tabelle)
+
+    console.print(
+        "\n[dim]Kein Abruf, keine Buchung. Was hier ``no_reply`` heisst, "
+        "bekommt im Lauf keinen Kommentar - das ist ein Ergebnis und kein "
+        "Fehlschlag.[/dim]"
+    )
+
+    if not mitglied:
+        # Die Mitgliedschaft ist **kein** Teil dieser Entscheidung, und das
+        # ist Absicht: Sie ist eine Angabe ueber unseren Arbeitsstand, nicht
+        # ueber den Beitrag. Ob sie sperrt, sagt
+        # ``automatik.mitgliedschaft_pflicht`` - sonst stuende hier eine
+        # Entscheidung, die der Lauf gar nicht erst treffen wuerde.
+        sperrt = automatik.mitgliedschaft_pflicht(config) or qualifikation.pflicht(config)
+        console.print(
+            "[yellow]Ohne Mitgliedschaft:[/yellow] Diese Entscheidung beschreibt "
+            "nur den Beitrag. Ob in der Gruppe ueberhaupt etwas versucht wird, "
+            "sagt der Schalter - er steht gerade auf "
+            f"[bold]{'sperren' if sperrt else 'versuchen'}[/bold] "
+            "(automatik.mitgliedschaft_pflicht / qualifikation.pflicht)."
+        )
+
+
+@campaign_app.command("qualifikation")
+def campaign_qualifikation(
+    campaign_id: str = typer.Argument(...),
+    stufe: str = typer.Option("", "--stufe", help="Nur diese Stufe zeigen."),
+) -> None:
+    """Der Trichter dieser Kampagne: entdeckt -> Beitritt -> Bewertung -> geeignet.
+
+    Die Antwort auf "wir haben 300 Gruppen, also posten wir in 300 Gruppen".
+    Gerechnet wird bei jedem Aufruf neu aus Mitgliedschaft, gelesenen Regeln
+    und dem Versuchsprotokoll - es gibt keine gespeicherte Einstufung, die
+    veralten koennte.
+    """
+    from fbgroups.marketing import qualifikation as qual
+
+    config = _config()
+    with SqliteStore(config.path("sqlite_path")) as bestand:
+        gruppen = {g.group_id: g for g in bestand.load_groups()}
+    with MarketingStore(config.path("sqlite_path")) as store:
+        _kampagne_oder_ende(store, campaign_id)
+        links = store.links_for_campaign(campaign_id)
+        staende = store.load_all_marketing()
+        beobachtet = store.beobachtungen()
+
+    mitgliedschaft = {
+        MarketingStatus.MEMBER,
+        MarketingStatus.CONTACTED,
+        MarketingStatus.INTERESTED,
+        MarketingStatus.APPROVED,
+        MarketingStatus.ACTIVE,
+    }
+    je_stufe: dict[str, list[tuple[str, str]]] = {}
+    for link in links:
+        stand = staende.get(link.group_id)
+        befund = qual.beurteile(
+            mitglied=bool(stand and stand.marketing_status in mitgliedschaft),
+            beitritt_angefragt=bool(
+                stand and stand.marketing_status is MarketingStatus.JOIN_REQUESTED
+            ),
+            regeln=qual.Regelbefund(
+                gelesen=bool(stand and stand.regeln_gelesen_am is not None),
+                keine_links=bool(stand and stand.regel_keine_links),
+                keine_werbung=bool(stand and stand.regel_keine_werbung),
+                freigabe_noetig=bool(stand and stand.regel_freigabe_noetig),
+                neue_ohne_links=bool(stand and stand.regel_neue_ohne_links),
+            ),
+            beobachtung=beobachtet.get(link.group_id),
+        )
+        gruppe = gruppen.get(link.group_id)
+        name = (gruppe.name if gruppe else "") or link.group_id
+        je_stufe.setdefault(befund.qualifikation.value, []).append((name, befund.grund))
+
+    tabelle = Table(box=None)
+    tabelle.add_column("Stufe", style="bold")
+    tabelle.add_column("Gruppen", justify="right")
+    for q in qual.TRICHTER:
+        eintraege = je_stufe.get(q.value, [])
+        if eintraege or q is qual.Qualifikation.GEEIGNET:
+            tabelle.add_row(qual.BESCHRIFTUNG[q], str(len(eintraege)))
+    console.print(tabelle)
+
+    arbeitsfaehig = sum(
+        len(je_stufe.get(q.value, []))
+        for q in qual.TRICHTER
+        if qual.darf(q, Texttyp.KOMMENTAR, mit_link=False)
+    )
+    console.print(
+        f"\n[bold]{arbeitsfaehig}[/bold] von {len(links)} Gruppen koennten "
+        "ueberhaupt etwas bekommen."
+    )
+    if not qual.pflicht(config):
+        console.print(
+            "[dim]Der Schalter qualifikation.pflicht steht auf false - "
+            "gearbeitet wird weiterhin in allen.[/dim]"
+        )
+
+    if stufe:
+        for name, grund in je_stufe.get(stufe, []):
+            console.print(f"  {name[:44]:<44}  {grund}")

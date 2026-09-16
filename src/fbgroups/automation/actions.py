@@ -1,5 +1,6 @@
 import random
 import re
+from dataclasses import dataclass
 from enum import StrEnum
 
 from playwright.sync_api import BrowserContext
@@ -37,8 +38,223 @@ _KOMMENTARFELD = ", ".join(
 )
 
 
-def post_to_group(context: BrowserContext, group_url: str, text: str) -> bool:
-    """Automates posting a message to a Facebook group."""
+# Der Knopf, mit dem man die Vorschaukarte wieder loswird. Er entsteht
+# **mit** der Karte und ist damit das deutlichste Zeichen, dass sie da ist.
+# Drei Sprachen, weil die Oberflaeche in drei Sprachen laufen kann; der
+# Vergleich ist unscharf (``*=``) und ohne Ruecksicht auf Gross- und
+# Kleinschreibung (``i``), weil Facebook die Beschriftung mal mit und mal
+# ohne Zusatz fuehrt ("Vorschau entfernen", "Remove post preview").
+_VORSCHAU_ZEICHEN = ", ".join(
+    f"{_DIALOG} [aria-label*='{wort}' i]"
+    for wort in ("Vorschau", "preview", "معاينة")
+)
+
+
+#: Die eine Adresse im Beitrag. ``[^\s<>"\')]`` schneidet Satzzeichen ab, die
+#: in der Vorlage hinter dem Link stehen duerfen - ein angehaengtes Komma
+#: gehoerte sonst zur Adresse und machte den Klick zum 404.
+_ADRESSE = re.compile(r'https?://[^\s<>"\'\)]+')
+
+
+def trenne_adresse(text: str) -> tuple[str, str]:
+    """``(Text ohne die Adresse, die Adresse)`` - oder ``(text, "")``.
+
+    Der Rueckbau des Beitragstextes fuer den Handgriff, um den es geht: Erst
+    den Link einfuegen, damit Facebook die Vorschaukarte baut, dann die nackte
+    Adresse wieder herausnehmen. Die Karte bleibt stehen und bleibt anklickbar
+    - und im Beitrag steht kein Aktenzeichen mehr.
+
+    **Nur bei genau einer Adresse.** Keine heisst: nichts zu tun. Mehrere
+    heissen: Wir wissen nicht, welche die Karte gebaut hat, und die falsche zu
+    entfernen naehme dem Beitrag seinen Link. In beiden Faellen kommt der Text
+    unveraendert zurueck, und der Aufrufer laesst es bleiben.
+
+    Aufgeraeumt wird nur, was das Entfernen hinterlaesst: Leerzeichen am
+    Zeilenende und die Zeile selbst, wenn sie nur aus der Adresse bestand. Die
+    Vorlagen setzen den Link meist auf eine eigene Zeile; bliebe sie leer,
+    endete jeder Beitrag mit einem Absatz ins Nichts.
+    """
+    treffer = _ADRESSE.findall(text)
+    if len(treffer) != 1:
+        return text, ""
+
+    adresse = treffer[0]
+    # **Nur am Zeilenende.** Die Vorlagen setzen den Link ans Satz- oder
+    # Zeilenende ("... من هنا: {link}") oder auf eine eigene Zeile. Stuende er
+    # mitten im Satz, hinterliesse das Entfernen eine Luecke darin - aus
+    # "Text (siehe {link}), danke" wuerde "Text (siehe ), danke". Lieber die
+    # Adresse stehen lassen als einen zerbrochenen Satz posten.
+    rest = text.split(adresse, 1)[1]
+    if rest.splitlines() and rest.splitlines()[0].strip():
+        return text, ""
+    zeilen = []
+    for zeile in text.split("\n"):
+        if adresse not in zeile:
+            zeilen.append(zeile)
+            continue
+        gekuerzt = zeile.replace(adresse, "").rstrip()
+        # Eine Zeile, die **durch das Entfernen** leer wurde, faellt ganz weg.
+        # Eine Leerzeile, die vorher schon dastand, bleibt stehen - sie ist
+        # ein Absatz und kein Rest. Ohne diesen Unterschied endete jeder
+        # Beitrag, dessen Vorlage den Link auf eine eigene Zeile setzt, mit
+        # einem Absatz ins Nichts.
+        if gekuerzt:
+            zeilen.append(gekuerzt)
+    ohne = "\n".join(zeilen).rstrip()
+    # Ein Text, der nur aus dem Link bestand, darf nicht als leerer Beitrag
+    # hinausgehen - dann bleibt die Adresse lieber stehen.
+    return (ohne, adresse) if ohne.strip() else (text, "")
+
+
+def _karte_da(page, bilder_vorher: int) -> bool:
+    """Ob im Dialog gerade eine Vorschaukarte steht.
+
+    Zwei Zeichen, und beide sind Anzeichen und kein Beweis: der Knopf zum
+    Entfernen der Karte, und ein Bild mehr im Dialog als vorher. Der Text des
+    Entwurfs taugt nicht dafuer - die Adresse steht ja ohnehin darin.
+    """
+    return (
+        page.locator(_VORSCHAU_ZEICHEN).count() > 0
+        or page.locator(f"{_DIALOG} img").count() > bilder_vorher
+    )
+
+
+def _warte_auf_vorschau(page, text: str, bilder_vorher: int, frist_ms: int = 15000) -> bool:
+    """Wartet, bis Facebook die Vorschaukarte zum Link im Entwurf gebaut hat.
+
+    **Warum ueberhaupt gewartet wird.** Die Karte entsteht nicht beim
+    Schreiben, sondern erst, nachdem Facebook den Link im Entwurf entdeckt,
+    ihn selbst abgerufen und Bild und Titel geladen hat - das dauert einige
+    Sekunden. Wer sofort absendet, veroeffentlicht die nackte Adresse. Genau
+    das stand am 10.09.2026 im ersten automatisch gesetzten Beitrag:
+    "https://go.b-tarikak.de/r/FB-SYR-BER-010-B" als blauer Text, ohne Bild,
+    ohne Namen - es liest sich wie ein Code und nicht wie eine App.
+
+    ``bilder_vorher`` kommt vom Aufrufer und wird **vor** dem Einfuegen
+    gezaehlt: Die Karte erkennt man an einem Bild mehr, und "mehr als vorher"
+    braucht ein Vorher.
+
+    Returns: ob eine Karte erkannt wurde. Kommt keine, wird trotzdem gepostet
+    - ein Beitrag ohne Karte ist besser als kein Beitrag.
+    """
+    if not re.search(r"https?://", text):
+        return False
+
+    for _ in range(max(frist_ms // 500, 1)):
+        if _karte_da(page, bilder_vorher):
+            console.print("[green]Vorschaukarte ist da.[/green]")
+            # Kurz stehenlassen: Das Bild laedt noch, waehrend der Rahmen
+            # schon steht.
+            page.wait_for_timeout(random.randint(1200, 2000))
+            return True
+        page.wait_for_timeout(500)
+
+    console.print(
+        "[yellow]Keine Vorschaukarte im Entwurf - der Beitrag geht ohne sie hinaus.[/yellow]"
+    )
+    return False
+
+
+def _ersetze_entwurf(page, textbox, text: str) -> None:
+    """Tauscht den gesamten Entwurf gegen einen anderen Text.
+
+    Alles markieren und ueberschreiben statt die Adresse einzeln
+    herauszuloeschen: Wo genau sie im Feld steht, weiss nur Facebooks
+    Editor - er bricht um, und ein contenteditable zaehlt Zeichen anders als
+    eine Zeichenkette. Ein Markieren trifft immer.
+    """
+    textbox.click(delay=random.randint(80, 200))
+    page.keyboard.press("Control+A")
+    page.wait_for_timeout(random.randint(150, 400))
+    page.keyboard.insert_text(text)
+
+
+def _link_verbergen(page, textbox, text: str, bilder_vorher: int) -> tuple[bool, str]:
+    """Nimmt die nackte Adresse aus dem Entwurf - wenn die Karte das ueberlebt.
+
+    Returns: ``(Adresse verborgen, Hinweis)``.
+
+    **Der Handgriff und seine Bedingung.** Facebook baut die Vorschaukarte aus
+    dem Link im Entwurf und behaelt sie, wenn man den Link danach wieder
+    herausnimmt - sie bleibt anklickbar und fuehrt weiterhin auf
+    ``/r/{code}``, also wird der Klick weiterhin gezaehlt. Was verschwindet,
+    ist allein die nackte Adresse im Text.
+
+    Behaelt Facebook die Karte **nicht**, wird der volle Text wieder
+    hergestellt und das ausdruecklich gemeldet. Ein Beitrag ohne Link waere
+    ein Beitrag, dessen Gruppe nie einen Klick gutgeschrieben bekommt - und
+    ihn trotzdem als gelungen zu verbuchen waere genau die Art stiller
+    Fehlschlag, die dieses Projekt an anderer Stelle teuer bezahlt hat
+    (``comment_on_post`` meldete bis zum 12.09.2026 jeden Versuch als Erfolg).
+    """
+    ohne, adresse = trenne_adresse(text)
+    if not adresse:
+        return False, "mehr als eine oder gar keine Adresse im Text"
+
+    _ersetze_entwurf(page, textbox, ohne)
+    # Facebook braucht einen Moment, um zu merken, dass der Link weg ist -
+    # sofort nachzusehen hiesse, die alte Karte zu sehen und zufrieden zu sein.
+    page.wait_for_timeout(random.randint(1500, 2500))
+
+    if _karte_da(page, bilder_vorher):
+        console.print("[green]Adresse entfernt, die Vorschaukarte bleibt.[/green]")
+        return True, ""
+
+    console.print(
+        "[yellow]Ohne die Adresse verschwindet die Vorschaukarte - "
+        "der Link bleibt im Text stehen.[/yellow]"
+    )
+    _ersetze_entwurf(page, textbox, text)
+    _warte_auf_vorschau(page, text, bilder_vorher)
+    return False, "Vorschaukarte haelt ohne die Adresse nicht - Link sichtbar im Beitrag"
+
+
+@dataclass(frozen=True)
+class Beitragsausgang:
+    """Was aus einem abgesetzten Beitrag geworden ist.
+
+    Wie ``Kommentarausgang`` und aus demselben Grund: Ein ``bool`` beantwortet
+    "ging es?" und verschweigt "wie sieht es aus?". Seit der Beitrag die nackte
+    Adresse verbergen soll, ist das zweite eine eigene Frage - und eine, die
+    ein Mensch spaeter stellt, wenn er den Beitrag in der Gruppe sieht.
+    """
+
+    erfolg: bool
+    hinweis: str = ""
+    #: Ob Facebook eine Vorschaukarte gebaut hat.
+    karte: bool = False
+    #: Ob die nackte Adresse im veroeffentlichten Text steht. ``True`` ist
+    #: kein Fehlschlag - der Beitrag steht, und sein Link wird gezaehlt -,
+    #: aber es ist das, was eigentlich vermieden werden sollte.
+    link_sichtbar: bool = True
+
+
+def post_to_group(
+    context: BrowserContext,
+    group_url: str,
+    text: str,
+    *,
+    link_verbergen: bool = True,
+) -> Beitragsausgang:
+    """Setzt den eigenen Beitrag in der Gruppe ab.
+
+    **Die Adresse baut die Karte und geht dann wieder aus dem Text.** Der
+    Ablauf ist der Handgriff, den ein Mensch macht: Link einfuegen, warten,
+    bis Facebook die Vorschaukarte gebaut hat, die nackte Adresse
+    herausnehmen, absenden. Die Karte bleibt anklickbar und fuehrt weiterhin
+    auf ``/r/{code}`` - der Klick wird also weiterhin dieser Gruppe
+    gutgeschrieben -, aber im Beitrag steht kein Aktenzeichen mehr.
+
+    Haelt die Karte das nicht aus, wird der volle Text wiederhergestellt und
+    gepostet. Das ist kein Fehlschlag, aber auch kein stiller Erfolg:
+    ``link_sichtbar`` und ``hinweis`` sagen es, und der Aufrufer schreibt es
+    ins Protokoll. Ein Beitrag ohne Link waere schlimmer als einer mit einer
+    sichtbaren Adresse - seine Gruppe bekaeme nie einen Klick gutgeschrieben.
+
+    ``link_verbergen=False`` laesst den Text unangetastet. Der Ausweg fuer den
+    Fall, dass Facebook den Handgriff einmal nicht mehr mitmacht - eine Zahl
+    in der Konfiguration statt einer Codeaenderung, wie ueberall hier.
+    """
     page = context.new_page()
     try:
         console.print(f"Navigating to {group_url}...")
@@ -72,7 +288,9 @@ def post_to_group(context: BrowserContext, group_url: str, text: str) -> bool:
                 "[red]Could not find the 'Write something' button. "
                 "Are you logged in and a member of the group?[/red]"
             )
-            return False
+            return Beitragsausgang(
+                erfolg=False, hinweis="Beitragsformular nicht gefunden oder blockiert"
+            )
 
         page.wait_for_timeout(random.randint(1500, 3000))
 
@@ -111,18 +329,31 @@ def post_to_group(context: BrowserContext, group_url: str, text: str) -> bool:
                 f"(Dialoge: {page.locator(_DIALOG).count()}, "
                 f"Textfelder: {page.locator(_TEXTFELD).count()})"
             )
-            return False
+            return Beitragsausgang(erfolg=False, hinweis="Kein Textfeld im Beitragsdialog")
 
+        karte = False
+        verborgen = False
+        hinweis = ""
         try:
             page.wait_for_timeout(random.randint(500, 1500))
             textbox.click(delay=random.randint(100, 300))
             page.wait_for_timeout(random.randint(500, 1000))
+            # Vor dem Einfuegen zaehlen: Die Karte erkennt man an einem Bild
+            # mehr im Dialog, und "mehr" braucht ein Vorher.
+            bilder_vorher = page.locator(f"{_DIALOG} img").count()
             # Simulate human typing
             console.print("Typing message (pasting/inserting directly)...")
             page.keyboard.insert_text(text)
+            # Erst die Vorschaukarte abwarten, dann absenden - sonst steht im
+            # Beitrag nur die nackte Adresse.
+            karte = _warte_auf_vorschau(page, text, bilder_vorher)
+            # Und dann die Adresse wieder heraus. Nur mit Karte: Ohne sie
+            # naehme das Entfernen dem Beitrag seinen Link ersatzlos.
+            if karte and link_verbergen:
+                verborgen, hinweis = _link_verbergen(page, textbox, text, bilder_vorher)
         except PlaywrightTimeoutError:
             console.print("[red]Textfeld gefunden, aber nicht beschreibbar.[/red]")
-            return False
+            return Beitragsausgang(erfolg=False, hinweis="Textfeld nicht beschreibbar")
 
         page.wait_for_timeout(random.randint(800, 2000))
 
@@ -140,19 +371,106 @@ def post_to_group(context: BrowserContext, group_url: str, text: str) -> bool:
             submit_button.click(delay=random.randint(100, 300))
         except PlaywrightTimeoutError:
             console.print("[red]Could not find the Submit button to post.[/red]")
-            return False
+            return Beitragsausgang(
+                erfolg=False, hinweis="Absendeknopf nicht gefunden", karte=karte,
+                link_sichtbar=not verborgen,
+            )
 
         # Wait for the posting to complete (the modal usually closes)
         page.wait_for_timeout(random.randint(4000, 6000))
         console.print("[green]Post submitted successfully![/green]")
-        return True
+        return Beitragsausgang(
+            erfolg=True,
+            hinweis=hinweis,
+            karte=karte,
+            link_sichtbar=not verborgen,
+        )
 
     finally:
         page.close()
 
 
-def comment_on_post(context: BrowserContext, post_url: str, text: str) -> bool:
-    """Automates commenting on a specific Facebook post."""
+#: Was Facebook zeigt, wenn die **Gruppe** nichts mehr annimmt - nicht das
+#: Konto. Am 12.09.2026 zum ersten Mal gesehen: "Du hast das Limit fuer
+#: freizugebende Inhalte in dieser Gruppe erreicht."
+#:
+#: Es ist weder eine Ablehnung (niemand hat den Text beurteilt) noch eine
+#: Sperre des Kontos (andere Gruppen gehen weiter) noch eine Bremse wegen
+#: Geschwindigkeit. Es heisst: In dieser Gruppe warten schon genug Beitraege
+#: von uns auf die Freigabe eines Moderators.
+GRUPPENLIMIT = (
+    "limit fuer freizugebende", "limit für freizugebende",
+    "limit fuer inhalte", "limit für inhalte",
+    "freizugebende inhalte",
+    "limit for content to be approved", "limit of pending",
+    "pending posts limit", "too many pending",
+    "وصلت إلى الحد", "وصلت الى الحد", "الحد الأقصى للمحتوى", "بانتظار الموافقة",
+)
+
+#: Woran ein abgeschickter, aber noch nicht sichtbarer Beitrag zu erkennen
+#: ist. Er steht in der Gruppe erst, wenn ein Mensch ihn freigibt - bis dahin
+#: sieht ihn niemand ausser uns.
+AUSSTEHEND = (
+    "ausstehend", "wartet auf genehmigung", "wird ueberprueft", "wird überprüft",
+    "pending", "awaiting approval", "being reviewed",
+    "قيد المراجعة", "بانتظار الموافقة", "في انتظار",
+)
+
+
+@dataclass(frozen=True)
+class Kommentarausgang:
+    """Was aus einem abgeschickten Kommentar geworden ist.
+
+    Frueher war das ein ``bool``, und der war **immer wahr**: Die Funktion
+    drueckte Enter, wartete drei Sekunden und meldete Erfolg - ohne die Seite
+    danach anzusehen. Am 12.09.2026 fiel auf, was das verschweigt: In einer
+    Gruppe mit Freigabepflicht standen die Kommentare als "Ausstehend" und
+    waren fuer niemanden sichtbar, waehrend der Lauf sie als veroeffentlicht
+    zaehlte.
+
+    Drei unterscheidbare Ausgaenge statt einem:
+
+    * **abgeschickt und sichtbar** - der Normalfall.
+    * **abgeschickt, wartet auf Freigabe** - ein Erfolg mit Vorbehalt. Der
+      Tracking-Link ist heraus, aber noch klickt ihn niemand.
+    * **gar nicht angenommen** - die Gruppe nimmt gerade nichts mehr
+      (``gruppenlimit``). Das ist kein Urteil ueber den Text.
+    """
+
+    erfolg: bool
+    hinweis: str = ""
+    wartet_auf_freigabe: bool = False
+    gruppenlimit: bool = False
+
+
+def _seitenhinweis(page, muster: tuple[str, ...]) -> str:
+    """Sucht eines der Muster im sichtbaren Text - und gibt die Fundstelle.
+
+    Gelesen wird der **Seitentext**, nicht ein Beitrag: Es geht um Facebooks
+    eigene Meldung ueber unseren Versuch. Nichts davon wird gespeichert; was
+    weitergereicht wird, ist der Hinweis selbst.
+    """
+    try:
+        sichtbar = page.inner_text("body")[:8000].lower()
+    except Exception:  # noqa: BLE001 - eine geschlossene Seite ist kein Hinweis
+        return ""
+    for wort in muster:
+        stelle = sichtbar.find(wort.lower())
+        if stelle >= 0:
+            # Der Satz um die Fundstelle herum, damit im Protokoll steht, was
+            # dort wirklich stand - und nicht nur, dass etwas passte.
+            anfang = max(stelle - 60, 0)
+            return " ".join(sichtbar[anfang : stelle + 90].split())
+    return ""
+
+
+def comment_on_post(context: BrowserContext, post_url: str, text: str) -> Kommentarausgang:
+    """Automates commenting on a specific Facebook post.
+
+    **Nach dem Absenden wird die Seite gelesen.** Ohne das meldete die
+    Funktion jeden Versuch als Erfolg, bei dem das Feld beschreibbar war -
+    auch den, den die Gruppe gar nicht angenommen hat.
+    """
     page = context.new_page()
     try:
         console.print(f"Navigating to post {post_url}...")
@@ -207,11 +525,18 @@ def comment_on_post(context: BrowserContext, post_url: str, text: str) -> bool:
             break
 
         if comment_box is None:
+            # Vor dem Urteil "kein Feld" nachsehen, ob die Gruppe es sagt:
+            # Wo das Limit fuer freizugebende Inhalte erreicht ist, blendet
+            # Facebook das Feld aus. "Nicht gefunden" waere dann eine Aussage
+            # ueber unsere Suche statt ueber die Gruppe.
+            if hinweis := _seitenhinweis(page, GRUPPENLIMIT):
+                console.print(f"[yellow]Die Gruppe nimmt gerade nichts mehr an: {hinweis}[/yellow]")
+                return Kommentarausgang(False, hinweis=hinweis, gruppenlimit=True)
             console.print(
                 "[red]Could not find the comment box. Are comments allowed on this post?[/red] "
                 f"(Textfelder: {page.locator(_TEXTFELD).count()})"
             )
-            return False
+            return Kommentarausgang(False, hinweis="Kommentarfeld nicht gefunden")
 
         try:
             page.wait_for_timeout(random.randint(500, 1500))
@@ -221,7 +546,7 @@ def comment_on_post(context: BrowserContext, post_url: str, text: str) -> bool:
             page.keyboard.insert_text(text)
         except PlaywrightTimeoutError:
             console.print("[red]Kommentarfeld gefunden, aber nicht beschreibbar.[/red]")
-            return False
+            return Kommentarausgang(False, hinweis="Kommentarfeld nicht beschreibbar")
 
         page.wait_for_timeout(random.randint(800, 2000))
         console.print("Submitting comment (pressing Enter)...")
@@ -229,8 +554,23 @@ def comment_on_post(context: BrowserContext, post_url: str, text: str) -> bool:
         comment_box.press("Enter", delay=random.randint(50, 150))
 
         page.wait_for_timeout(random.randint(3000, 5000))
+
+        # **Erst jetzt entscheidet sich, was daraus geworden ist.**
+        if hinweis := _seitenhinweis(page, GRUPPENLIMIT):
+            console.print(f"[yellow]Die Gruppe nimmt nichts mehr an: {hinweis}[/yellow]")
+            return Kommentarausgang(False, hinweis=hinweis, gruppenlimit=True)
+
+        if hinweis := _seitenhinweis(page, AUSSTEHEND):
+            # Abgeschickt ist er - sichtbar ist er nicht. Als Erfolg gezaehlt,
+            # weil der Tracking-Link heraus ist und die Fassung verbraucht;
+            # aber mit Ansage, denn bis zur Freigabe klickt ihn niemand.
+            console.print(
+                f"[yellow]Abgeschickt, wartet aber auf Freigabe: {hinweis}[/yellow]"
+            )
+            return Kommentarausgang(True, hinweis=hinweis, wartet_auf_freigabe=True)
+
         console.print("[green]Comment submitted successfully![/green]")
-        return True
+        return Kommentarausgang(True)
 
     finally:
         page.close()
@@ -352,95 +692,169 @@ def fetch_group_html(context: BrowserContext, group_url: str) -> str:
         page.close()
 
 
+def _artikel_auswerten(article, group_id: str) -> dict | None:
+    """Aus **einem** Artikel Adresse, Kennzahlen und der Text - oder ``None``.
+
+    **Der Text geht durch, er bleibt nicht.** Die Grenze des Projekts
+    verbietet, Beitragsinhalte zu **speichern**; gelesen wurde der Artikeltext
+    hier seit jeher, um Reaktionen und Kommentarzahlen daraus zu zaehlen. Seit
+    dem 12.09.2026 wird er ausserdem weitergereicht - an
+    ``marketing/inhalt.py``, das daraus ein Schlagwort macht ("versand",
+    "wohnung") und ein Urteil ("hoch", "keine").
+
+    Was danach in die Datenbank geht, ist dieses Urteil. ``GroupPost`` hat
+    kein Textfeld, und ``upsert_group_posts`` koennte den Text gar nicht
+    speichern - das ist die Stelle, an der die Grenze technisch haelt und
+    nicht nur als Vorsatz.
+
+    Ohne diesen Schritt kommentierte der Lauf den Beitrag mit den meisten
+    Reaktionen - also den lautesten, nicht den passendsten. Ein Kommentar
+    ueber Paketmitnahme unter einem Wohnungsgesuch ist Spam, gleich wie gut
+    er formuliert ist.
+    """
+    from fbgroups.importers.manual_seed import parse_member_count
+    from fbgroups.urls import beitragslinks
+
+    kandidaten = beitragslinks(
+        [link.get_attribute("href") for link in article.locator("a[href]").all()],
+        group_id,
+    )
+    if not kandidaten:
+        return None
+
+    text_content = article.inner_text()
+
+    comments_match = re.search(
+        r"(\d[\d.,\s]*(?:[kKmM]|Tsd\.?|Mio\.?)?)\s*(?:Kommentare?|comments?|تعليقات|تعليق)",
+        text_content,
+        re.IGNORECASE,
+    )
+    comments_count = (parse_member_count(comments_match.group(1)) if comments_match else 0) or 0
+
+    reactions_locator = article.locator(
+        "[aria-label*='gefällt das'], [aria-label*='Reaktionen'], "
+        "[aria-label*='likes'], [aria-label*='reactions'], "
+        "[aria-label*='تفاعل'], [aria-label*='إعجاب']"
+    ).first
+    interactions_count = 0
+    if reactions_locator.count() > 0:
+        aria = reactions_locator.get_attribute("aria-label") or ""
+        num_match = re.search(r"(\d[\d.,\s]*(?:[kKmM]|Tsd\.?|Mio\.?)?)", aria)
+        if num_match:
+            interactions_count = parse_member_count(num_match.group(1)) or 0
+
+    return {
+        "post_url": kandidaten[0],
+        "interactions": interactions_count,
+        "comments": comments_count,
+        # Durchgereicht, nicht gespeichert - siehe Docstring. Gekuerzt, weil
+        # fuer die Themenerkennung der Anfang genuegt und ein ganzer
+        # Kommentarbaum nur Rauschen mitbraechte.
+        "text": text_content[:600],
+    }
+
+
 def fetch_top_posts(
     context: BrowserContext, group_url: str, group_id: str, limit: int = 5
 ) -> list[dict]:
-    """Scrapes recent posts from the group for metrics (NO TEXT/AUTHORS)."""
+    """Scrapes recent posts from the group for metrics (NO TEXT/AUTHORS).
 
+    **Eingesammelt wird waehrend des Scrollens, nicht danach.** Facebook
+    haengt Beitraege wieder aus dem DOM, sobald sie aus dem Blick geraten -
+    der Strom ist virtualisiert. Die vorige Fassung scrollte erst viermal um
+    1200 Pixel und suchte dann: In einer Gruppe mit zwei Beitraegen war zu
+    diesem Zeitpunkt **nichts** mehr da. Am 10.09.2026 stand deshalb "Found 0
+    articles." auf dem Bildschirm, waehrend im Browser zwei Beitraege zu
+    sehen waren - und das Warten auf ``div[role='article']`` hatte kurz
+    zuvor noch angeschlagen.
+
+    Deshalb: nach jedem kleinen Schritt lesen, das Gefundene behalten, und
+    aufhoeren, sobald genug beisammen ist.
+    """
     page = context.new_page()
-    posts_data = []
+    gesammelt: dict[str, dict] = {}
+    runden = 0
+    zuletzt = 0
+    RUNDEN_MAX = 5
     try:
         console.print(f"Navigating to {group_url} to fetch posts...")
         page.goto(group_url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(3000)
 
-        # Scroll a few times to load posts
-        for _ in range(3):
-            page.evaluate("window.scrollBy(0, 1000)")
-            page.wait_for_timeout(1500)
+        # Auf die Beitraege warten, statt eine feste Zeit zu raten: Ein
+        # langsamer Aufbau sah bisher aus wie eine leere Gruppe.
+        try:
+            page.wait_for_selector("div[role='article']", timeout=20000)
+        except Exception:
+            console.print(
+                "[yellow]Keine Artikel im Aufbau gefunden - es wird trotzdem gesucht.[/yellow]"
+            )
 
-        articles = page.locator("div[role='article']").all()
-        console.print(f"Found {len(articles)} articles.")
+        while runden < RUNDEN_MAX:
+            runden += 1
+            articles = page.locator("div[role='article']").all()
+            zuletzt = len(articles)
+            for article in articles:
+                try:
+                    daten = _artikel_auswerten(article, group_id)
+                except Exception as e:  # noqa: BLE001 - ein Artikel darf ausfallen
+                    console.print(f"Error parsing article: {e}")
+                    continue
+                if daten is None:
+                    continue
+                vorher = gesammelt.get(daten["post_url"])
+                # Der reichere Fund gewinnt: Ein Eintrag ohne Kennzahlen
+                # stammt vom Rueckfallweg und darf von einem Artikel mit
+                # Zahlen abgeloest werden. Die Reihenfolge bleibt dabei, weil
+                # ein vorhandener Schluessel seine Stelle behaelt.
+                if vorher is None or (vorher["interactions"] == 0 and vorher["comments"] == 0):
+                    gesammelt[daten["post_url"]] = daten
 
-        for article in articles:
-            if len(posts_data) >= limit:
+            if not gesammelt:
+                # **Rueckfallweg: die ganze Seite statt der einzelnen Artikel.**
+                # Die Adresse eines Beitrags steht auf der Seite auch dann,
+                # wenn kein Verweis innerhalb des Rahmens liegt, den
+                # ``div[role='article']`` aufspannt. Kennzahlen gibt es hier
+                # nicht: Ohne den Artikel ist nicht zu sagen, welche
+                # Reaktionen zu welchem Beitrag gehoeren - und eine geratene
+                # Zahl waere schlimmer als keine, denn nach ihr wird der
+                # beste Beitrag ausgewaehlt.
+                try:
+                    from fbgroups.urls import beitragslinks
+
+                    hrefs = page.eval_on_selector_all(
+                        "a[href]", "els => els.map(e => e.getAttribute('href'))"
+                    )
+                    for url in beitragslinks(hrefs, group_id):
+                        # Ohne Artikel gibt es weder Kennzahlen noch Text -
+                        # und eine geratene Zahl waere schlimmer als keine.
+                        gesammelt.setdefault(
+                            url,
+                            {
+                                "post_url": url,
+                                "interactions": 0,
+                                "comments": 0,
+                                "text": "",
+                            },
+                        )
+                except Exception as e:  # noqa: BLE001 - der Rueckfall darf ausfallen
+                    console.print(f"Seitenweite Suche nicht moeglich: {e}")
+
+            if len(gesammelt) >= limit:
                 break
 
-            try:
-                # FB post links often contain 'multi_permalinks' or 'permalink' or 'posts'
-                links = article.locator("a[href*='/groups/']").all()
-                post_url = None
-                for link in links:
-                    href = link.get_attribute("href")
-                    if href and (
-                        "/permalink/" in href or "/posts/" in href or "multi_permalinks" in href
-                    ):
-                        post_url = href
-                        break
+            # Kleine Schritte: Wer in einer Gruppe mit drei Beitraegen 4800
+            # Pixel weit scrollt, steht hinter dem Ende des Stroms - und dort
+            # ist nichts mehr eingehaengt.
+            page.evaluate("window.scrollBy(0, 800)")
+            page.wait_for_timeout(1500)
 
-                if not post_url:
-                    continue
-
-                # Fix relative URLs
-                if post_url.startswith("/"):
-                    post_url = "https://www.facebook.com" + post_url
-
-                from fbgroups.urls import canonical_post_url
-                post_url = canonical_post_url(post_url, group_id) or post_url
-
-                from fbgroups.importers.manual_seed import parse_member_count
-
-                # Get text content of the article to parse numbers
-                text_content = article.inner_text()
-
-                # Look for comments (German, English, Arabic)
-                comments_match = re.search(
-                    r"(\d[\d.,\s]*(?:[kKmM]|Tsd\.?|Mio\.?)?)\s*(?:Kommentare?|comments?|تعليقات|تعليق)",
-                    text_content,
-                    re.IGNORECASE,
-                )
-                comments_count = (
-                    parse_member_count(comments_match.group(1)) if comments_match else 0
-                )
-                # Fallback on parse_member_count returning None
-                comments_count = comments_count or 0
-
-                # Interactions
-                reactions_locator = article.locator(
-                    "[aria-label*='gefällt das'], [aria-label*='Reaktionen'], "
-                    "[aria-label*='likes'], [aria-label*='reactions'], "
-                    "[aria-label*='تفاعل'], [aria-label*='إعجاب']"
-                ).first
-                interactions_count = 0
-                # Using wait_for timeout 0 or just counting to see if it exists
-                if reactions_locator.count() > 0:
-                    aria = reactions_locator.get_attribute("aria-label") or ""
-                    num_match = re.search(r"(\d[\d.,\s]*(?:[kKmM]|Tsd\.?|Mio\.?)?)", aria)
-                    if num_match:
-                        interactions_count = parse_member_count(num_match.group(1)) or 0
-
-                posts_data.append(
-                    {
-                        "post_url": post_url,
-                        "interactions": interactions_count,
-                        "comments": comments_count,
-                    }
-                )
-            except Exception as e:
-                console.print(f"Error parsing article: {e}")
-                continue
+        console.print(
+            f"Found {len(gesammelt)} post(s) in {runden} round(s); "
+            f"articles last seen: {zuletzt}."
+        )
 
     finally:
         page.close()
 
+    posts_data = list(gesammelt.values())[:limit]
     return posts_data

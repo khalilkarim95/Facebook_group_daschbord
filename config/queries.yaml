@@ -48,6 +48,162 @@ nationwide:
   - { id: nw_17, text: "Syrische Gemeinde Deutschland",   lang: de, audiences: [syrians] }
   - { id: nw_18, text: "Arabische Community Deutschland", lang: de, audiences: [arabs] }
 
+# --- A2) Reise und Versand: der eigentliche Zielmarkt (13.09.2026) ---
+#
+# Bis hierher suchte diese Datei ausschliesslich nach **Gemeinschaften**
+# ("Syrer in Koeln"). Das ist die Zielgruppe der App, aber nicht ihr Thema:
+# B-Tarikak vermittelt zwischen jemandem, der eine Kleinigkeit nach Syrien
+# schicken will, und einem Reisenden mit Platz im Koffer. Gruppen, in denen
+# genau darueber geredet wird, standen in keiner einzigen Anfrage - und
+# konnten deshalb nie gefunden werden.
+#
+# Die Anfragen hier sind die Prioritaet A aus ``marketing/zielgruppe.py``.
+# Eine Gruppe, die daraus hervorgeht, traegt Reise- oder Versandbegriffe
+# **und** ein Ziel im Namen; das ist genau die Bedingung fuer die A-Klasse.
+#
+# KOSTEN: 46 Anfragen, je eine Credit. Sie gehen nicht beilaeufig hinaus -
+# "fbgroups search" bricht ohne --limit oder --alle mit Exit-Code 2 ab. Wer
+# sie zuerst nur ansehen will: "fbgroups search --dry-run --show-all".
+#
+# Die arabischen Schreibweisen stehen einzeln da und sind keine Dopplung: Der
+# Suchbegriff steht in Anfuehrungszeichen, und in Anfuehrungszeichen ist jede
+# Schreibweise eine eigene Zeichenkette. Die Form ohne Hamza findet die Form
+# mit Hamza NICHT.
+reise_versand:
+  # -- Deutsch: Reise ---------------------------------------------------
+  - { id: rv_de_01, text: "Syrien Reise Deutschland",            lang: de, audiences: [syrians] }
+  - { id: rv_de_02, text: "Deutschland Syrien Reise",            lang: de, audiences: [syrians] }
+  - { id: rv_de_03, text: "Reisen von Deutschland nach Syrien",  lang: de, audiences: [syrians] }
+  - { id: rv_de_04, text: "Flug Deutschland Syrien",             lang: de, audiences: [syrians] }
+  - { id: rv_de_05, text: "Flüge Deutschland Syrien",            lang: de, audiences: [syrians] }
+  - { id: rv_de_06, text: "Syrien Flüge Deutschland",            lang: de, audiences: [syrians] }
+  - { id: rv_de_07, text: "Syrien Urlaub Deutschland",           lang: de, audiences: [syrians] }
+  - { id: rv_de_08, text: "Heimreise Syrien Deutschland",        lang: de, audiences: [syrians] }
+  - { id: rv_de_09, text: "Familienbesuch Syrien Deutschland",   lang: de, audiences: [syrians] }
+  - { id: rv_de_10, text: "Syrien Reisende Deutschland",         lang: de, audiences: [syrians] }
+  - { id: rv_de_11, text: "Syrische Reisende Deutschland",       lang: de, audiences: [syrians] }
+  - { id: rv_de_12, text: "Syrer reisen nach Syrien",            lang: de, audiences: [syrians] }
+  - { id: rv_de_13, text: "Mitfahrgelegenheit Syrien Deutschland", lang: de, audiences: [syrians] }
+
+  # -- Deutsch: Versand und Mitnahme ------------------------------------
+  - { id: rv_de_14, text: "Mitnahme nach Syrien",                lang: de, audiences: [syrians] }
+  - { id: rv_de_15, text: "Sachen nach Syrien mitnehmen",        lang: de, audiences: [syrians] }
+  - { id: rv_de_16, text: "Paket nach Syrien",                   lang: de, audiences: [syrians] }
+  - { id: rv_de_17, text: "Versand nach Syrien",                 lang: de, audiences: [syrians] }
+  - { id: rv_de_18, text: "Gegenstände nach Syrien schicken",    lang: de, audiences: [syrians] }
+  - { id: rv_de_19, text: "Geschenke nach Syrien",               lang: de, audiences: [syrians] }
+  - { id: rv_de_20, text: "Medikamente nach Syrien",             lang: de, audiences: [syrians] }
+  - { id: rv_de_21, text: "Dokumente nach Syrien",               lang: de, audiences: [syrians] }
+  - { id: rv_de_22, text: "Gepäck Syrien Deutschland",           lang: de, audiences: [syrians] }
+  - { id: rv_de_23, text: "Freier Platz im Koffer Syrien",       lang: de, audiences: [syrians] }
+  - { id: rv_de_24, text: "Übergepäck Syrien",                   lang: de, audiences: [syrians] }
+
+  # -- Arabisch: Reise --------------------------------------------------
+  - { id: rv_ar_01, text: "سفر ألمانيا سوريا",            lang: ar, audiences: [syrians] }
+  - { id: rv_ar_02, text: "رحلات ألمانيا سوريا",          lang: ar, audiences: [syrians] }
+  - { id: rv_ar_03, text: "مسافرين ألمانيا سوريا",        lang: ar, audiences: [syrians] }
+  - { id: rv_ar_04, text: "مسافرون من ألمانيا إلى سوريا",  lang: ar, audiences: [syrians] }
+  - { id: rv_ar_05, text: "مين مسافر ع سوريا",            lang: ar, audiences: [syrians] }
+  - { id: rv_ar_06, text: "مين نازل ع سوريا",             lang: ar, audiences: [syrians] }
+  - { id: rv_ar_07, text: "رحلات إلى سوريا من ألمانيا",    lang: ar, audiences: [syrians] }
+  - { id: rv_ar_08, text: "السفر إلى سوريا من ألمانيا",    lang: ar, audiences: [syrians] }
+  - { id: rv_ar_09, text: "مسافرين على سوريا",            lang: ar, audiences: [syrians] }
+  - { id: rv_ar_10, text: "رحلات الشام من ألمانيا",        lang: ar, audiences: [syrians] }
+  - { id: rv_ar_11, text: "رحلات حلب من ألمانيا",          lang: ar, audiences: [syrians] }
+  - { id: rv_ar_12, text: "رحلات دمشق من ألمانيا",         lang: ar, audiences: [syrians] }
+  - { id: rv_ar_13, text: "السوريين بألمانيا سفر سوريا",   lang: ar, audiences: [syrians] }
+
+  # -- Arabisch: Versand und Mitnahme -----------------------------------
+  - { id: rv_ar_14, text: "شحن من ألمانيا إلى سوريا",      lang: ar, audiences: [syrians] }
+  - { id: rv_ar_15, text: "إرسال من ألمانيا إلى سوريا",    lang: ar, audiences: [syrians] }
+  - { id: rv_ar_16, text: "إرسال أغراض إلى سوريا",         lang: ar, audiences: [syrians] }
+  - { id: rv_ar_17, text: "إرسال هدايا إلى سوريا",         lang: ar, audiences: [syrians] }
+  - { id: rv_ar_18, text: "إرسال أدوية إلى سوريا",         lang: ar, audiences: [syrians] }
+  - { id: rv_ar_19, text: "إرسال وثائق إلى سوريا",         lang: ar, audiences: [syrians] }
+  - { id: rv_ar_20, text: "حدا بياخد أغراض ع سوريا",       lang: ar, audiences: [syrians] }
+  - { id: rv_ar_21, text: "مساحة بالشنطة سوريا",          lang: ar, audiences: [syrians] }
+  - { id: rv_ar_22, text: "السوريين بألمانيا شحن سوريا",   lang: ar, audiences: [syrians] }
+
+  # -- Die Sprache der Kuriergruppen selbst (13.09.2026, nachgetragen) ---
+  #
+  # ANLASS: Der Nutzer fand von Hand eine oeffentliche Gruppe mit **174.713
+  # Mitgliedern** - genau der Zielmarkt, und keine einzige Anfrage dieser
+  # Datei haette sie gefunden. Sie heisst nur "بطريقك": kein Stadtname, kein
+  # "سوريا", kein Reisewort im Titel. Erst ihre Beschreibung verraet sie
+  # ("خدمة مأجورة لمساعدة الأشخاص بإرسال او جلب أشياء من و الى أوروبا، تركيا،
+  # سوريا ...").
+  #
+  # Daraus folgen zwei Lehren, und beide stehen in den Anfragen unten:
+  #
+  # 1. **Diese Gruppen nennen sich nach ihrer Dienstleistung**, nicht nach
+  #    einer Strecke: "توصيل أمانات", "جلب أغراض", "شحن وتوصيل". Die bisherigen
+  #    Anfragen suchten Strecken ("شحن من ألمانيا إلى سوريا") und trafen die
+  #    Beschreibung nur, wenn sie zufaellig woertlich so dastand.
+  # 2. **Sie denken in Europa, nicht in Deutschland.** Die gefundene Gruppe
+  #    bedient "أوروبا، تركيا، سوريا، لبنان، الأردن، مصر" in einem. Wer nur
+  #    "ألمانيا" sucht, findet die kleinen und laesst die grossen liegen.
+  #
+  # Die Begriffe sind aus der Beschreibung und dem sichtbaren Beitrag jener
+  # Gruppe genommen, nicht erdacht: "السفرة من المانيا", "جلب", "أمانات",
+  # "توصيل". Das ist derselbe Weg wie bei der Erweiterung vom 18.08.2026 -
+  # die Grundlage sind gefundene Namen, nicht denkbare Varianten.
+  - { id: rv_ar_23, text: "توصيل أمانات",                  lang: ar, audiences: [syrians] }
+  - { id: rv_ar_24, text: "نقل أمانات سوريا",              lang: ar, audiences: [syrians] }
+  - { id: rv_ar_25, text: "أمانات من ألمانيا إلى سوريا",    lang: ar, audiences: [syrians] }
+  - { id: rv_ar_26, text: "جلب أغراض من ألمانيا",           lang: ar, audiences: [syrians] }
+  - { id: rv_ar_27, text: "إرسال وجلب أغراض",               lang: ar, audiences: [syrians] }
+  - { id: rv_ar_28, text: "توصيل أغراض إلى سوريا",          lang: ar, audiences: [syrians] }
+  - { id: rv_ar_29, text: "شحن وتوصيل سوريا",              lang: ar, audiences: [syrians] }
+  - { id: rv_ar_30, text: "خدمة توصيل أغراض سوريا",         lang: ar, audiences: [syrians] }
+  - { id: rv_ar_31, text: "السفرة من ألمانيا إلى سوريا",    lang: ar, audiences: [syrians] }
+  - { id: rv_ar_32, text: "مشوار من ألمانيا إلى سوريا",     lang: ar, audiences: [syrians] }
+
+  # Europa statt Deutschland - die grossen Gruppen denken so.
+  - { id: rv_ar_33, text: "شحن من أوروبا إلى سوريا",        lang: ar, audiences: [syrians] }
+  - { id: rv_ar_34, text: "من أوروبا إلى سوريا",            lang: ar, audiences: [syrians] }
+  - { id: rv_ar_35, text: "مسافرين أوروبا سوريا",           lang: ar, audiences: [syrians] }
+  - { id: rv_ar_36, text: "مسافرون من أوروبا إلى سوريا",    lang: ar, audiences: [syrians] }
+  - { id: rv_ar_37, text: "إرسال أغراض من أوروبا",          lang: ar, audiences: [syrians] }
+
+  # Die Wege, die diese Gruppen unterscheiden - Land, Luft, ueber die Tuerkei.
+  - { id: rv_ar_38, text: "شحن بري إلى سوريا",              lang: ar, audiences: [syrians] }
+  - { id: rv_ar_39, text: "شحن جوي إلى سوريا",              lang: ar, audiences: [syrians] }
+  - { id: rv_ar_40, text: "رحلات برية إلى سوريا",           lang: ar, audiences: [syrians] }
+
+  # Die App heisst so, und der Ausdruck ist zugleich der uebliche Name dieser
+  # Dienstleistung ("auf deinem Weg"). Eine Anfrage, ein Credit - und sie
+  # findet genau die Gruppen, die sich selbst so nennen.
+  - { id: rv_ar_41, text: "بطريقك",                        lang: ar, audiences: [syrians] }
+
+  # Deutsch: dieselbe Dienstleistung, wie sie hier heisst.
+  - { id: rv_de_25, text: "Kurier nach Syrien",            lang: de, audiences: [syrians] }
+  - { id: rv_de_26, text: "Sachen mitnehmen Syrien",       lang: de, audiences: [syrians] }
+
+# --- A3) Reise und Versand je Stadt (13.09.2026) ---
+#
+# Vier Muster mal 15 freigeschaltete Staedte = 60 Anfragen.
+#
+# **Ein eigener Block, damit sie vor den Gemeinschaftsmustern stehen.** Sie
+# gehoerten zuerst zu ``city_patterns``, und dort wurden sie je Stadt
+# EINSORTIERT: erst die sechzehn Gemeinschaftsanfragen fuer Berlin, dann die
+# vier fuer Reise und Versand, dann dasselbe fuer Hamburg. Wer mit ``--limit``
+# nur einen Teil abfragt, bekam damit fast nur Gemeinschaftsgruppen - genau
+# die dreihundert, die schon im Bestand standen. Der Plan laeuft jetzt: erst
+# alles Neue (46 bundesweit + 60 je Stadt = 106), dann das Bekannte.
+#
+# Warum ueberhaupt auf Stadtebene: Die Reisegruppen, die es gibt, heissen fast
+# immer nach einem Abflughafen ("Stuttgart Syrien Flug") und nicht nach dem
+# Land. Bundesweit gesucht faellt genau diese Haelfte durch.
+#
+# Die Staedte des Nutzers, die Phase 2 sind (Mannheim, Karlsruhe, Freiburg,
+# Ulm), werden hiervon NICHT erfasst - freigeschaltet wird eine Stadt ueber
+# "phase: 1" in cities.yaml und nicht hier.
+city_patterns_reise_versand:
+  - { id: cp_rv_01, pattern: "{city} Syrien Reise",        lang: de, audiences: [syrians] }
+  - { id: cp_rv_02, pattern: "{city} Syrien Flug",         lang: de, audiences: [syrians] }
+  - { id: cp_rv_03, pattern: "{city} Syrien Versand",      lang: de, audiences: [syrians] }
+  - { id: cp_rv_04, pattern: "سوريين {city_ar} سفر سوريا",  lang: ar, audiences: [syrians] }
+
 # --- B) Stadt-Muster ---
 # {city} = name_de, {city_ar} = name_ar
 # Jedes Muster kostet so viele Credits, wie es freigeschaltete Staedte gibt

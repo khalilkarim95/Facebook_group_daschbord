@@ -274,6 +274,79 @@ def test_retry_holt_uebersprungene_nicht_zurueck(projekt: Path) -> None:
     assert stand(projekt, GID_GUT) is JobStatus.CANCELLED
 
 
+def test_retry_ohne_kennung_gilt_fuer_alle_kampagnen(projekt: Path) -> None:
+    """Der Fall, fuer den es gebraucht wird, ist nie einer.
+
+    Ein geschlossenes Browserfenster laesst nicht eine Kampagne scheitern,
+    sondern die, an der gerade gearbeitet wurde, und jede danach. Sieben
+    Kampagnen einzeln aufzuzaehlen ist derselbe Handgriff siebenmal - und
+    beim achten vergisst man eine.
+    """
+    mit_text(projekt, GID_GUT)
+    with MarketingStore(projekt) as store:
+        # Eine zweite Kampagne ueber dieselbe Gruppe, ebenfalls gescheitert.
+        store.save_campaign(
+            Campaign(campaign_id="zweite", name="Zweite", language="ar")
+        )
+        store.add_link(
+            CampaignGroup(
+                campaign_id="zweite",
+                group_id=GID_GUT,
+                tracking_code="FB-ZWO-KLN-001",
+                tracking_url="https://example.invalid/r/FB-ZWO-KLN-001",
+                post_text=f"Text {PLATZHALTER}",
+            )
+        )
+        # Der Stand kommt ueber den Weg, der ihn auch im Betrieb setzt -
+        # ``add_link`` legt eine Zuordnung an und behauptet keinen Ausgang.
+        for kennung in ("batreeq", "zweite"):
+            store.set_post_status(
+                kennung, GID_GUT, PostStatus.FEHLGESCHLAGEN, "Browserfenster zu"
+            )
+
+    ergebnis = runner.invoke(cli.app, ["campaign", "retry"])
+
+    assert ergebnis.exit_code == 0
+    assert "Alle" in ergebnis.stdout
+    with MarketingStore(projekt) as store:
+        for kennung in ("batreeq", "zweite"):
+            link = store.link_for(kennung, GID_GUT)
+            assert link is not None
+            assert link.post_status is PostStatus.OFFEN, kennung
+
+
+def test_retry_mit_kennung_laesst_die_andere_kampagne_stehen(projekt: Path) -> None:
+    """Die Einschraenkung bleibt moeglich - sonst waere sie keine Wahl mehr."""
+    mit_text(projekt, GID_GUT)
+    with MarketingStore(projekt) as store:
+        store.save_campaign(
+            Campaign(campaign_id="zweite", name="Zweite", language="ar")
+        )
+        store.add_link(
+            CampaignGroup(
+                campaign_id="zweite",
+                group_id=GID_GUT,
+                tracking_code="FB-ZWO-KLN-001",
+                tracking_url="https://example.invalid/r/FB-ZWO-KLN-001",
+                post_text=f"Text {PLATZHALTER}",
+            )
+        )
+        # Der Stand kommt ueber den Weg, der ihn auch im Betrieb setzt -
+        # ``add_link`` legt eine Zuordnung an und behauptet keinen Ausgang.
+        for kennung in ("batreeq", "zweite"):
+            store.set_post_status(
+                kennung, GID_GUT, PostStatus.FEHLGESCHLAGEN, "Browserfenster zu"
+            )
+
+    runner.invoke(cli.app, ["campaign", "retry", "batreeq"])
+
+    with MarketingStore(projekt) as store:
+        eine = store.link_for("batreeq", GID_GUT)
+        andere = store.link_for("zweite", GID_GUT)
+    assert eine is not None and eine.post_status is PostStatus.OFFEN
+    assert andere is not None and andere.post_status is PostStatus.FEHLGESCHLAGEN
+
+
 # --- jobs -----------------------------------------------------------------
 
 def test_jobs_zeigt_die_zaehler(projekt: Path) -> None:
@@ -344,6 +417,7 @@ def test_campaign_text_mit_typ_beide(projekt: Path) -> None:
     assert link.vorlage_key == "kampagne"
     assert link.kommentar_vorlage_key.startswith("ar/kommentar/")
     assert link.kommentar_text != link.post_text
+    assert PLATZHALTER in link.post_text
     assert PLATZHALTER in link.kommentar_text
 
 

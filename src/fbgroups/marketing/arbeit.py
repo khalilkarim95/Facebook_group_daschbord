@@ -226,14 +226,26 @@ def auswahlliste(
 
 
 def arbeitsreihenfolge(
-    store: MarketingStore, campaign_id: str, gruppen: dict[str, Group]
+    store: MarketingStore,
+    campaign_id: str,
+    gruppen: dict[str, Group],
+    config: AppConfig | None = None,
 ) -> list[CampaignGroup]:
     """Die Gruppen dieser Kampagne, die besten zuerst.
 
-    Dieselbe Rangfolge wie ueberall sonst (``scoring.sort_by_rank``): Bei 310
-    Gruppen bringt niemand die Liste an einem Tag zu Ende, und wer abbricht,
-    soll die wertvollsten Beitraege geschrieben haben und nicht die
-    alphabetisch ersten.
+    Dieselbe Rangfolge wie ueberall sonst: **erst die Zielprioritaet**
+    (A vor B vor C vor D), dann ``scoring.sort_by_rank``. Bei 310 Gruppen
+    bringt niemand die Liste an einem Tag zu Ende, und wer abbricht, soll die
+    wertvollsten Beitraege geschrieben haben - und zwar in den richtigen
+    Gruppen. Genau dieselbe Reihenfolge nimmt der Lauf
+    (``lauf.Kampagnenfortschritt.arbeitsliste``); zwei Rangfolgen fuer
+    dieselbe Kampagne hiessen, dass der Mensch an einer anderen Gruppe
+    arbeitet als die Automatik.
+
+    Sortiert wird **stabil**: Innerhalb einer Klasse bleibt die
+    Score-Reihenfolge. Ohne ``config`` entfaellt die Zielprioritaet und es
+    bleibt beim Score - die Begriffe dafuer stehen in der Konfiguration, und
+    ein Aufrufer ohne sie soll nicht raten.
 
     Grundlage ist die **Zuordnung**, nicht die Warteschlange. Das ist der
     sichtbarste Teil der Umstellung: Eine Gruppe muss nicht mehr freigegeben
@@ -249,6 +261,7 @@ def arbeitsreihenfolge(
     verschwinden: Ein Beitrag, der nicht in der Liste steht, wird nie
     geschrieben.
     """
+    from fbgroups.marketing import zielgruppe
     from fbgroups.scoring import sort_by_rank
 
     links = store.links_zum_bearbeiten(campaign_id)
@@ -256,6 +269,9 @@ def arbeitsreihenfolge(
     unbekannt = [link for link in links if link.group_id not in gruppen]
 
     geordnet = sort_by_rank([gruppen[link.group_id] for link in bekannt])
+    if config is not None:
+        regeln = zielgruppe.regeln_aus_config(config)
+        geordnet.sort(key=lambda g: zielgruppe.aus_group(g, regeln).rang)
     rang = {gruppe.group_id: platz for platz, gruppe in enumerate(geordnet)}
     bekannt.sort(key=lambda link: rang.get(link.group_id, len(rang)))
     return [*bekannt, *unbekannt]
@@ -427,7 +443,7 @@ def hole_gruppenarbeit(
     die Nummer in der Adresse meinen dann dieselbe Gruppe.
     """
     if reihe is None:
-        reihe = arbeitsreihenfolge(store, campaign.campaign_id, gruppen)
+        reihe = arbeitsreihenfolge(store, campaign.campaign_id, gruppen, config)
     if not reihe:
         return None
 
@@ -584,6 +600,12 @@ def _fassungen(
     kommt.
     """
     from fbgroups.marketing.lauf import ziel_zu_nummer
+
+    # Vor dem Lesen die Decknamen nachtragen. Hier und nicht in ``mit_link``:
+    # Jene ist eine reine Ersetzung ohne Speicher, diese Stelle hat einen -
+    # und sie ist die letzte vor dem Text, den ein Mensch gleich kopiert.
+    if not link.public_code:
+        link = store.vergib_kurzcodes(campaign.campaign_id, link.group_id) or link
 
     return [
         Fassung(

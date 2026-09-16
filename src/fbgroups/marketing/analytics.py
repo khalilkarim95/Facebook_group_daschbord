@@ -190,10 +190,17 @@ def code_bericht(
     Benutzerwege sind die Begruendung: Sie zeigen je Mensch, welche Stufen
     unter diesem Code auf ihn entfallen.
     """
+    # **Erst auf den inneren Code bringen.** Wer einen Kurzcode aus einem
+    # Beitrag abschreibt, meint denselben Vorgang - faende er hier "keine
+    # Ereignisse", waere das die falsche Auskunft: Die Ereignisse stehen
+    # sehr wohl da, nur unter dem inneren Code. Ein unbekannter Code bleibt,
+    # wie er ist; die Antwort darauf ist weiter unten im Befehl.
+    treffer = store.aufloesen(tracking_code)
+    tracking_code = treffer.interner_code if treffer else tracking_code
     bericht = CodeBericht(tracking_code=tracking_code)
 
-    link = store.resolve_code(tracking_code)
-    if link is not None:
+    if treffer is not None:
+        link = treffer.link
         bericht.campaign_id = link.campaign_id
         bericht.group_id = link.group_id
         bericht.group_name = (labels or {}).get(link.group_id, "")

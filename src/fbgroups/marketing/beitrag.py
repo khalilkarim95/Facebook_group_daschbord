@@ -123,11 +123,60 @@ def mit_link(
         # Angabe der Store-Code - das ist das Verhalten, das bis zum
         # 31.08.2026 fuer alle Links galt, und ein Aufrufer, der nichts sagt,
         # soll nichts veraendern.
-        text.replace("{link}", link.url_fuer(ziel))
-        .replace("{tracking_code}", link.code_fuer(ziel))
+        setze_adresse(text, link.url_fuer(ziel))
+        # **Der oeffentliche Code, nicht der innere.** Was hier eingesetzt
+        # wird, steht gleich in einer Facebook-Gruppe; "FB-SYR-DUE-004-B"
+        # nennt jedem Leser Kanal, Zielgruppe, Stadt und laufende Nummer -
+        # das ist unsere Buchhaltung und keine Auskunft fuer ihn. Gezaehlt
+        # wird weiterhin unter dem inneren Code: Die Weiterleitung loest den
+        # Decknamen auf, bevor sie ein Ereignis schreibt.
+        .replace("{tracking_code}", link.oeffentlicher_code_fuer(ziel))
         .replace("{landing_page}", campaign.landing_page)
         .replace("{datum}", monat_jetzt(config, sprache_der_kampagne(campaign, config)))
     )
+
+#: Was nach der Ersetzung noch in geschweiften Klammern stehen darf: nichts.
+#: Ein Platzhalter, der es bis in die Gruppe schafft, ist kein Schoenheits-
+#: fehler - er ist ein Beitrag, dessen Gruppe nie einen Klick bekommt.
+_OFFENER_PLATZHALTER = re.compile(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}")
+
+
+def setze_adresse(text: str, adresse: str) -> str:
+    """Setzt ``{link}`` durch eine **fertige** Adresse. Die eine Ersetzung.
+
+    Herausgeloest aus ``mit_link`` am 14.09.2026, und der Anlass stand in
+    einer Facebook-Gruppe: Dort erschien ein Kommentar mit dem Wortlaut
+
+        فيك تنشر طلبك على بطريقك وتشوف إذا في مسافر مناسب.
+        {link}
+
+    Der Anlasstext (``vorlagen.anlasstext``, seit 13.09.2026) haengt
+    ``{link}`` mechanisch an und wird im Lauf **anstelle** des vorbereiteten
+    Textes abgesetzt - der vorbereitete war aufgeloest, der neue nicht.
+    Zwischen "Text waehlen" und "Text absenden" fehlte die Ersetzung ganz.
+
+    Getrennt von ``mit_link``, weil es zwei verschiedene Ausgangslagen sind:
+    Jene baut die Adresse aus Kampagne und Zuordnung, diese bekommt sie
+    fertig - der Arbeitsrechner im Fernbetrieb hat keine Zuordnung, nur die
+    Adresse. **Ersetzt wird an beiden Stellen hier**, damit es eine
+    Ersetzung bleibt und nicht zwei werden.
+    """
+    return text.replace("{link}", adresse)
+
+
+def offene_platzhalter(text: str) -> list[str]:
+    """Was nach der Ersetzung noch in geschweiften Klammern steht.
+
+    Die letzte Frage vor dem Absenden, und sie ist kein Luxus: Ein Text mit
+    ``{link}`` sieht richtig aus, und seine Gruppe bekommt nie einen Klick
+    gutgeschrieben. Dass er gar nicht erst hinausgeht, ist die einzige
+    Antwort, die den Fehler nicht in eine Gruppe traegt.
+
+    Spintax (``{a|b}``) faellt nicht darunter - es ist zu diesem Zeitpunkt
+    ohnehin aufgeloest, und ein ``|`` passt nicht auf das Muster.
+    """
+    return _OFFENER_PLATZHALTER.findall(text)
+
 
 def parse_spintax(text: str) -> str:
     """Loest Spintax-Muster wie {Hallo|Hi} in eine zufaellige Variante auf.

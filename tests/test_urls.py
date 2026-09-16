@@ -6,6 +6,8 @@ from fbgroups.urls import (
     ParsedGroupUrl,
     UrlParseError,
     UrlRejectReason,
+    beitragslinks,
+    canonical_post_url,
     is_group_url,
     parse_group_url,
 )
@@ -78,3 +80,56 @@ def test_varianten_ergeben_dieselbe_kanonische_url() -> None:
 def test_is_group_url() -> None:
     assert is_group_url("https://www.facebook.com/groups/123")
     assert not is_group_url("https://www.facebook.com/pages/123")
+
+
+# --- Beitragsadressen aus einer Gruppenseite -------------------------------
+def test_beitragslinks_erkennt_die_ueblichen_formen() -> None:
+    """Facebook schreibt dieselbe Stelle je nach Ansicht verschieden."""
+    hrefs = [
+        "#",
+        "/groups/123/user/9/",
+        "/groups/123/posts/987/?__cft__[0]=AZx&__tn__=R",
+        "/groups/123/?multi_permalinks=555&notif_id=1",
+        "https://www.facebook.com/groups/123/permalink/777/",
+        "/groups/123/posts/pfbid02abcXYZ/",
+        None,
+    ]
+
+    assert beitragslinks(hrefs, "123") == [
+        "https://www.facebook.com/groups/123/posts/987/",
+        "https://www.facebook.com/groups/123/posts/555/",
+        "https://www.facebook.com/groups/123/posts/777/",
+        "https://www.facebook.com/groups/123/posts/pfbid02abcXYZ/",
+    ]
+
+
+def test_derselbe_beitrag_nur_einmal() -> None:
+    """Die wechselnden Parameter machen aus einem Beitrag keine zwei.
+
+    ``__cft__`` und ``__tn__`` aendern sich bei jedem Laden. Blieben sie
+    stehen, saehe derselbe Beitrag bei jedem Durchgang neu aus - und ein
+    bereits kommentierter galte als unkommentiert.
+    """
+    hrefs = [
+        "/groups/123/posts/987/?__cft__[0]=AZx",
+        "/groups/123/posts/987/?__cft__[0]=BYq&__tn__=R",
+        "https://www.facebook.com/groups/123/posts/987/",
+    ]
+
+    assert beitragslinks(hrefs, "123") == ["https://www.facebook.com/groups/123/posts/987/"]
+
+
+def test_eine_pfbid_kennung_wird_nicht_verworfen() -> None:
+    """Seit 2022 vergibt Facebook auch nicht-numerische Beitragskennungen."""
+    assert (
+        canonical_post_url("/groups/123/posts/pfbid02abcXYZ/", "123")
+        == "https://www.facebook.com/groups/123/posts/pfbid02abcXYZ/"
+    )
+
+
+def test_ohne_beitragskennung_bleiben_die_parameter_weg() -> None:
+    """Was nicht als Beitrag zu erkennen ist, wird wenigstens stabil."""
+    assert (
+        canonical_post_url("https://www.facebook.com/groups/123/?ref=x&notif=2", "123")
+        == "https://www.facebook.com/groups/123/"
+    )

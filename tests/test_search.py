@@ -38,7 +38,12 @@ PROVIDER_CONFIG = {
     "active": "fixture",
     "providers": {"fixture": {"enabled": True, "fixtures_dir": str(FIXTURES)}},
     "limits": {
-        "max_queries_per_run": 50,
+        # Auf 150 angehoben (13.09.2026): Seit alle Anfragen des Zielmarkts
+        # vorn stehen (106), liegen die beiden Fixtures ``cp_02__berlin`` und
+        # ``cp_04__berlin`` erst dahinter - bei einer engeren Grenze haette
+        # der Lauf null Treffer, und die Tests pruefen nichts mehr.
+        # Beissen soll sie trotzdem: 150 ist weit unter den geplanten 364.
+        "max_queries_per_run": 150,
         "max_results_per_query": 10,
         "cache_enabled": False,
     },

@@ -36,7 +36,7 @@ from fbgroups.marketing.selection import synchronisiere
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.marketing.tracking import app_base_url
 from fbgroups.models import Group, PrivacyHint, ValidationStatus
-from fbgroups.pipeline import classify_group, process_search_results, run_seed_import
+from fbgroups.pipeline import process_search_results, run_seed_import
 from fbgroups.providers.base import ProviderState
 from fbgroups.providers.factory import (
     build_provider,
@@ -55,7 +55,7 @@ from fbgroups.report import (
     passes_min_score,
     rejection_reasons,
 )
-from fbgroups.scoring import score_all, sort_by_rank
+from fbgroups.scoring import sort_by_rank
 from fbgroups.search import build_plan, open_query_cache, run_search
 from fbgroups.storage import SqliteStore, save_run_artifacts
 
@@ -342,49 +342,36 @@ def rescore_command(
     gerade findet: der uebrige Bestand behielte sonst seine alten Werte, und
     im Export stuenden zwei Bewertungen nebeneinander.
     """
+    # Gerechnet wird in ``rescoring.bewerte_neu`` - derselbe Weg, den der
+    # Kampagnenlauf vor jeder Kampagne geht. Zwei Fassungen waeren zwei
+    # Ranglisten: eine fuer den Bericht, eine fuer die Arbeit.
+    from fbgroups.rescoring import bewerte_neu
+
     config = _config()
-    with SqliteStore(config.path("sqlite_path")) as store:
-        groups = store.load_groups()
-        vorher = {g.group_id: g.score for g in groups}
+    ergebnis = bewerte_neu(config, phase=phase, dry_run=dry_run)
 
-        for group in groups:
-            classify_group(group, config, phase)
+    if ergebnis.fehler:
+        console.print(
+            f"[yellow]Resonanz nicht lesbar ({ergebnis.fehler}) - ohne sie bewertet.[/yellow]"
+        )
+    elif ergebnis.mit_resonanz:
+        console.print(
+            f"[dim]Gemessene Resonanz fuer {ergebnis.mit_resonanz} Gruppen mit "
+            f"veroeffentlichtem Beitrag.[/dim]"
+        )
 
-        # Die gemessene Resonanz wird hier geholt und hereingereicht: Der Kern
-        # in scoring.py kennt die Marketing-Erweiterung nicht. Fehlt die
-        # Tabelle (eine Datei aus alter Zeit), bleibt die Bewertung die
-        # bisherige, statt den ganzen Lauf abzubrechen.
-        try:
-            from fbgroups.marketing.resonanz import resonanz_je_gruppe
-            from fbgroups.marketing.store import MarketingStore
+    if dry_run:
+        console.print(
+            f"[cyan]--dry-run:[/cyan] {ergebnis.geaendert} von {ergebnis.bewertet} Gruppen "
+            f"bekaemen einen anderen Score. Es wurde nichts geschrieben."
+        )
+    else:
+        console.print(
+            f"[green]Neu bewertet:[/green] {ergebnis.bewertet} Gruppen, "
+            f"davon {ergebnis.geaendert} mit geaendertem Score."
+        )
 
-            with MarketingStore(config.path("sqlite_path")) as mstore:
-                gemessen = resonanz_je_gruppe(mstore)
-        except Exception as exc:  # noqa: BLE001
-            console.print(f"[yellow]Resonanz nicht lesbar ({exc}) - ohne sie bewertet.[/yellow]")
-            gemessen = {}
-
-        bewertet = score_all(groups, config, gemessen)
-        if gemessen:
-            console.print(
-                f"[dim]Gemessene Resonanz fuer {len(gemessen)} Gruppen mit "
-                f"veroeffentlichtem Beitrag.[/dim]"
-            )
-
-        geaendert = [g for g in bewertet if g.score != vorher[g.group_id]]
-        if dry_run:
-            console.print(
-                f"[cyan]--dry-run:[/cyan] {len(geaendert)} von {len(bewertet)} Gruppen "
-                f"bekaemen einen anderen Score. Es wurde nichts geschrieben."
-            )
-        else:
-            aktualisiert = store.update_scores(bewertet)
-            console.print(
-                f"[green]Neu bewertet:[/green] {aktualisiert} Gruppen, "
-                f"davon {len(geaendert)} mit geaendertem Score."
-            )
-
-    _print_groups(bewertet[:10])
+    _print_groups(ergebnis.gruppen[:10])
 
 
 @app.command("enrich")
@@ -1150,6 +1137,141 @@ def config_check_command() -> None:
     else:
         console.print(f"[green]Beitragsvorlagen in Ordnung:[/green] {anzahl} Fassungen.")
 
+    # --- Zielprioritaet (13.09.2026) ---------------------------------------
+    #
+    # Geprueft wird dasselbe wie bei den Score-Gewichten: ein Name, den es
+    # nicht gibt, ist ein Tippfehler und keine Erweiterung. Er faellt hier
+    # schwerer auf als dort - die Klasse A verschwaende still, und die
+    # Kampagne arbeitete wieder in den Gemeinschaftsgruppen, ohne dass etwas
+    # eine Fehlermeldung gaebe.
+    from fbgroups.marketing import zielgruppe
+
+    block = config.get("marketing", "zielprioritaet", default={}) or {}
+    kategorien = {str(k) for k in (block.get("kategorien") or [])}
+    audiences = {str(a) for a in (block.get("audiences") or [])}
+    unbekannte_kat = sorted(kategorien - {c.id for c in config.categories})
+    unbekannte_aud = sorted(audiences - set(config.audiences))
+
+    if not block:
+        console.print(
+            "[yellow]Hinweis: marketing.zielprioritaet fehlt - dann gilt jede "
+            "Gruppe als Klasse D und der Lauf bearbeitet keine.[/yellow]"
+        )
+    if unbekannte_kat:
+        console.print(
+            f"[yellow]Warnung: unbekannte Kategorien in "
+            f"marketing.zielprioritaet.kategorien: {', '.join(unbekannte_kat)}. "
+            f"Bekannt sind: {', '.join(sorted(c.id for c in config.categories))}."
+            f"[/yellow]"
+        )
+    if unbekannte_aud:
+        console.print(
+            f"[yellow]Warnung: unbekannte Zielgruppen in "
+            f"marketing.zielprioritaet.audiences: {', '.join(unbekannte_aud)}.[/yellow]"
+        )
+    if block and not unbekannte_kat and not unbekannte_aud:
+        anspruch = zielgruppe.anspruch_aus_config(config)
+        stufen = ", ".join(
+            f"{klasse.value.upper()} ab {stufe.value}"
+            + (" + Strecke" if strecke else "")
+            for klasse, (stufe, strecke) in sorted(anspruch.items(), key=lambda kv: kv[0].value)
+        )
+        console.print(
+            f"[green]Zielprioritaet in Ordnung:[/green] A = "
+            f"{', '.join(sorted(kategorien))} + Ziel, B = {', '.join(sorted(audiences))} "
+            f"+ Deutschland."
+        )
+        console.print(
+            f"[dim]Mindestrelevanz je Klasse: {stufen}. "
+            f"In D wird nicht geantwortet.[/dim]"
+        )
+
+        # --- Der geografische Vorrang (14.09.2026) ------------------------
+        #
+        # Die beiden Laenderlisten werden gezaehlt und nicht nur genannt.
+        # Eine leere ``ausserhalb``-Liste ist der stillste Fehler, den es
+        # hier gibt: Es sieht alles richtig aus, nur faellt keine einzige
+        # Gruppe mehr aus dem Zielmarkt heraus - "نقل من لبنان إلى سورية"
+        # stuende wieder vor den deutschen Gruppen. Dasselbe gilt fuer
+        # ``europa``: ohne sie ist jede oesterreichische Gruppe "Land
+        # unbekannt" und rutscht hinter die, die Deutschland nennen.
+        zielregeln = zielgruppe.regeln_aus_config(config)
+        fehlend = [
+            name
+            for name, liste in (
+                ("europa", zielregeln.europa),
+                ("ausserhalb", zielregeln.ausserhalb),
+            )
+            if not liste
+        ]
+        if fehlend:
+            console.print(
+                f"[yellow]Warnung: marketing.zielprioritaet.{' und .'.join(fehlend)} "
+                f"ist leer. Dann entscheidet allein die Klasse, und eine Gruppe "
+                f"mit einer Strecke ausserhalb Europas steht wieder vor den "
+                f"deutschen.[/yellow]"
+            )
+        else:
+            # Ein Wort, das in beiden Listen steht, waere ein Widerspruch mit
+            # stiller Aufloesung: ``bestimme_region`` fragt Europa zuerst,
+            # also gewaenne es immer - und die zweite Liste saehe aus, als
+            # taete sie etwas.
+            doppelt = sorted(set(zielregeln.europa) & set(zielregeln.ausserhalb))
+            if doppelt:
+                console.print(
+                    f"[yellow]Warnung: in europa UND ausserhalb: "
+                    f"{', '.join(doppelt)}. Europa gewinnt - der Eintrag in "
+                    f"ausserhalb wirkt nie.[/yellow]"
+                )
+            # Und ein Ziel, das zugleich als "ausserhalb" gilt, nimmt den
+            # ganzen Zielmarkt mit: Jede Gruppe nennt ihr Ziel.
+            ziel_kollision = sorted(set(zielregeln.ziele) & set(zielregeln.ausserhalb))
+            if ziel_kollision:
+                console.print(
+                    f"[red]Fehler: {', '.join(ziel_kollision)} steht in ziele UND "
+                    f"ausserhalb. Damit faellt jede Gruppe des Zielmarkts aus "
+                    f"Klasse A heraus.[/red]"
+                )
+            console.print(
+                f"[dim]Geografischer Vorrang: Deutschland "
+                f"({len(zielregeln.herkunft)} Woerter + {len(zielregeln.staedte)} "
+                f"Staedte) vor Europa ({len(zielregeln.europa)}) vor "
+                f"unbekannt. {len(zielregeln.ausserhalb)} Woerter nehmen eine "
+                f"Gruppe aus Klasse A heraus.[/dim]"
+            )
+
+    # --- Grenzen je Aktion ------------------------------------------------
+    #
+    # Sie stehen hier, weil sie die einzige Einstellung sind, die den Lauf
+    # taeglich begrenzt - und weil zwei Schluessel dieselbe Zahl tragen
+    # koennen (``limits`` und der alte ``beitritt``-Block). Gezeigt wird, was
+    # wirklich gilt, nicht was dasteht.
+    from fbgroups.marketing import grenzen
+
+    gelesen = grenzen.einstellungen(config)
+    tabelle = Table(title="Grenzen je Aktion (Planungswerte, keine Facebook-Grenzen)")
+    tabelle.add_column("Aktion")
+    tabelle.add_column("je Tag", justify="right")
+    tabelle.add_column("Abstand")
+    for aktion in grenzen.Aktion:
+        grenze = gelesen.fuer(aktion)
+        tabelle.add_row(
+            aktion.value,
+            "aus" if grenze.abgeschaltet else str(grenze.pro_tag),
+            f"{grenze.abstand_min}-{grenze.abstand_max} Min",
+        )
+    console.print(tabelle)
+
+    alt_gesetzt = config.get("beitritt", "anfragen_pro_tag", default=None)
+    neu_gesetzt = config.get("limits", "join_requests", "daily", default=None)
+    if alt_gesetzt is not None and neu_gesetzt is not None and int(alt_gesetzt) != int(
+        neu_gesetzt
+    ):
+        console.print(
+            f"[dim]Hinweis: beitritt.anfragen_pro_tag ({alt_gesetzt}) wird von "
+            f"limits.join_requests.daily ({neu_gesetzt}) ueberstimmt.[/dim]"
+        )
+
     seeds_dir = config.path("seeds_dir")
     seed_files = sorted(p.name for p in seeds_dir.glob("*") if p.suffix.lower() in {".csv", ".txt"})
     console.print(f"Seed-Dateien in {seeds_dir}: {', '.join(seed_files) or 'keine'}")
@@ -1230,11 +1352,20 @@ def login_command() -> None:
 
         # Auf das Ende des ganzen Kontexts warten, nicht auf eine einzelne
         # Seite: Wer sich anmeldet, landet oft in einem neuen Tab.
+        #
+        # Gewartet wird *in* Playwright, nicht daneben. Die sync-API laeuft auf
+        # Greenlets desselben Threads: Ereignisse werden nur zugestellt,
+        # solange der Aufrufer selbst in die Bibliothek springt. Ein
+        # ``threading.Event.wait()`` tut das nicht - das ``close``-Ereignis
+        # blieb liegen, ``context.pages`` behielt seinen alten Stand, und der
+        # Befehl lief nach dem Schliessen des Fensters ewig weiter, statt die
+        # Sitzung zu pruefen. ``wait_for_timeout`` ist ein Aufruf in Playwright
+        # und laesst den Verteiler an die Reihe kommen.
         fertig = threading.Event()
         context.on("close", lambda _: fertig.set())
         with contextlib.suppress(Exception):
-            while context.pages and not fertig.wait(timeout=1.0):
-                pass
+            while not fertig.is_set() and context.pages:
+                context.pages[0].wait_for_timeout(500)
 
     # Nach dem Schliessen liegt das Profil auf der Platte - erst jetzt laesst
     # sich nachsehen, ob wirklich eine Sitzung entstanden ist.

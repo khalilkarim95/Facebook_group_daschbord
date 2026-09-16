@@ -141,7 +141,7 @@ class UngueltigerText(ValueError):
     """
 
 
-def pruefe_platzhalter(text: str) -> str:
+def pruefe_platzhalter(text: str, *, texttyp: Texttyp = Texttyp.POST) -> str:
     """Weist alles zurueck, was den Link nicht der Ersetzung ueberlaesst.
 
     Drei Gruende fuer eine Zurueckweisung, und alle drei enden gleich - mit
@@ -152,12 +152,26 @@ def pruefe_platzhalter(text: str) -> str:
     * eine ausgeschriebene URL oder ein codeaehnliches Muster: jemand hat
       einen Link von Hand hineingeschrieben.
 
+    **Der erste Grund gilt nicht fuer den Kommentar** (seit 11.09.2026). Ein
+    Kommentar *darf* ohne Link auskommen - ob er einen traegt, entscheidet
+    der Vorrat und nicht diese Pruefung. Der Anlass: Facebook zeigte am
+    11.09.2026 "Dein Kommentar wurde abgelehnt" mit dem Kriterium *"Link in
+    Kommentar"*. Das ist eine **Regel der Gruppe**, die deren Leitung
+    eingeschaltet hat - sie gilt in manchen Gruppen und in anderen nicht, und
+    deshalb ist es eine Entscheidung und keine Zusicherung. Ohne Link im
+    Kommentar zaehlt allein der eigene Beitrag daneben.
+
+    **Mehrfach und ausgeschrieben bleiben auch dort verboten.** Ein Kommentar
+    ohne Link ist eine Entscheidung, ein Kommentar mit einer von Hand
+    getippten Adresse ist derselbe alte Fehler: Er sieht richtig aus, und
+    seine Gruppe bekommt nie einen Klick gutgeschrieben.
+
     Zurueckgegeben wird der unveraenderte Text. Es wird ausdruecklich **nicht**
     repariert: Eine stillschweigend geflickte Fassung sieht aus wie eine
     gepruefte, und der naechste Fehler faellt dann gar nicht mehr auf.
     """
     anzahl = text.count(PLATZHALTER_LINK)
-    if anzahl == 0:
+    if anzahl == 0 and texttyp is not Texttyp.KOMMENTAR:
         raise UngueltigerText(
             f"Kein {PLATZHALTER_LINK} im Text - der Beitrag haette keinen Link."
         )
@@ -531,6 +545,119 @@ def fuelle(text: str, daten: Personalisierung) -> str:
     return gefuellt
 
 
+# --- Anlassbezogene Kommentare ---------------------------------------------
+#: Wo die anlassbezogenen Fassungen stehen. Eigener Zweig neben ``vorlagen:``
+#: und nicht darin: Jene gehoeren einer **Gruppe** und stehen fest, bevor ein
+#: Beitrag gelesen wurde; diese gehoeren einem **Anlass** und antworten auf
+#: das, was in dem Beitrag steht. Ein gemeinsamer Topf haette zwei Dinge
+#: vermischt, die zu verschiedenen Zeitpunkten gewaehlt werden.
+ANLASSZWEIG = "anlaesse"
+
+
+def anlassvorrat(config: AppConfig, sprache: str, anlass: str) -> list[Vorlage]:
+    """Die Fassungen zu **einem** Anlass - leer, wenn es keine gibt.
+
+    Leer und keine Ausnahme: Ein Anlass ohne Vorrat ist kein Fehler der
+    Konfiguration, sondern die Auskunft "dazu haben wir nichts vorbereitet".
+    Der Aufrufer schweigt dann, statt etwas anderes zu sagen - dieselbe
+    Haltung wie bei ``Relevanz.KEINE``.
+    """
+    zweig = config.textvorlagen.get(ANLASSZWEIG) or {}
+    liste = (zweig.get(sprache) or {}).get(anlass) or []
+    return [
+        Vorlage(kennung=str(e.get("id", i)), text=str(e.get("text", "")).strip())
+        for i, e in enumerate(liste)
+        if str(e.get("text", "")).strip()
+    ]
+
+
+def anlasstext(
+    config: AppConfig,
+    *,
+    sprache: str,
+    anlass: str,
+    group_id: str,
+    daten: Personalisierung,
+    mit_link: bool = False,
+    bisherige: frozenset[str] = frozenset(),
+) -> tuple[str, str] | None:
+    """Der Kommentartext zu einem Anlass. Returns: ``(schluessel, text)``.
+
+    ``None`` heisst: Zu diesem Anlass steht in ``textvorlagen.yaml`` nichts -
+    dann wird nicht kommentiert. Eine Ersatzfassung aus einem anderen Topf
+    waere eine Antwort auf eine andere Frage.
+
+    **Die Wahl ist deterministisch** (``blake2b`` ueber Gruppe und Anlass),
+    aus demselben Grund wie ueberall im Projekt: Dieselbe Gruppe bekommt zum
+    selben Anlass dieselbe Fassung, auch nach einem Neustart. ``bisherige``
+    nimmt die in dieser Gruppe bereits verwendeten Schluessel entgegen und
+    geht dann der Reihe nach weiter - damit steht nicht zweimal derselbe Satz
+    in derselben Gruppe, und das ist die Duplikatkontrolle auf Textebene.
+    Sind alle verbraucht, wird die berechnete genommen: Ein Kommentar zu viel
+    in derselben Gruppe faellt weniger auf als gar keine Antwort - und die
+    Tagesmenge je Gruppe begrenzt das ohnehin.
+
+    **Der Link kommt mechanisch dazu, nicht aus der Vorlage.** Die Fassungen
+    tragen keine Adresse; wo die Gruppe Links erlaubt und der Beitrag ihn
+    traegt, wird ``{link}`` in einer eigenen Zeile angehaengt. Aufgeloest wird
+    er weiterhin erst in ``beitrag.mit_link`` - der gespeicherte Text traegt
+    den Platzhalter, nie den Code.
+    """
+    vorrat = anlassvorrat(config, sprache, anlass)
+    if not vorrat:
+        return None
+
+    start = _nummer(f"{group_id}|{anlass}", len(vorrat))
+    reihe = [vorrat[(start + i) % len(vorrat)] for i in range(len(vorrat))]
+    gewaehlt = next(
+        (
+            v
+            for v in reihe
+            if f"{sprache}/{ANLASSZWEIG}/{anlass}/{v.kennung}" not in bisherige
+        ),
+        reihe[0],
+    )
+
+    text = fuelle(gewaehlt.text, daten)
+    if mit_link:
+        text = f"{text}\n{PLATZHALTER_LINK}"
+    pruefe_platzhalter(text, texttyp=Texttyp.KOMMENTAR)
+    return f"{sprache}/{ANLASSZWEIG}/{anlass}/{gewaehlt.kennung}", text
+
+
+def anlasstext_zu(config: AppConfig, schluessel: str, *, mit_link: bool) -> str:
+    """Der Anlasstext zu einem gespeicherten Schluessel - oder ``""``.
+
+    Die Umkehrung von ``anlasstext`` und der Grund, warum kein Text vom
+    Arbeitsrechner zurueckreisen muss (14.09.2026): Der Fernbetrieb waehlt
+    seinen Kommentar seit demselben Tag selbst, und der Server muss trotzdem
+    festhalten koennen, **welcher** Satz in der Gruppe steht. Er bekommt
+    dafuer die **Kennung** und baut den Text daraus neu - beide fahren
+    dieselbe ``textvorlagen.yaml``.
+
+    Dieselbe Sparsamkeit wie beim Regelbefund: Hinueber geht das Urteil, nie
+    die Seite. Und dieselbe Zusicherung wie ueberall: Der Text traegt
+    ``{link}``, nie den Code - aufgeloest wird er erst in
+    ``beitrag.mit_link``.
+
+    ``""`` heisst "nicht aufloesbar" und ist kein Fehler: Wer eine Vorlage
+    entfernt, soll damit keine Buchung verhindern - festgehalten wird dann
+    eben nur der Ausgang.
+    """
+    teile = schluessel.split("/")
+    if len(teile) != 4 or teile[1] != ANLASSZWEIG:
+        return ""
+    sprache, _, anlass, kennung = teile
+
+    for vorlage in anlassvorrat(config, sprache, anlass):
+        if vorlage.kennung == kennung:
+            text = vorlage.text
+            if mit_link:
+                text = f"{text}\n{PLATZHALTER_LINK}"
+            return text
+    return ""
+
+
 def erzeuge(
     group: Group,
     campaign: Campaign,
@@ -731,8 +858,18 @@ def pruefe(config: AppConfig) -> list[str]:
                     if vorlage.kennung in gesehen:
                         fehler.append(f"{ort}: die Kennung kommt zweimal vor.")
                     gesehen.add(vorlage.kennung)
-                    if PLATZHALTER_LINK not in vorlage.text:
+                    # Der Beitrag **muss** seinen Link tragen, der Kommentar
+                    # **darf**. Beides ist eine Entscheidung des Nutzers und
+                    # keine technische Grenze: Manche Gruppen lehnen einen
+                    # Kommentar mit Link ab ("Link in Kommentar", 11.09.2026),
+                    # andere nicht - und ohne Link im Kommentar zaehlt allein
+                    # der eigene Beitrag daneben.
+                    if texttyp is not Texttyp.KOMMENTAR and PLATZHALTER_LINK not in vorlage.text:
                         fehler.append(f"{ort}: enthaelt kein {PLATZHALTER_LINK}.")
+                    try:
+                        pruefe_platzhalter(vorlage.text, texttyp=texttyp)
+                    except UngueltigerText as exc:
+                        fehler.append(f"{ort}: {exc}")
                     if topf == OHNE_STADT and "{stadt}" in vorlage.text:
                         fehler.append(
                             f"{ort}: enthaelt {{stadt}}, steht aber in '{OHNE_STADT}'."
@@ -769,4 +906,70 @@ def pruefe(config: AppConfig) -> list[str]:
                     f"audiences.yaml: '{kennung}' hat keine Anrede fuer '{sprache}'."
                 )
 
+    fehler.extend(pruefe_anlaesse(config))
+    return fehler
+
+
+def pruefe_anlaesse(config: AppConfig) -> list[str]:
+    """Was am Anlassvorrat nicht stimmt - fuer ``config-check`` (13.09.2026).
+
+    Drei Dinge, und jedes wuerde erst in einer fremden Gruppe auffallen:
+
+    * **Ein Anlass, den es nicht gibt.** ``inhalt.Anlass`` ist die Liste der
+      Faelle, die erkannt werden koennen; ein Schluessel daneben ist ein
+      Tippfehler, und der Text daneben wird nie verwendet. Dieselbe Regel wie
+      bei einem Gewicht fuer einen Bestandteil, den es nicht gibt.
+    * **Ein Link in der Vorlage.** Der Vorrat traegt keinen - ``anlasstext``
+      haengt ihn an, wo die Gruppe ihn erlaubt. Eine Vorlage mit
+      ausgeschriebener Adresse ergaebe einen Kommentar, der richtig aussieht
+      und dessen Gruppe nie einen Klick gutgeschrieben bekommt.
+    * **Ein erfundener Platzhalter.** Er bliebe in geschweiften Klammern im
+      Kommentar stehen.
+
+    Ein **fehlender** Vorrat ist kein Fehler: Eine Sprache ohne Anlasstexte
+    faellt auf die Fassungen der Kampagne zurueck. Gemeldet wird es trotzdem
+    als Hinweis - wer ``anlass_pflicht`` eingeschaltet hat und keinen Vorrat
+    pflegt, bekommt sonst still gar keine Kommentare mehr.
+    """
+    from fbgroups.marketing.inhalt import Anlass
+
+    fehler: list[str] = []
+    zweig: dict[str, Any] = config.textvorlagen.get(ANLASSZWEIG) or {}
+    if not zweig:
+        return [
+            f"config/textvorlagen.yaml hat keinen Block '{ANLASSZWEIG}' - ohne ihn "
+            "kommentiert die Automatik nichts, solange marketing.anlass_pflicht an ist."
+        ]
+
+    bekannt = {a.value for a in Anlass} - {Anlass.KEINER.value}
+    for sprache, anlaesse in zweig.items():
+        for anlass in anlaesse or {}:
+            ort = f"{ANLASSZWEIG}/{sprache}/{anlass}"
+            if anlass not in bekannt:
+                fehler.append(
+                    f"{ort}: unbekannter Anlass. Bekannt sind: "
+                    f"{', '.join(sorted(bekannt))}."
+                )
+                continue
+            vorrat = anlassvorrat(config, str(sprache), str(anlass))
+            if not vorrat:
+                fehler.append(f"{ort}: kein einziger Text.")
+            gesehen: set[str] = set()
+            for vorlage in vorrat:
+                stelle = f"{ort}/{vorlage.kennung}"
+                if vorlage.kennung in gesehen:
+                    fehler.append(f"{stelle}: die Kennung kommt zweimal vor.")
+                gesehen.add(vorlage.kennung)
+                if PLATZHALTER_LINK in vorlage.text:
+                    fehler.append(
+                        f"{stelle}: enthaelt {PLATZHALTER_LINK}. Der Vorrat traegt "
+                        f"keinen Link - anlasstext haengt ihn an, wo die Gruppe ihn "
+                        f"erlaubt."
+                    )
+                try:
+                    pruefe_platzhalter(vorlage.text, texttyp=Texttyp.KOMMENTAR)
+                except UngueltigerText as exc:
+                    fehler.append(f"{stelle}: {exc}")
+                for name in unbekannte_platzhalter(vorlage.text):
+                    fehler.append(f"{stelle}: unbekannter Platzhalter {{{name}}}.")
     return fehler

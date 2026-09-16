@@ -67,7 +67,18 @@ limits:
   # unbedachter Lauf jetzt bis zu 100 Credits statt 50 - wer wieder enger
   # fahren will, setzt den Wert zurueck. Der eigentliche Schutz bleibt, dass
   # ein Lauf ohne --limit oder --alle gar nicht erst startet.
-  max_queries_per_run: 100
+  #
+  # Am 13.09.2026 auf den **Zielmarkt** gesetzt, und die Zahl ist keine runde:
+  # Genau so viele Anfragen suchen ihn (67 bundesweit + 4 Muster x 15
+  # Staedte = 127). Sie stehen im Plan vorn, also holt "fbgroups search
+  # --limit 127" sie vollstaendig und keine einzige Gemeinschaftsanfrage. Eine
+  # Obergrenze, die einem Block entspricht, erklaert sich selbst - bei einer
+  # runden 100 fehlten siebenundzwanzig, und niemand saehe der Zahl an, welche.
+  #
+  # Wer den Zielmarkt erweitert, zieht diese Zahl mit. Sonst bleibt der Rest
+  # still liegen, und im dry-run steht "zurueckgestellt" ohne Hinweis darauf,
+  # dass es die neuen Anfragen sind.
+  max_queries_per_run: 127
   max_results_per_query: 10
 
   # Dauerhafter Anfragespeicher (data/query_cache.sqlite): eine erfolgreich

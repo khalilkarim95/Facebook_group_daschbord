@@ -22,7 +22,7 @@ from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEM
 from fbgroups.marketing.store import SCHEMA_VORSCHLAEGE as MARKETING_VORSCHLAEGE_SCHEMA
 from fbgroups.models import Group, GroupPost, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 24
 
 
 def _iso_oder_none(zeitpunkt: datetime | None) -> str | None:
@@ -341,6 +341,84 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE campaign_groups ADD COLUMN kommentar_erschoepft_grund "
         "TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE campaign_groups ADD COLUMN kommentar_erschoepft_am TEXT",
+    ),
+    # Was die Regeln **einer Gruppe** erlauben - der Schritt vor dem Text.
+    #
+    # Gespeichert wird allein, was sich nicht ableiten laesst: das Ergebnis
+    # eines Abrufs der Gruppenseite. Die Qualifikation selbst steht
+    # ausdruecklich **nicht** in einer Spalte - sie wird bei jedem Lesen aus
+    # Mitgliedschaft, Regeln und Versuchsprotokoll gerechnet
+    # (``qualifikation.beurteile``). Derselbe Gedanke wie in ``lauf.py``: Ein
+    # gespeicherter Zaehler neben der Wahrheit laeuft beim ersten Abbruch von
+    # ihr weg.
+    #
+    # ``regeln_gelesen_am`` ist dabei das eigentliche Feld. Ohne es liesse
+    # sich "die Gruppe verbietet nichts" nicht von "wir haben nicht
+    # nachgesehen" unterscheiden, und die Abwesenheit einer Regel waere eine
+    # Erlaubnis, die niemand erteilt hat.
+    20: (
+        MARKETING_SCHEMA,
+        "ALTER TABLE group_marketing ADD COLUMN regeln_gelesen_am TEXT",
+        "ALTER TABLE group_marketing ADD COLUMN regel_keine_links "
+        "INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE group_marketing ADD COLUMN regel_keine_werbung "
+        "INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE group_marketing ADD COLUMN regel_freigabe_noetig "
+        "INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE group_marketing ADD COLUMN regel_neue_ohne_links "
+        "INTEGER NOT NULL DEFAULT 0",
+    ),
+    # Die strenge Reihenfolge des Kampagnenablaufs (12.09.2026):
+    # Zuordnung -> Beitrittsanfragen -> Bewerten -> beste Gruppen -> Arbeit.
+    #
+    # Zwei Angaben, die sich nicht ableiten lassen:
+    #
+    # * ``bewertet_am`` - ob die Neubewertung dieser Kampagne in diesem Lauf
+    #   schon gelaufen ist. Sie steht zwischen Beitritt und Arbeit; ohne den
+    #   Vermerk liefe sie bei jedem Schritt erneut.
+    # * ``automatik_lauf_uebersprungen`` - welche Gruppe in diesem Lauf
+    #   beiseitegelegt wurde und warum. Das ist die Fehlerisolierung: Ein
+    #   Fehlschlag bei einer Gruppe beendet den Lauf nicht, er kostet die
+    #   Gruppe nur diesen Durchgang. Ein Urteil ueber die Gruppe steht
+    #   ausdruecklich woanders (``kommentar_erschoepft``).
+    21: (
+        MARKETING_SCHEMA,
+        "ALTER TABLE automatik_lauf_kampagnen ADD COLUMN bewertet_am TEXT",
+    ),
+    # Die Einstufung der Antwort von Facebook (13.09.2026). Bisher stand im
+    # Protokoll nur der Fehlertext - gut fuer einen Menschen, der ihn liest,
+    # unbrauchbar fuer eine Uebersicht ueber 314 Gruppen. Die Spalte bleibt
+    # **leer** fuer alte Zeilen: Sie nachtraeglich einzustufen hiesse, ein
+    # Urteil ueber Antworten zu faellen, deren Wortlaut inzwischen verkuerzt
+    # gespeichert sein kann - dieselbe Zurueckhaltung wie bei
+    # Migrationsschritt 15, der keine alten Scores umrechnet.
+    22: (
+        MARKETING_SCHEMA,
+        "ALTER TABLE post_versuche ADD COLUMN grund TEXT NOT NULL DEFAULT ''",
+    ),
+    # Der oeffentliche Kurzcode (14.09.2026). Bis dahin stand die
+    # Kampagnenbuchhaltung im Beitrag: "go.b-tarikak.de/r/FB-SYR-DUE-004-B"
+    # nennt jedem Leser Kanal, Zielgruppe, Stadt und laufende Nummer.
+    #
+    # Rein additiv, und ausdruecklich **ohne** Vergabe: Die Spalten bleiben
+    # leer, bis ein Text gebaut wird oder ``campaign kurzlinks`` laeuft. Eine
+    # Migration, die vierhundert oeffentliche Adressen auf einmal erfindet,
+    # verteilte Arbeit auf einen Zeitpunkt, an dem niemand hinsieht -
+    # dieselbe Zurueckhaltung wie beim Browser-Code.
+    #
+    # ``UNIQUE`` steht an den Codespalten, nicht an den Adressen: Zwei
+    # Gruppen mit derselben oeffentlichen Adresse schrieben Klicks der
+    # falschen Gruppe gut, und das faellt in keiner Auswertung auf.
+    23: (
+        MARKETING_SCHEMA,
+        "ALTER TABLE campaign_groups ADD COLUMN public_code TEXT",
+        "ALTER TABLE campaign_groups ADD COLUMN public_url TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE campaign_groups ADD COLUMN public_code_browser TEXT",
+        "ALTER TABLE campaign_groups ADD COLUMN public_url_browser TEXT NOT NULL DEFAULT ''",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_groups_public "
+        "ON campaign_groups(public_code)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_groups_public_browser "
+        "ON campaign_groups(public_code_browser)",
     ),
 }
 
@@ -746,6 +824,13 @@ class SqliteStore:
                     score_max           = ?,
                     score_reason        = ?,
                     score_breakdown     = ?,
+                    -- Ohne diese Zeile blieb die Datenqualitaet auf dem Wert
+                    -- des letzten *Fundes* stehen: ``upsert_groups`` schreibt
+                    -- sie, ``update_scores`` nicht - und ``rescore`` geht ueber
+                    -- diesen Weg. Am 01.09.2026 stand sie deshalb bei allen
+                    -- 314 Gruppen auf 0,0, und der Filter "Datenqualitaet"
+                    -- konnte nur "unter 40 %" treffen.
+                    data_confidence     = ?,
                     data_quality        = ?,
                     status              = ?
                 WHERE group_id = ?
@@ -764,6 +849,7 @@ class SqliteStore:
                     group.score_max,
                     group.score_reason,
                     group.score_breakdown.model_dump_json(),
+                    group.data_confidence,
                     group.data_quality.value,
                     group.status.value,
                     group.group_id,
@@ -819,6 +905,20 @@ class SqliteStore:
         order = "ORDER BY score DESC, name COLLATE NOCASE" if order_by_score else ""
         rows = self.conn.execute(f"SELECT * FROM groups {order}").fetchall()  # noqa: S608
         return [self._row_to_group(row) for row in rows]
+
+    def get_group(self, group_id: str) -> Group | None:
+        """Genau eine Gruppe - oder ``None``, wenn es sie nicht gibt.
+
+        ``load_groups`` holt den ganzen Bestand; wer eine einzelne Gruppe
+        braucht, laed damit dreihundert Zeilen fuer eine. ``None`` heisst
+        **nicht gefunden** und ist kein Fehler: Eine Zuordnung kann auf eine
+        Gruppe zeigen, die aus dem Bestand entfernt wurde, und der Aufrufer
+        soll das unterscheiden koennen, statt eine leere Gruppe zu bekommen.
+        """
+        row = self.conn.execute(
+            "SELECT * FROM groups WHERE group_id = ?", (group_id,)
+        ).fetchone()
+        return self._row_to_group(row) if row else None
 
     def load_group_posts(self, group_id: str) -> list[GroupPost]:
         """Lädt die Metriken der gespeicherten Beiträge einer Gruppe."""

@@ -188,12 +188,20 @@ def test_der_tracking_code_steht_nur_im_angezeigten_text(
     Wer den Platzhalter im gespeicherten Text ersetzte, haette einen Text, den
     kein Sprachmodell und kein zweiter Leser mehr gefahrlos anfassen darf.
     """
+    from fbgroups.marketing.lauf import ziel_zu_nummer
+
     stand = hole(store, campaign, gruppen)
 
     for fassung in stand.posts:
         assert "{link}" in fassung.vorschlag.text
         assert stand.link.tracking_code not in fassung.vorschlag.text
-        assert stand.link.tracking_url in fassung.angezeigt
+        # Eingesetzt wird die **oeffentliche** Adresse - die kurze mit dem
+        # Decknamen, und je Fassung die des gewaehlten Ziels. Der
+        # Tracking-Code steht in keinem Text, den ein Mensch zu sehen bekommt:
+        # Er nennt Kanal, Zielgruppe, Stadt und laufende Nummer.
+        ziel = ziel_zu_nummer(fassung.vorschlag.nummer)
+        assert stand.link.url_fuer(ziel) in fassung.angezeigt
+        assert stand.link.tracking_code not in fassung.angezeigt
         assert "{link}" not in fassung.angezeigt
 
 
@@ -464,13 +472,19 @@ def test_ein_kommentar_zieht_den_gruppenstand_nicht_mit(
 def test_es_gibt_keine_gezaehlte_tagesgrenze_mehr(
     store, campaign, gruppen, gefuellt
 ) -> None:
-    """Das Tageslimit ist am 27.08.2026 entfernt worden.
+    """Das Tageslimit ist am 27.08.2026 **aus der Arbeitsseite** entfernt worden.
 
     Es war der letzte Rest des Arbeiters. Gegen eine Schleife, die selbst
     abschickt, war es eine Bremse; gegen einen Menschen, der jeden Beitrag von
     Hand einfuegt, war es eine Sperre, die ausgerechnet den traf, der gerade
-    arbeitet. Der Test haelt fest, dass keine Zahl mehr dazwischensteht -
-    haengt jemand eine neue Grenze ein, faellt sie hier auf.
+    arbeitet. Der Test haelt fest, dass hier keine Zahl mehr dazwischensteht -
+    haengt jemand eine neue Grenze ein, faellt sie auf.
+
+    **Seit dem 12.09.2026 gibt es wieder gezaehlte Grenzen** - aber an der
+    anderen Stelle: ``marketing/grenzen.py`` begrenzt den **Lauf**, also
+    genau die Schleife, fuer die die Bremse immer gedacht war. Der Weg, den
+    ein Mensch auf ``/arbeit/{kampagne}`` nimmt, bleibt frei; das ist der
+    Unterschied, den dieser Test bewacht.
     """
     stand = hole(store, campaign, gruppen)
 

@@ -36,8 +36,10 @@ from pathlib import Path
 from typing import Any
 
 from fbgroups.config import AppConfig
+from fbgroups.marketing import qualifikation, zielgruppe
 from fbgroups.marketing.analytics import funnel, kennzahlen
 from fbgroups.marketing.models import CampaignStatus, MarketingStatus
+from fbgroups.marketing.qualifikation import GRUND_BESCHRIFTUNG, Ablehnungsgrund
 from fbgroups.marketing.resonanz import resonanz_je_gruppe
 from fbgroups.marketing.selection import Auswahl, auswahl_der_kampagne, passt
 from fbgroups.marketing.store import MarketingStore
@@ -47,6 +49,39 @@ from fbgroups.storage.sqlite_store import SqliteStore
 
 # Klartext fuer die Statusnamen. Die englischen Kennungen stehen in der
 # Datenbank; auf der Seite haben sie nichts verloren.
+# Welche Staende als Mitgliedschaft gelten - dieselbe Menge wie in
+# ``lauf.lies_fortschritt``. Wer die Zusammenarbeit angebahnt oder
+# abgeschlossen hat, ist erst recht drin; ``beitritt_angefragt`` zaehlt
+# ausdruecklich nicht: Eine offene Anfrage ist keine Mitgliedschaft.
+_MITGLIEDSCHAFT = frozenset(
+    {
+        MarketingStatus.MEMBER,
+        MarketingStatus.CONTACTED,
+        MarketingStatus.INTERESTED,
+        MarketingStatus.APPROVED,
+        MarketingStatus.ACTIVE,
+    }
+)
+
+
+def _regeln_von(stand) -> qualifikation.Regelbefund:  # noqa: ANN001 - GroupMarketing | None
+    """Der Regelbefund aus dem Arbeitsstand - ``gelesen`` traegt die Aussage.
+
+    Ohne Eintrag ``gelesen=False``, und das ist nicht dasselbe wie "nichts
+    verboten": Die Abwesenheit einer Regel waere sonst eine Erlaubnis, die
+    niemand erteilt hat.
+    """
+    if stand is None:
+        return qualifikation.Regelbefund()
+    return qualifikation.Regelbefund(
+        gelesen=stand.regeln_gelesen_am is not None,
+        keine_links=stand.regel_keine_links,
+        keine_werbung=stand.regel_keine_werbung,
+        freigabe_noetig=stand.regel_freigabe_noetig,
+        neue_ohne_links=stand.regel_neue_ohne_links,
+    )
+
+
 _STATUS_LABEL = {
     "not_contacted": "nichts getan",
     "beitritt_angefragt": "Beitritt angefragt",
@@ -105,6 +140,10 @@ _EREIGNIS_LABEL = {
     "click": "Klicks",
     "landing_visit": "Landungen",
     "registration": "Registrierungen",
+    # Ohne Eintrag faellt ereignis_label auf den Rohwert zurueck - im Trichter
+    # standen "store_visit" und "download" englisch zwischen deutschen Stufen.
+    "store_visit": "Store-Besuche",
+    "download": "Downloads",
     "activation": "Aktivierungen",
     "qualified": "qualifiziert",
     "conversion": "Abschluesse",
@@ -137,6 +176,28 @@ def _beitrag_gesamtstand(beitraege: list[dict[str, Any]]) -> str:
     return next((stand for stand in _BEITRAG_RANG if stand in staende), "ohne")
 
 
+#: Die Einstufungen, die es gibt - einmal gerechnet statt in jeder Zeile.
+_GRUENDE = {g.value for g in Ablehnungsgrund}
+
+
+def _antworttext(gruende: dict[str, int]) -> str:
+    """"Link abgelehnt 2, angenommen 8" - haeufigstes zuerst.
+
+    Eine Zeichenkette und kein Wortverzeichnis, weil sie im Titel der Zelle
+    steht: Ein Mensch liest dort einen Satz, keine Tabelle. Die Zahlen selbst
+    stehen daneben in ``facebook_gruende``, falls jemand sie auswertet.
+
+    Eine Einstufung, die es nicht (mehr) gibt, wird uebergangen - eine
+    aeltere Fassung des Programms koennte einen Wert geschrieben haben, den
+    diese nicht kennt, und daran soll die Uebersicht nicht scheitern.
+    """
+    return ", ".join(
+        f"{GRUND_BESCHRIFTUNG[Ablehnungsgrund(schluessel)]} {anzahl}"
+        for schluessel, anzahl in sorted(gruende.items(), key=lambda kv: -kv[1])
+        if schluessel in _GRUENDE
+    )
+
+
 def _gruppe_als_zeile(
     group: Group,
     config: AppConfig,
@@ -149,6 +210,16 @@ def _gruppe_als_zeile(
     passt_zu: list[dict[str, str]] | None = None,
     beitraege: list[dict[str, Any]] | None = None,
     resonanz: Resonanz | None = None,
+    qualifikation: str = "unbekannt",
+    qualifikation_label: str = "",
+    qualifikation_grund: str = "",
+    regeln: str = "",
+    zielprioritaet: str = "",
+    zielprioritaet_label: str = "",
+    zielprioritaet_grund: str = "",
+    zielregion: str = "",
+    zielregion_label: str = "",
+    gruende: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Eine Tabellenzeile - bereits mit den Bezeichnungen der Konfiguration.
 
@@ -197,6 +268,40 @@ def _gruppe_als_zeile(
         "status": group.status.value,
         "marketing": marketing_status,
         "marketing_label": _STATUS_LABEL.get(marketing_status, marketing_status),
+        # Die dritte Achse neben "wo stehen wir?" und "arbeiten wir daran?":
+        # **darf** hier ueberhaupt etwas stehen. Sie wird bei jedem Aufruf aus
+        # Mitgliedschaft, gelesenen Gruppenregeln und dem Versuchsprotokoll
+        # gerechnet (``qualifikation.beurteile``) und ist deshalb nie
+        # veraltet. Der Grund faehrt mit: Eine Einstufung, deren Begruendung
+        # man nachschlagen muss, wird geglaubt statt nachgeschlagen.
+        "qualifikation": qualifikation,
+        "qualifikation_label": qualifikation_label or qualifikation,
+        "qualifikation_grund": qualifikation_grund,
+        # Was auf der Gruppenseite an Regeln stand - leer heisst "nichts
+        # verbietendes gefunden", nicht "nicht nachgesehen"; das sagt die
+        # Stufe selbst (``in Bewertung``).
+        "regeln": regeln,
+        # Die vierte Achse (13.09.2026): **gehoert** diese Gruppe zum
+        # Zielmarkt? Neben "wo stehen wir?" (marketing), "arbeiten wir
+        # daran?" (bearbeiten) und "darf hier etwas stehen?"
+        # (qualifikation) - vier Fragen, vier Spalten. Sie wird bei jedem
+        # Aufruf gerechnet (``zielgruppe.aus_group``) und ist deshalb nie
+        # veraltet; der Grund faehrt mit, wie ueberall.
+        "zielprioritaet": zielprioritaet,
+        "zielprioritaet_label": zielprioritaet_label or zielprioritaet,
+        "zielprioritaet_grund": zielprioritaet_grund,
+        # Das Land steht neben der Klasse und nicht darin: "worum geht es
+        # dort?" und "wo ist das?" sind zwei Fragen. In der Zelle stehen sie
+        # trotzdem zusammen ("A·DE") - es ist eine Rangfolge, und getrennt
+        # muesste man sie im Kopf wieder zusammensetzen.
+        "zielregion": zielregion,
+        "zielregion_label": zielregion_label or zielregion,
+        # Was Facebook auf unsere Versuche geantwortet hat - gezaehlt je
+        # Einstufung ("link_rejected": 2). Der Fehlertext selbst steht
+        # weiterhin im Protokoll; hier steht, was sich ueber 314 Gruppen
+        # ueberblicken laesst.
+        "facebook_gruende": gruende or {},
+        "facebook_antwort": _antworttext(gruende or {}),
         # Eigene Achse neben dem Kooperationsweg: "wo stehen wir?" und
         # "arbeiten wir ueberhaupt daran?" sind zwei Fragen. Siehe
         # GroupMarketing.bearbeiten.
@@ -293,6 +398,10 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             }
             for event_type, anzahl, anteil in funnel(mstore)
         ]
+        # Die Grundlage der Qualifikation - in **einem** Zugriff fuer den
+        # ganzen Bestand. Je Zeile einzeln waeren das bei 314 Gruppen 314
+        # Abfragen fuer dieselbe Tabelle.
+        beobachtet = mstore.beobachtungen()
         links = {c.campaign_id: mstore.links_for_campaign(c.campaign_id) for c in campaigns}
         beitrag_zaehler = {c.campaign_id: mstore.post_counts(c.campaign_id) for c in campaigns}
         # Dieselbe Funktion, die auch 'fbgroups rescore' benutzt - Anzeige und
@@ -347,6 +456,38 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
                 {"id": c.campaign_id, "name": c.name}
             )
 
+    # Die Qualifikation je Gruppe - gerechnet, nicht gelesen. Es gibt keine
+    # gespeicherte Einstufung, die veralten koennte; sie entsteht hier aus
+    # Mitgliedschaft, gelesenen Gruppenregeln und dem Versuchsprotokoll.
+    urteile = {
+        g.group_id: qualifikation.beurteile(
+            mitglied=bool(
+                g.group_id in marketing
+                and marketing[g.group_id].marketing_status in _MITGLIEDSCHAFT
+            ),
+            beitritt_angefragt=bool(
+                g.group_id in marketing
+                and marketing[g.group_id].marketing_status
+                is MarketingStatus.JOIN_REQUESTED
+            ),
+            regeln=_regeln_von(marketing.get(g.group_id)),
+            beobachtung=beobachtet.get(g.group_id),
+        )
+        for g in groups
+    }
+
+    # Die Zielprioritaet je Gruppe - ebenfalls gerechnet und nicht gelesen.
+    # Sie beantwortet die vierte Frage der Uebersicht: Gehoert diese Gruppe
+    # ueberhaupt zum Zielmarkt der Kampagne (Reise und Versand nach Syrien)?
+    zielregeln = zielgruppe.regeln_aus_config(config)
+    zielbefunde = {g.group_id: zielgruppe.aus_group(g, zielregeln) for g in groups}
+
+    # Was Facebook geantwortet hat - je Gruppe gezaehlt. Aus dem
+    # Versuchsprotokoll, das es ohnehin gibt; ein Zaehler daneben waere eine
+    # zweite Wahrheit ueber dieselben Versuche.
+    with MarketingStore(db_path) as store:
+        gruende_je_gruppe = store.gruende_je_gruppe()
+
     zeilen = [
         _gruppe_als_zeile(
             g,
@@ -364,9 +505,37 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             beitraege=beitraege_je_gruppe.get(g.group_id, []),
             resonanz=resonanz_je_id.get(g.group_id),
             passt_zu=passt_je_gruppe.get(g.group_id, []),
+            qualifikation=urteile[g.group_id].qualifikation.value,
+            qualifikation_label=urteile[g.group_id].beschriftung,
+            qualifikation_grund=urteile[g.group_id].grund,
+            regeln=_regeln_von(marketing.get(g.group_id)).zusammenfassung()
+            if g.group_id in marketing
+            and marketing[g.group_id].regeln_gelesen_am is not None
+            else "",
+            zielprioritaet=zielbefunde[g.group_id].prioritaet.value,
+            zielprioritaet_label=zielbefunde[g.group_id].beschriftung,
+            zielprioritaet_grund=zielbefunde[g.group_id].grund,
+            zielregion=zielbefunde[g.group_id].region.value,
+            zielregion_label=zielbefunde[g.group_id].region_beschriftung,
+            gruende=gruende_je_gruppe.get(g.group_id, {}),
         )
         for g in groups
     ]
+
+    # Die Verteilung ueber die Prioritaetsklassen - aus **denselben**
+    # Befunden wie die Zeilen. Ein zweiter Lauf ueber die Gruppen koennte
+    # davon abweichen, und dann naennte die Kachel eine andere Zahl als die
+    # gefilterte Tabelle darunter.
+    ziel_zaehler: dict[str, int] = {}
+    for befund in zielbefunde.values():
+        ziel_zaehler[befund.prioritaet.value] = ziel_zaehler.get(befund.prioritaet.value, 0) + 1
+        # Die A-Gruppen noch einmal nach Land. Das ist die Frage, wegen der
+        # es die zweite Achse gibt: "20 A-Gruppen" beantwortet nicht, ob
+        # genug davon in Deutschland stehen - und genau dort wird zuerst
+        # gearbeitet.
+        if befund.prioritaet.value == "a":
+            schluessel = f"a_{befund.region.value}"
+            ziel_zaehler[schluessel] = ziel_zaehler.get(schluessel, 0) + 1
 
     # Auswahllisten fuer das Kampagnenformular. Aus der Konfiguration, nicht
     # aus dem Bestand: Eine Kampagne darf eine Zielgruppe bewerben, zu der noch
@@ -436,6 +605,15 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
         "kampagnen": kampagnen,
         "auswahl": auswahl,
         "trichter": trichter,
+        # Die Verteilung ueber die Prioritaetsklassen. C und D stehen
+        # zusammen, weil sie dasselbe bedeuten: nicht der Ort, an dem
+        # gearbeitet wird. Sie zu trennen brauchte eine vierte Kachel fuer
+        # eine Unterscheidung, die man in der Spalte nachsieht.
+        "ziel_a": ziel_zaehler.get("a", 0),
+        "ziel_a_de": ziel_zaehler.get("a_de", 0),
+        "ziel_a_eu": ziel_zaehler.get("a_eu", 0),
+        "ziel_b": ziel_zaehler.get("b", 0),
+        "ziel_cd": ziel_zaehler.get("c", 0) + ziel_zaehler.get("d", 0),
         "kennzahlen": {
             "gesamt": len(zeilen),
             "bewertet": len(bewertet),
@@ -461,6 +639,86 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
 def _kachel(wert: str, label: str) -> str:
     return f'<div class="kachel"><b>{html.escape(wert)}</b><span>{html.escape(label)}</span></div>'
 
+def _riegel(x: float, y: float, breite: float, hoehe: float, r: float = 4) -> str:
+    """Liegender Balken - gerundet am rechten Ende, eckig an der Grundlinie."""
+    if breite <= 0:
+        return ""
+    r = min(r, hoehe / 2, breite)
+    return (
+        f"M{x},{y} L{x + breite - r},{y} Q{x + breite},{y} {x + breite},{y + r} "
+        f"L{x + breite},{y + hoehe - r} Q{x + breite},{y + hoehe} "
+        f"{x + breite - r},{y + hoehe} L{x},{y + hoehe} Z"
+    )
+
+
+def _diagramme(gruppen: list[dict[str, Any]]) -> str:
+    """Ein kleines Balkendiagramm ueber der Tabelle: worauf der Score beruht.
+
+    Es beantwortet die Frage, die die Kacheln offenlassen. Am 01.09.2026 ist
+    das die eigentliche Auskunft: Mitgliederzahl und Aktivitaet tragen
+    zusammen die Haelfte des Scores und stehen bei 0 %. Als Zahl in einer
+    Kachel liest man darueber hinweg; als leerer Balken neben drei vollen
+    nicht.
+
+    Eine Reihe, also keine Legende - die Ueberschrift sagt, was gezeigt wird.
+    Beschriftet wird direkt am Balkenende.
+
+    Eine Verteilung der Punkte stand hier bis zum 01.09.2026 daneben; der
+    Nutzer hat sie verworfen. Sie beantwortete eine Frage, die die Tabelle
+    schon beantwortet - dort steht jede Gruppe mit ihrem Score, sortierbar.
+    """
+    # --- Abdeckung: worauf der Score beruht
+    gesamt = len(gruppen) or 1
+
+    def hat_aktivitaet(g: dict[str, Any]) -> bool:
+        return (
+            g.get("aktivitaet_quelle") is not None
+            or g.get("posts_pro_tag") is not None
+            or (g.get("punkte") or {}).get("activity", 0) > 0
+        )
+
+    felder = [
+        ("Mitgliederzahl", sum(1 for g in gruppen if g.get("mitglieder") is not None)),
+        ("Aktivität", sum(1 for g in gruppen if hat_aktivitaet(g))),
+        ("Stadt", sum(1 for g in gruppen if g.get("stadt"))),
+        ("Zielgruppe", sum(1 for g in gruppen if g.get("zielgruppen"))),
+        ("Kategorie", sum(1 for g in gruppen if g.get("kategorie"))),
+    ]
+    spur_x, spur_breite, hoehe = 96.0, 176.0, 14.0
+    riegel = []
+    for i, (name, anzahl) in enumerate(felder):
+        y = 12 + i * 20
+        anteil = anzahl / gesamt
+        teile = [
+            f"<g><title>{html.escape(name)}: {anzahl} von {len(gruppen)} Gruppen</title>",
+            f'<text class="viz-achse viz-links" x="{spur_x - 8}" y="{y + 11}">'
+            f"{html.escape(name)}</text>",
+            f'<path class="viz-spur" d="{_riegel(spur_x, y, spur_breite, hoehe)}"/>',
+        ]
+        if anteil > 0:
+            teile.append(
+                f'<path class="viz-mark" '
+                f'd="{_riegel(spur_x, y, spur_breite * anteil, hoehe)}"/>'
+            )
+        teile.append(
+            f'<text class="viz-wert viz-rechts" x="{spur_x + spur_breite + 8}" y="{y + 11}">'
+            # "0 %" fuer einen Wert, den es gibt, waere eine falsche Auskunft:
+            # Bei einer von 314 Gruppen rundet der Prozentwert auf null.
+            f"{'&lt;1' if 0 < anteil < 0.01 else round(anteil * 100)} %</text></g>"
+        )
+        riegel.append("".join(teile))
+
+    return (
+        '<figure class="viz-karte">\n'
+        f"  <figcaption>Datenabdeckung <span>{len(gruppen)} Gruppen</span></figcaption>\n"
+        '  <svg viewBox="0 0 340 116" role="img"\n'
+        '       aria-label="Anteil der Gruppen mit belegter Angabe je Merkmal">\n'
+        f"    {''.join(riegel)}\n"
+        "  </svg>\n"
+        "</figure>"
+    )
+
+
 def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
     """Baut die vollstaendige Seite.
 
@@ -480,6 +738,8 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
     ]}
     nutzlast = json.dumps(daten, ensure_ascii=False).replace("</", "<\\/")
 
+    diagramme = _diagramme(daten.get("gruppen") or [])
+
     kacheln = "".join(
         [
             _kachel(str(k["gesamt"]), "Gruppen"),
@@ -492,13 +752,31 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
                 f"{k['bestwert']:.1f}".replace(".", ",") if k["bestwert"] is not None else "–",
                 "Bestwert",
             ),
+            # Die Prioritaetsverteilung (13.09.2026). Sie beantwortet die
+            # Frage, wegen der es die Einstufung gibt: Haben wir ueberhaupt
+            # genug Gruppen im Zielmarkt, oder arbeitet die Kampagne
+            # hauptsaechlich in Gemeinschaftsgruppen? "20 A-Gruppen" ist eine
+            # Auskunft, "314 Gruppen" ist keine.
+            # Seit dem 14.09.2026 mit dem Land daneben. "20 A-Gruppen"
+            # beantwortet nicht, ob genug davon in Deutschland stehen - und
+            # dort wird zuerst gearbeitet. Die dritte Zahl (A ohne genanntes
+            # Land) steht nicht als eigene Kachel: Sie ist der Rest der
+            # ersten und liesse sich nur zusammen mit den anderen beiden
+            # lesen; wer sie braucht, filtert danach.
+            _kachel(
+                f"{daten['ziel_a_de']} / {daten['ziel_a_eu']}",
+                "A – Deutschland / Europa",
+            ),
+            _kachel(str(daten["ziel_a"]), "A – gesamt"),
+            _kachel(str(daten["ziel_b"]), "B – Gemeinschaft"),
+            _kachel(str(daten["ziel_cd"]), "C/D – nachrangig"),
             _kachel(str(k["tracking_links"]), "Tracking-Links"),
             _kachel(str(k["beitraege_veroeffentlicht"]), "Beiträge"),
             _kachel(str(k["beitraege_offen"]), "offen"),
-            _kachel(str(k["clicks"]), "Klicks"),
-            _kachel(str(k["registrations"]), "Registrierungen"),
-            _kachel(str(k["downloads"]), "Downloads"),
-            _kachel(str(k["qualified"]), "qualifiziert"),
+            # Klicks, Registrierungen, Downloads und "qualifiziert" stehen
+            # seit dem 01.09.2026 nur noch im Trichter darunter. Zweimal
+            # dieselbe Zahl heisst zwei Stellen, an denen sie stimmen muss -
+            # und die Kachel nannte sie ohne ihre Stufe davor und dahinter.
             _kachel(str(k["referrals"]), "Empfehlungen"),
             _kachel(str(k["rewards"]), "Prämien"),
         ]
@@ -616,6 +894,7 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   :root {{
     --bg: #f6f7f9; --karte: #fff; --text: #1a1c1f; --leise: #6b7280;
     --rand: #e3e6ea; --akzent: #2563eb; --gut: #15803d; --mittel: #b45309;
+    --viz: #2a78d6;
     --b-offen-bg: #fef3c7;  --b-offen-fg: #92400e;
     --b-gut-bg: #dcfce7;    --b-gut-fg: #166534;
     --b-fehler-bg: #fee2e2; --b-fehler-fg: #991b1b;
@@ -625,6 +904,7 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
     :root {{
       --bg: #16181d; --karte: #1e2127; --text: #e8eaed; --leise: #9aa1ab;
       --rand: #2c313a; --akzent: #60a5fa; --gut: #4ade80; --mittel: #fbbf24;
+      --viz: #3987e5;
       --b-offen-bg: #3b2f14;  --b-offen-fg: #fcd34d;
       --b-gut-bg: #14321f;    --b-gut-fg: #6ee7a8;
       --b-fehler-bg: #3b1c1c; --b-fehler-fg: #fca5a5;
@@ -639,6 +919,39 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   h1 {{ font-size: 20px; margin: 0 0 4px; }}
   .hinweis {{ color: var(--leise); font-size: 13px; margin: 0 0 20px; }}
   .kacheln {{ display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }}
+  /* Diagramme: eine Reihe je Bild, deshalb keine Legende. Die Markenfarbe ist
+     geprueft (Helligkeitsband, Chroma, Kontrast gegen die Kartenflaeche) und
+     steht bewusst nicht auf --akzent: dessen Dunkelwert liegt ausserhalb des
+     Bandes und traegt als Flaeche zu wenig Gewicht. */
+  /* Die obere Reihe: Datenabdeckung und Trichter nebeneinander. Beide sind
+     Auskunft ueber den ganzen Bestand und gehoeren deshalb vor die Tabelle -
+     der Trichter stand bis zum 01.09.2026 unter dreihundert Zeilen. */
+  .oben {{
+    display: flex; flex-wrap: wrap; gap: 12px;
+    align-items: flex-start; margin-bottom: 20px;
+  }}
+  .oben > .trichter {{ flex: 1 1 420px; min-width: 320px; }}
+  .oben h2 {{ margin: 0 0 8px; }}
+  .oben table {{ font-size: 13px; }}
+  .oben th, .oben td {{ padding: 6px 10px; }}
+  .viz-karte {{
+    flex: 1 1 320px; max-width: 440px; margin: 0;
+    background: var(--karte); border: 1px solid var(--rand);
+    border-radius: 10px; padding: 10px 12px 4px;
+  }}
+  .viz-karte figcaption {{
+    font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 2px;
+  }}
+  .viz-karte figcaption span {{ font-weight: 400; color: var(--leise); }}
+  .viz-karte svg {{ width: 100%; height: auto; display: block; }}
+  .viz-mark {{ fill: var(--viz); }}
+  .viz-spur {{ fill: var(--rand); }}
+  .viz-linie {{ stroke: var(--rand); stroke-width: 1; }}
+  /* Text traegt Textfarben, nie die Datenfarbe. */
+  .viz-wert {{ fill: var(--text); font-size: 10px; font-weight: 600; text-anchor: middle; }}
+  .viz-achse {{ fill: var(--leise); font-size: 10px; text-anchor: middle; }}
+  .viz-links {{ text-anchor: end; }}
+  .viz-rechts {{ text-anchor: start; }}
   .kachel {{
     background: var(--karte); border: 1px solid var(--rand); border-radius: 10px;
     padding: 12px 18px; min-width: 108px;
@@ -712,6 +1025,15 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   code {{
     background: var(--bg); border: 1px solid var(--rand); border-radius: 5px;
     padding: 1px 5px; font-size: 12px;
+  }}
+  /* Die Begruendung neben dem Zaehler: leiser als er, aber lesbar - sie
+     erklaert eine Zahl, die sonst nach einem Fehler aussieht. */
+  .marke-grund {{
+    font-size: 12px; color: #9ca3af; margin-left: 10px;
+    display: inline-flex; align-items: center; gap: 8px;
+  }}
+  .marke-grund button.mini {{
+    cursor: pointer; padding: 2px 8px; border-radius: 5px; font-size: 12px;
   }}
   .marke {{
     font-size: 12px; border: 1px solid var(--rand); border-radius: 20px;
@@ -878,11 +1200,49 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
 
 <div class="kacheln">{kacheln}</div>
 
+<div class="oben">
+{diagramme}
+<section class="trichter">
+<h2>Trichter</h2>
+<div class="tabelle-rahmen">
+<table>
+  <thead><tr>
+    <th>Stufe</th><th class="zahl">Anzahl</th>
+    <th class="zahl" title="Anteil an den Klicks – nicht an der vorigen Stufe.
+So bleiben zwei Auswertungen vergleichbar.">Anteil</th><th></th>
+  </tr></thead>
+  <tbody>{trichter_zeilen}</tbody>
+</table>
+</div>
+</section>
+</div>
+
 <div class="filter">
   <select id="f-stadt"><option value="">Alle Städte</option></select>
   <select id="f-zielgruppe"><option value="">Alle Zielgruppen</option></select>
   <select id="f-kategorie"><option value="">Alle Kategorien</option></select>
+  <select id="f-zielprio"
+          title="Gehoert die Gruppe zum Zielmarkt? A wird zuerst bearbeitet, D gar nicht.">
+    <option value="">Jede Prioritaet</option>
+    <option value="a">A – Reise &amp; Versand</option>
+    <option value="b">B – Gemeinschaft</option>
+    <option value="c">C – allgemein</option>
+    <option value="d">D – ohne Bezug</option>
+  </select>
+  <select id="f-zielregion"
+          title="Wo arbeitet die Gruppe? Gearbeitet wird Deutschland zuerst,
+dann das uebrige Europa. Eine Gruppe, die nur ein Land ausserhalb Europas
+nennt, faellt aus dem Zielmarkt heraus - ihre Strecke ist nicht unsere.">
+    <option value="">Jedes Land</option>
+    <option value="de">Deutschland</option>
+    <option value="eu">übriges Europa</option>
+    <option value="unbekannt">Land unbekannt</option>
+    <option value="ausserhalb">außerhalb Europas</option>
+  </select>
   <select id="f-marketing"><option value="">Jeder Stand</option></select>
+  <select id="f-qualifikation" title="Darf hier ueberhaupt etwas stehen?">
+    <option value="">Jede Stufe</option>
+  </select>
   <select id="f-beitrag">
     <option value="">Jeder Beitrag</option>
     <option value="zu-tun">nur zu erledigen</option>
@@ -911,9 +1271,21 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
     <option value="0.4">ab 40 %</option>
     <option value="niedrig">unter 40 %</option>
   </select>
-  <label class="schalter"><input type="checkbox" id="f-bewertet" checked> nur bewertete</label>
-  <label class="schalter"><input type="checkbox" id="f-bearbeitet" checked> nur bearbeitete</label>
+  <!-- **Beide aus** (14.09.2026). Sie standen auf "checked", und damit
+       verschwieg die Uebersicht beim ersten Aufruf jede Gruppe ohne Score und
+       jede ausgeschlossene: 471 von 621 - ohne dass irgendwo stand, warum.
+       Der Zaehler nannte nur die Zahl, und wer eine bearbeitete Gruppe
+       suchte, hielt sie fuer verschwunden.
+
+       Eine Uebersicht, die "Gruppen" heisst, zeigt den Bestand. Was man
+       ausblenden will, blendet man aus - und sieht daneben, dass man es
+       getan hat (siehe "treffer-grund"). Der eigene Haken ueberlebt die
+       Sitzung weiterhin (sessionStorage); anders ist allein, womit die Seite
+       anfaengt. -->
+  <label class="schalter"><input type="checkbox" id="f-bewertet"> nur bewertete</label>
+  <label class="schalter"><input type="checkbox" id="f-bearbeitet"> nur bearbeitete</label>
   <span class="marke" id="treffer"></span>
+  <span class="marke-grund" id="treffer-grund"></span>
 </div>
 
 <div class="sammel" id="sammel" hidden>
@@ -938,11 +1310,19 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
     <th data-sort="stadt">Stadt</th>
     <th data-sort="zielgruppen">Zielgruppe</th>
     <th data-sort="kategorie">Kategorie</th>
+    <th data-sort="zielprioritaet"
+        title="Gehoert diese Gruppe zum Zielmarkt? A = Reise und Versand nach
+Syrien, B = syrische/arabische Gemeinschaft in Deutschland, C = allgemein,
+D = ohne Bezug. Gerechnet aus Name, Beschreibung, Kategorie, Zielgruppe und
+Stadt - nicht gespeichert. A wird zuerst bearbeitet, D gar nicht.">Ziel</th>
     <th data-sort="kampagnen_text"
         title="Zu welchen Kampagnen diese Gruppe gehoert. Zuordnen vergibt einen
 Tracking-Code - der wird nie zurueckgenommen, er steht spaeter in
 veroeffentlichten Beitraegen.">Kampagne</th>
     <th data-sort="marketing_label">Stand</th>
+    <th data-sort="qualifikation_label"
+        title="Darf hier ueberhaupt etwas stehen? Gerechnet aus Mitgliedschaft,
+gelesenen Gruppenregeln und den bisherigen Ausgaengen – nicht gespeichert.">Darf</th>
     <th data-sort="beitrag_status"
         title="Der Beitrag dieser Kampagne in dieser Gruppe. Der Text trägt den
 Tracking-Link genau dieser Gruppe – er entsteht aus der Zuordnung, nicht aus
@@ -1072,21 +1452,6 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
 
 </section>
 
-<div class="spalten">
-<section>
-<h2>Trichter</h2>
-<div class="tabelle-rahmen">
-<table>
-  <thead><tr>
-    <th>Stufe</th><th class="zahl">Anzahl</th>
-    <th class="zahl" title="Anteil an den Klicks – nicht an der vorigen Stufe.
-So bleiben zwei Auswertungen vergleichbar.">Anteil</th><th></th>
-  </tr></thead>
-  <tbody>{trichter_zeilen}</tbody>
-</table>
-</div>
-</section>
-</div>
 
 <footer>
   {fusszeile}
@@ -1124,8 +1489,8 @@ let seite = 1, proSeite = 25;
 // nicht den Filter von gestern.
 const MERKER = "fbgroups-uebersicht";
 const MERK_FELDER = ["f-stadt", "f-zielgruppe", "f-kategorie", "f-marketing",
-                     "f-beitrag", "f-suche", "f-mitglieder", "f-aktivitaet",
-                     "f-konfidenz"];
+                     "f-zielprio", "f-zielregion", "f-beitrag", "f-suche", "f-mitglieder",
+                     "f-aktivitaet", "f-konfidenz"];
 const MERK_SCHALTER = ["f-bewertet", "f-bearbeitet"];
 
 function standSichern() {{
@@ -1198,6 +1563,7 @@ fuelleAuswahl("f-stadt", zeilen.map((z) => z.stadt));
 fuelleAuswahl("f-zielgruppe", zeilen.flatMap((z) => z.zielgruppen));
 fuelleAuswahl("f-kategorie", zeilen.map((z) => z.kategorie));
 fuelleAuswahl("f-marketing", zeilen.map((z) => z.marketing_label));
+fuelleAuswahl("f-qualifikation", zeilen.map((z) => z.qualifikation_label));
 fuelleSammelKampagnen();
 
 function gefiltert() {{
@@ -1205,6 +1571,9 @@ function gefiltert() {{
   const ziel = document.getElementById("f-zielgruppe").value;
   const kat = document.getElementById("f-kategorie").value;
   const stand = document.getElementById("f-marketing").value;
+  const qual = document.getElementById("f-qualifikation").value;
+  const zielprio = document.getElementById("f-zielprio").value;
+  const zielregion = document.getElementById("f-zielregion").value;
   const suche = document.getElementById("f-suche").value.trim().toLowerCase();
   const nurBewertet = document.getElementById("f-bewertet").checked;
   const nurBearbeitet = document.getElementById("f-bearbeitet").checked;
@@ -1236,7 +1605,12 @@ function gefiltert() {{
   // Welche es war, steht im Tooltip; zum Filtern zaehlt nur, ob ueberhaupt.
   const passtAktivitaet = (z) => {{
     if (!aktivitaet) return true;
-    const gemessen = z.aktivitaet_quelle !== null || z.posts_pro_tag !== null;
+    // Die Resonanz ist eine gemessene Quelle, steht aber nicht am Datensatz:
+    // sie entsteht beim Bewerten aus den Klicks und wird nicht in
+    // ``activity_source`` geschrieben. Ohne den dritten Teil galt eine Gruppe
+    // mit "Aktivitaet 4.41 (resonanz)" im Score hier als unbekannt.
+    const gemessen = z.aktivitaet_quelle !== null || z.posts_pro_tag !== null
+                     || ((z.punkte || {{}}).activity || 0) > 0;
     if (aktivitaet === "ja") return gemessen;
     if (aktivitaet === "nein") return !gemessen;
     return (z.punkte || {{}}).activity >= 18;   // von 25
@@ -1255,6 +1629,9 @@ function gefiltert() {{
     (!ziel || z.zielgruppen.includes(ziel)) &&
     (!kat || z.kategorie === kat) &&
     (!stand || z.marketing_label === stand) &&
+    (!qual || z.qualifikation_label === qual) &&
+    (!zielprio || z.zielprioritaet === zielprio) &&
+    (!zielregion || z.zielregion === zielregion) &&
     (!nurBewertet || z.score !== null) &&
     (!suche || z.name.toLowerCase().includes(suche) ||
                z.beschreibung.toLowerCase().includes(suche))
@@ -1274,10 +1651,62 @@ function sortiert(liste) {{
   }});
 }}
 
+// Die Filter, die gerade etwas ausblenden - mit dem Wort, das im Feld steht.
+// "4 von 621" sagt, DASS etwas fehlt, und verschweigt, warum: Wer einen Stand
+// gewaehlt hat und danach eine bearbeitete Gruppe sucht, haelt sie fuer
+// verschwunden. Die Zeile nennt deshalb den Grund und bietet den Weg zurueck.
+function aktiveFilter() {{
+  const felder = [
+    ["f-stadt", "Stadt"], ["f-zielgruppe", "Zielgruppe"], ["f-kategorie", "Kategorie"],
+    ["f-zielprio", "Ziel"], ["f-zielregion", "Land"], ["f-marketing", "Stand"],
+    ["f-qualifikation", "Darf"], ["f-beitrag", "Beitrag"], ["f-mitglieder", "Groesse"],
+    ["f-aktivitaet", "Aktivitaet"], ["f-konfidenz", "Datenqualitaet"],
+  ];
+  const aktiv = [];
+  for (const [id, name] of felder) {{
+    const feld = document.getElementById(id);
+    if (feld && feld.value) {{
+      const text = feld.options[feld.selectedIndex].textContent.trim();
+      aktiv.push(name + ": " + text);
+    }}
+  }}
+  const suche = document.getElementById("f-suche").value.trim();
+  if (suche) aktiv.push('Suche: "' + suche + '"');
+  if (document.getElementById("f-bewertet").checked) aktiv.push("nur bewertete");
+  if (document.getElementById("f-bearbeitet").checked) aktiv.push("nur bearbeitete");
+  return aktiv;
+}}
+
+function filterZuruecksetzen() {{
+  for (const id of ["f-stadt", "f-zielgruppe", "f-kategorie", "f-zielprio",
+                    "f-zielregion", "f-marketing", "f-qualifikation", "f-beitrag",
+                    "f-mitglieder", "f-aktivitaet", "f-konfidenz"]) {{
+    const feld = document.getElementById(id);
+    if (feld) feld.value = "";
+  }}
+  document.getElementById("f-suche").value = "";
+  document.getElementById("f-bewertet").checked = false;
+  document.getElementById("f-bearbeitet").checked = false;
+  seite = 1;
+  merkeStand();
+  zeichne();
+}}
+
 function zeichne() {{
   const alle = sortiert(gefiltert());
-  document.getElementById("treffer").textContent =
-    alle.length + " von " + zeilen.length;
+  const aktiv = aktiveFilter();
+  const treffer = document.getElementById("treffer");
+  treffer.textContent = alle.length + " von " + zeilen.length;
+  const hinweis = document.getElementById("treffer-grund");
+  if (hinweis) {{
+    const versteckt = zeilen.length - alle.length;
+    hinweis.innerHTML = versteckt > 0
+      ? esc(versteckt + " ausgeblendet durch " + aktiv.join(" · ") + " ")
+        + '<button type="button" id="filter-weg" class="mini">Filter zurücksetzen</button>'
+      : "";
+    const knopf = document.getElementById("filter-weg");
+    if (knopf) knopf.onclick = filterZuruecksetzen;
+  }}
 
   const seiten = proSeite > 0 ? Math.max(1, Math.ceil(alle.length / proSeite)) : 1;
   if (seite > seiten) seite = seiten;
@@ -1313,8 +1742,10 @@ function zeichne() {{
           <td>${{esc(z.stadt) || "–"}}</td>
           <td>${{esc(z.zielgruppen.join(", ")) || "–"}}</td>
           <td>${{esc(z.kategorie) || "–"}}</td>
+          <td>${{zielZelle(z)}}</td>
           <td class="kampagnen-zelle">${{kampagnenZelle(z)}}</td>
           <td>${{standZelle(z)}}</td>
+          <td>${{qualZelle(z)}}</td>
           <td>${{beitragZelle(z)}}</td>
           <td class="zahl">${{z.click}}</td>
           <td class="zahl">${{z.registration}}</td>
@@ -1517,7 +1948,7 @@ const BEITRAG_LABEL = {{
 // gearbeitet wird unter /arbeit/{{kampagne}}.
 // Die Spalte STAND - zwei Werte, nicht zehn.
 //
-// Von Hand gesetzt werden nur die beiden, um die es geht: Anfrage gesendet
+// Von Hand gesetzt werden nur die beiden, um die es geht: Beitrittsanfrage
 // oder nicht. Die uebrigen Staende der Aufzaehlung (Mitglied, abgelehnt,
 // Zusammenarbeit ...) bleiben im Modell und in den Bestandsdaten - entfernt
 // waeren aeltere Datensaetze nicht mehr ladbar, und "Mitglied" setzt die
@@ -1525,10 +1956,60 @@ const BEITRAG_LABEL = {{
 //
 // Steht ein solcher Wert an der Gruppe, erscheint er als **Text** statt als
 // Auswahlfeld. Das ist kein Schmuck: Ein Feld mit zwei Optionen, in dem
-// "Mitglied" gar nicht vorkommt, wuerde bei der naechsten Beruehrung auf
-// "nicht gesendet" zurueckfallen - und damit eine erreichte Mitgliedschaft
+// "Mitglied" gar nicht vorkommt, wuerde bei der naechsten Beruehrung auf den
+// ersten Eintrag zurueckfallen - und damit eine erreichte Mitgliedschaft
 // stillschweigend loeschen.
 const STAND_VON_HAND = ["not_contacted", "beitritt_angefragt"];
+
+// Die Farbe sagt, was der Text sagt - sie ersetzt ihn nicht. Wer nur die
+// Farbe liest, liest "gut/schlecht"; die Stufe selbst steht daneben, und der
+// Grund haengt als Titel daran.
+const QUAL_FARBE = {{
+  geeignet: "#16a34a",
+  bewertung: "#ca8a04",
+  ohne_links: "#ca8a04",
+  ohne_kommentare: "#ca8a04",
+  ohne_beitraege: "#ca8a04",
+  beitritt_noetig: "#6b7280",
+  beitritt_angefragt: "#6b7280",
+  unbekannt: "#6b7280",
+  ungeeignet: "#dc2626",
+}};
+
+const ZIEL_FARBE = {{
+  a: "#16a34a",
+  b: "#2563eb",
+  c: "#ca8a04",
+  d: "#9ca3af",
+}};
+
+// Das Land in zwei Zeichen. Nur bei den Gruppen, bei denen es die
+// Reihenfolge aendert - "unbekannt" ist der Regelfall und bekommt deshalb
+// kein Zeichen: Ein Vermerk, der in zwei Dritteln der Zeilen steht, sagt
+// nichts mehr.
+const REGION_KURZ = {{de: "DE", eu: "EU", ausserhalb: "✗"}};
+
+function zielZelle(z) {{
+  // Nur der Buchstabe, mit der Begruendung im Titel: Die Spalte steht in
+  // jeder der 314 Zeilen, und "A - Reise & Versand" waere dort breiter als
+  // der Gruppenname. Wer den Grund braucht, faehrt darueber.
+  const kurz = (z.zielprioritaet || "").toUpperCase() || "–";
+  const farbe = ZIEL_FARBE[z.zielprioritaet] || "#9ca3af";
+  const land = REGION_KURZ[z.zielregion] || "";
+  const titel = [z.zielprioritaet_label, z.zielregion_label,
+                 z.zielprioritaet_grund, z.facebook_antwort]
+    .filter(Boolean).join(" · ");
+  return `<span style="color:${{farbe}};font-weight:600" title="${{esc(titel)}}">`
+    + esc(kurz) + `</span>`
+    + (land ? `<span style="color:#6b7280;font-size:11px"> ${{esc(land)}}</span>` : "");
+}}
+
+function qualZelle(z) {{
+  const farbe = QUAL_FARBE[z.qualifikation] || "#6b7280";
+  const titel = [z.qualifikation_grund, z.regeln].filter(Boolean).join(" · ");
+  return `<span style="color:${{farbe}}" title="${{esc(titel)}}">`
+    + esc(z.qualifikation_label) + `</span>`;
+}}
 
 function standZelle(z) {{
   if (NUR_LESEN) return esc(z.marketing_label);
@@ -1538,8 +2019,16 @@ function standZelle(z) {{
   }}
   return `<select class="stand" data-id="${{esc(z.id)}}">`
     + STAND_VON_HAND.map((wert) => {{
-        const s = DATEN.staende.find((x) => x.wert === wert);
-        const label = wert === "not_contacted" ? "nicht gesendet" : "Anfrage gesendet";
+        // **Dieselben Woerter wie im Filter** (14.09.2026). Hier standen
+        // zwei eigene Beschriftungen fest im Programm, waehrend das
+        // Filterfeld darueber dieselben beiden Werte anders nannte - zwei
+        // Namen fuer ein Feld. Wer den Text der Spalte im Filter suchte,
+        // fand ihn nicht, griff zum naechstbesten Eintrag, und die Gruppe
+        // war weg: Es sah aus, als waere sie aus der Uebersicht
+        // verschwunden. ``DATEN.staende`` kommt aus ``status_label`` -
+        // derselben Quelle, aus der auch das Filterfeld gefuellt wird.
+        const eintrag = DATEN.staende.find((x) => x.wert === wert);
+        const label = eintrag ? eintrag.label : wert;
         return `<option value="${{wert}}"${{wert === z.marketing ? " selected" : ""}}>`
           + esc(label) + "</option>";
       }}).join("")

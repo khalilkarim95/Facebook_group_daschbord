@@ -19,10 +19,13 @@ haetten dort keinen sicheren Platz.
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from fbgroups.marketing.kurzcode import kurzcode
 from fbgroups.marketing.models import (
     MARKETING_FORTSCHRITT,
     POST_STATUS_ZU_JOB,
@@ -49,6 +52,31 @@ from fbgroups.marketing.models import (
     VorschlagStatus,
 )
 from fbgroups.marketing.queue import darf_arbeiten, pruefe_uebergang, zustand_schluessel
+
+#: Das Geheimnis der Kurzcodes - neben dem Salt der Besucherpruefsumme im
+#: selben Speicher. Beide sind Eigenschaften **dieser** Datenbank: Wer die
+#: Datei umzieht, nimmt sie mit, und die Adressen bleiben dieselben.
+_KURZCODE_SALT = "kurzcode_salt"
+
+
+@dataclass(frozen=True)
+class Aufloesung:
+    """Was hinter einer Weiterleitungsadresse steht.
+
+    Vier Angaben statt eines Datensatzes, weil drei davon aus dem Datensatz
+    allein nicht hervorgehen: **welcher** der beiden Codes gemeint war, wie er
+    nach aussen heisst und wohin er fuehrt. Ohne sie muesste jeder Aufrufer
+    die Zuordnung selbst nachrechnen - und zwei Rechnungen koennen
+    auseinanderlaufen, mit Klicks auf der falschen Gruppe.
+    """
+
+    link: CampaignGroup
+    #: Der Code, unter dem gezaehlt und ausgewertet wird.
+    interner_code: str
+    #: Der Code, der in einem Beitrag stehen darf.
+    oeffentlicher_code: str
+    #: ``store`` oder ``browser``.
+    ziel: str
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -171,6 +199,19 @@ CREATE TABLE IF NOT EXISTS campaign_groups (
     -- vierhundert Codes auf einmal erfindet.
     tracking_code_browser TEXT UNIQUE,
     tracking_url_browser  TEXT NOT NULL DEFAULT '',
+    -- Der oeffentliche Deckname beider Codes - das, was in einem Beitrag
+    -- steht. Kein zweites Tracking: Die Weiterleitung loest ihn auf und
+    -- zaehlt unter dem inneren Code, der damit in jeder Auswertung
+    -- unveraendert bleibt (``marketing/kurzcode.py``).
+    --
+    -- Nullable aus demselben Grund wie der Browser-Code: Bestandszeilen
+    -- haben ihn nicht, und eine Migration, die vierhundert Adressen auf
+    -- einmal erfindet, waere der falsche Ort dafuer. Fehlt er, geht die
+    -- lange Adresse hinaus - unschoen, aber richtig.
+    public_code           TEXT UNIQUE,
+    public_url            TEXT NOT NULL DEFAULT '',
+    public_code_browser   TEXT UNIQUE,
+    public_url_browser    TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (campaign_id, group_id),
     FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
     FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
@@ -194,6 +235,21 @@ CREATE TABLE IF NOT EXISTS group_marketing (
     bearbeiten        INTEGER NOT NULL DEFAULT 1,
     ausschlussgrund   TEXT NOT NULL DEFAULT '',
     notes             TEXT NOT NULL DEFAULT '',
+    -- Was die Regeln DIESER Gruppe erlauben. Nur das Ergebnis des Abrufs,
+    -- nicht das Urteil: Die Qualifikation wird bei jedem Lesen aus
+    -- Mitgliedschaft, Regeln und Versuchsprotokoll gerechnet
+    -- (``qualifikation.beurteile``) und steht in keiner Spalte - ein
+    -- gespeichertes Urteil neben seinen Grundlagen laeuft von ihnen weg.
+    --
+    -- ``regeln_gelesen_am`` traegt die Unterscheidung, auf die es ankommt:
+    -- NULL heisst "nicht nachgesehen", nicht "nichts verboten". Auch diese
+    -- Spalten stehen hier UND als Migrationsschritt 20, aus dem oben
+    -- genannten Grund.
+    regeln_gelesen_am     TEXT,
+    regel_keine_links     INTEGER NOT NULL DEFAULT 0,
+    regel_keine_werbung   INTEGER NOT NULL DEFAULT 0,
+    regel_freigabe_noetig INTEGER NOT NULL DEFAULT 0,
+    regel_neue_ohne_links INTEGER NOT NULL DEFAULT 0,
     updated_at        TEXT NOT NULL,
     FOREIGN KEY (group_id) REFERENCES groups(group_id) ON DELETE CASCADE
 );
@@ -239,7 +295,37 @@ CREATE TABLE IF NOT EXISTS automatik_lauf_kampagnen (
     campaign_id TEXT NOT NULL,
     position    INTEGER NOT NULL,
     status      TEXT NOT NULL DEFAULT 'wartet',
+    -- Wann die Gruppen dieser Kampagne in diesem Lauf neu bewertet wurden.
+    -- Einmal je Kampagne und Lauf: Die Neubewertung laeuft ueber den ganzen
+    -- Bestand und kostet Sekunden; bei jedem Schritt erneut waere sie die
+    -- teuerste Zeile des Laufs. Leer heisst: steht noch aus - und danach
+    -- richtet sich die Reihenfolge, in der gearbeitet wird.
+    bewertet_am TEXT,
     PRIMARY KEY (lauf_id, campaign_id),
+    FOREIGN KEY (lauf_id) REFERENCES automatik_lauf(lauf_id) ON DELETE CASCADE
+);
+
+-- Was in **diesem** Lauf uebersprungen wurde - und warum.
+--
+-- Die Fehlerisolierung je Gruppe: Scheitert eine Beitrittsanfrage, laesst
+-- sich eine Gruppenseite nicht lesen, wirft die Textherstellung, bricht der
+-- Browser mitten im Schritt ab - dann wird die Gruppe fuer diesen Lauf
+-- beiseitegelegt, statt den Lauf zu beenden. Der naechste Lauf faengt ohne
+-- diese Liste an (sie haengt an ``lauf_id``): Ein Fehler von heute ist kein
+-- Urteil ueber morgen.
+--
+-- **Nicht dasselbe wie ``kommentar_erschoepft``.** Jenes sagt "diese Gruppe
+-- gibt nichts mehr her" und gilt dauerhaft; hier steht "heute ging es nicht".
+-- In eine Spalte gezwungen waere ein abgestuerzter Browser ein Urteil ueber
+-- die Gruppe - genau die Verwechslung, an der am 11.09.2026 45 Gruppen als
+-- erschoepft galten.
+CREATE TABLE IF NOT EXISTS automatik_lauf_uebersprungen (
+    lauf_id     INTEGER NOT NULL,
+    campaign_id TEXT NOT NULL,
+    group_id    TEXT NOT NULL,
+    grund       TEXT NOT NULL DEFAULT '',
+    zeitpunkt   TEXT NOT NULL,
+    PRIMARY KEY (lauf_id, campaign_id, group_id),
     FOREIGN KEY (lauf_id) REFERENCES automatik_lauf(lauf_id) ON DELETE CASCADE
 );
 
@@ -358,6 +444,13 @@ CREATE TABLE IF NOT EXISTS post_versuche (
     erfolg         INTEGER NOT NULL DEFAULT 0,
     post_url       TEXT NOT NULL DEFAULT '',
     fehler         TEXT NOT NULL DEFAULT '',
+    -- Die Einstufung der Antwort von Facebook (qualifikation.Ablehnungsgrund):
+    -- 'link_rejected', 'comment_requires_review', 'group_pending_limit' ...
+    -- Sie steht **neben** dem Fehlertext, nicht statt seiner: Der Text ist
+    -- der Beleg, die Einstufung die Auskunft. Leer bei Zeilen aus der Zeit
+    -- vor Migrationsschritt 22 - nachtraeglich einzustufen hiesse, ein Urteil
+    -- ueber Antworten zu faellen, die niemand mehr nachlesen kann.
+    grund          TEXT NOT NULL DEFAULT '',
     -- Nur ein Name wie 'standard'. Nie ein Passwort, nie ein Cookie, nie ein
     -- Token - dieses Modell hat dafuer kein Feld.
     browser_session TEXT NOT NULL DEFAULT '',
@@ -782,6 +875,13 @@ class MarketingStore:
             ),
         )
         self.conn.commit()
+        # Der oeffentliche Deckname entsteht mit der Zuordnung. Das ist kein
+        # Code auf Vorrat: Der Tracking-Code, dessen Deckname er ist, steht in
+        # derselben Zeile und ist damit bereits endgueltig. Wer ihn erst beim
+        # ersten Beitrag vergaebe, haette dieselbe Adresse nur spaeter - und
+        # eine Gruppe, die durch eine vergessene Stelle rutscht, bekaeme
+        # wieder die lange.
+        self.vergib_kurzcodes(link.campaign_id, link.group_id)
         return True
 
     def assigned_group_ids(self, campaign_id: str) -> set[str]:
@@ -848,6 +948,12 @@ class MarketingStore:
                     for link in links
                 ],
             )
+        # Die Decknamen zu den eben entstandenen Zuordnungen. Ausserhalb der
+        # Transaktion und ueber die Kampagnen, die gerade angefasst wurden:
+        # Was schon einen hat, wird uebergangen, also kostet der Aufruf nur
+        # fuer die neuen Zeilen etwas.
+        for campaign_id in campaign_ids:
+            self.kurzcodes_nachtragen(campaign_id)
         return int(cursor.rowcount or 0)
 
     def campaigns_mit_auto_assign(self) -> list[Campaign]:
@@ -875,14 +981,30 @@ class MarketingStore:
         """
         geaendert = 0
         for link in self.links_for_campaign(campaign_id):
-            neu = basis_url_bauer(link.tracking_code)
-            if neu != link.tracking_url:
+            # Alle vier Adressen desselben Paares ziehen mit - die beiden
+            # inneren und die beiden oeffentlichen. Nur die Haelfte
+            # umzustellen hiesse, dass ein Beitrag je nach Alter auf zwei
+            # verschiedene Dienste zeigt, und gemerkt haette man es an einer
+            # Zahl, die nicht mehr steigt. Die **Codes** bleiben, wie sie
+            # sind; es wechselt nur ihr Vorspann.
+            for spalte, code, alt_url in (
+                ("tracking_url", link.tracking_code, link.tracking_url),
+                ("tracking_url_browser", link.tracking_code_browser, link.tracking_url_browser),
+                ("public_url", link.public_code, link.public_url),
+                ("public_url_browser", link.public_code_browser, link.public_url_browser),
+            ):
+                if not code:
+                    continue
+                neu = basis_url_bauer(code)
+                if neu == alt_url:
+                    continue
                 self.conn.execute(
-                    "UPDATE campaign_groups SET tracking_url = ? "
+                    f"UPDATE campaign_groups SET {spalte} = ? "  # noqa: S608
                     "WHERE campaign_id = ? AND group_id = ?",
                     (neu, link.campaign_id, link.group_id),
                 )
-                geaendert += 1
+                if spalte == "tracking_url":
+                    geaendert += 1
         self.conn.commit()
         return geaendert
 
@@ -1097,6 +1219,19 @@ class MarketingStore:
         ).fetchall()
         return [self._row_to_link(row) for row in rows]
 
+    #: Welche Fassung ein ``reset`` anfasst - **eine** Bedingung fuer Zaehlung
+    #: und Ausfuehrung.
+    #:
+    #: Getrennt formuliert liefe es auf dasselbe hinaus wie zwei Zaehlungen:
+    #: Die Vorschau naennte eine Zahl, und zurueckgesetzt wuerde eine andere
+    #: Menge. Angefasst wird, was einen **Ausgang** hinter sich hat -
+    #: veroeffentlicht, fehlgeschlagen oder mit gezaehltem Versuch. Ein
+    #: blosser Entwurf und ein von Hand geschriebener, noch nicht abgesetzter
+    #: Text stehen nicht darin: Bei ihnen gibt es nichts zurueckzunehmen.
+    _AUSGANG_JE_FASSUNG = (
+        "(status IN ('veroeffentlicht', 'fehlgeschlagen') OR versuche > 0)"
+    )
+
     def zaehle_zuruecksetzbar(self, campaign_id: str) -> dict[str, int]:
         """Was ein ``reset`` dieser Kampagne loeschen bzw. zuruecksetzen wuerde.
 
@@ -1124,6 +1259,16 @@ class MarketingStore:
             "ereignisse": eins(
                 "SELECT COUNT(*) FROM tracking_events WHERE campaign_id = ?", campaign_id
             ),
+            "fassungen": eins(
+                "SELECT COUNT(*) FROM campaign_group_texte WHERE campaign_id = ? "  # noqa: S608
+                f"AND {self._AUSGANG_JE_FASSUNG}",
+                campaign_id,
+            ),
+            "erschoepft": eins(
+                "SELECT COUNT(*) FROM campaign_groups WHERE campaign_id = ? "
+                "AND kommentar_erschoepft = 1",
+                campaign_id,
+            ),
         }
 
     def setze_kampagne_zurueck(
@@ -1140,6 +1285,26 @@ class MarketingStore:
         Ebenso unberuehrt bleiben ``groups`` und ``group_marketing``: Die
         Gruppen und der Kooperationsstand ("wir sind dort Mitglied") sind
         Handarbeit und haben mit einem Testlauf nichts zu tun.
+
+        Zurueckgenommen wird der Stand auf **beiden** Ebenen: am Paar
+        (``campaign_groups``) und an jeder einzelnen Fassung
+        (``campaign_group_texte``). Nur die zweite ist die, die man auf der
+        Arbeitsseite sieht - die Haken ueber den fuenf Beitraegen und den zehn
+        Kommentaren stehen dort, und der Fortschritt der Kommentarautomatik
+        wird aus genau dieser Spalte **gelesen**. Bliebe sie stehen, meldete
+        eine zurueckgesetzte Kampagne beim naechsten Lauf weiterhin "erledigt",
+        und ein Testlauf waere nicht zu wiederholen.
+
+        **Die Texte selbst bleiben stehen** - auf beiden Ebenen. Ein Reset
+        nimmt den Ausgang zurueck, nicht die Arbeit: Was von Hand geschrieben
+        wurde, geht auf ``gespeichert`` zurueck und nicht auf ``entwurf``,
+        sonst waere die Unterscheidung "durchgelesen und behalten" mit dem
+        Stand verloren.
+
+        Ebenfalls zurueckgenommen wird ``kommentar_erschoepft``. Es ist das
+        Urteil "diese Gruppe gibt nichts mehr her" **nach** einem Lauf; nach
+        einem Reset gibt es diesen Lauf nicht mehr, und die Gruppe waere sonst
+        fuer immer uebersprungen, ohne dass etwas gegen sie spraeche.
 
         ``auch_ereignisse`` loescht zusaetzlich die gemessene Resonanz dieser
         Kampagne - Klicks, Registrierungen, Downloads. Das ist die einzige
@@ -1162,9 +1327,28 @@ class MarketingStore:
                    posted_at       = NULL,
                    last_attempt_at = NULL,
                    post_attempts   = 0,
-                   post_error      = ''
+                   post_error      = '',
+                   kommentar_erschoepft       = 0,
+                   kommentar_erschoepft_grund = '',
+                   kommentar_erschoepft_am    = NULL
              WHERE campaign_id = ?
             """,
+            (campaign_id,),
+        )
+
+        # Jede einzelne Fassung: der Haken faellt, der Text bleibt. ``quelle``
+        # entscheidet ueber das Ziel - dieselbe Regel wie in
+        # ``setze_vorschlag_text``, nur andersherum gelesen: Was ein Mensch
+        # angefasst hat, ist "gespeichert"; was aus der Vorlage kam, ist wieder
+        # ein Entwurf.
+        self.conn.execute(
+            "UPDATE campaign_group_texte "  # noqa: S608
+            "   SET status = CASE WHEN quelle = 'hand' THEN 'gespeichert' "
+            "                     ELSE 'entwurf' END, "
+            "       versuche = 0, "
+            "       veroeffentlicht_am = NULL, "
+            "       fehler = '' "
+            f" WHERE campaign_id = ? AND {self._AUSGANG_JE_FASSUNG}",
             (campaign_id,),
         )
         self.conn.execute("DELETE FROM post_versuche WHERE campaign_id = ?", (campaign_id,))
@@ -1200,8 +1384,10 @@ class MarketingStore:
             INSERT INTO group_marketing (
                 group_id, marketing_status, contact_status, permission_status,
                 campaign_status, join_requested_at, last_contacted_at,
-                last_posted_at, bearbeiten, ausschlussgrund, notes, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                last_posted_at, bearbeiten, ausschlussgrund, notes,
+                regeln_gelesen_am, regel_keine_links, regel_keine_werbung,
+                regel_freigabe_noetig, regel_neue_ohne_links, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(group_id) DO UPDATE SET
                 marketing_status  = excluded.marketing_status,
                 contact_status    = excluded.contact_status,
@@ -1213,6 +1399,26 @@ class MarketingStore:
                 bearbeiten        = excluded.bearbeiten,
                 ausschlussgrund   = excluded.ausschlussgrund,
                 notes             = excluded.notes,
+                -- Ein gelesener Regelbefund wird von einem Eintrag ohne
+                -- Befund nicht geloescht: Wer den Arbeitsstand speichert,
+                -- hat die Gruppenseite nicht abgerufen. Dieselbe Regel wie
+                -- bei ``upsert_groups`` und COALESCE - eine fehlende Angabe
+                -- ist kein Beleg dafuer, dass die vorhandene falsch war.
+                regeln_gelesen_am     = COALESCE(
+                    excluded.regeln_gelesen_am, group_marketing.regeln_gelesen_am
+                ),
+                regel_keine_links     = CASE WHEN excluded.regeln_gelesen_am IS NULL
+                    THEN group_marketing.regel_keine_links
+                    ELSE excluded.regel_keine_links END,
+                regel_keine_werbung   = CASE WHEN excluded.regeln_gelesen_am IS NULL
+                    THEN group_marketing.regel_keine_werbung
+                    ELSE excluded.regel_keine_werbung END,
+                regel_freigabe_noetig = CASE WHEN excluded.regeln_gelesen_am IS NULL
+                    THEN group_marketing.regel_freigabe_noetig
+                    ELSE excluded.regel_freigabe_noetig END,
+                regel_neue_ohne_links = CASE WHEN excluded.regeln_gelesen_am IS NULL
+                    THEN group_marketing.regel_neue_ohne_links
+                    ELSE excluded.regel_neue_ohne_links END,
                 updated_at        = excluded.updated_at
             """,
             (
@@ -1227,6 +1433,11 @@ class MarketingStore:
                 int(eintrag.bearbeiten),
                 eintrag.ausschlussgrund,
                 eintrag.notes,
+                _iso(eintrag.regeln_gelesen_am),
+                int(eintrag.regel_keine_links),
+                int(eintrag.regel_keine_werbung),
+                int(eintrag.regel_freigabe_noetig),
+                int(eintrag.regel_neue_ohne_links),
                 _iso(eintrag.updated_at),
             ),
         )
@@ -1643,7 +1854,103 @@ class MarketingStore:
             )
         return self.vorschlag(campaign_id, group_id, texttyp, nummer)
 
-    def versuche_heute(self, tag: str) -> int:
+    def verwendete_vorlagen(self, group_id: str, texttyp: str) -> set[str]:
+        """Welche Vorlagenschluessel in dieser Gruppe schon hinausgingen.
+
+        Ueber **alle** Kampagnen, denn die Leser einer Gruppe unterscheiden
+        sie nicht: Zweimal derselbe Satz ist zweimal derselbe Satz, gleich
+        unter welcher Kampagne er gebucht wurde.
+
+        Die Duplikatkontrolle auf **Textebene** (Punkt 17 der Anforderung).
+        Die auf Beitragsebene steht daneben (``bisherige_post_urls``), und
+        die auf Personenebene gibt es nicht: Sie braeuchte Autorennamen, und
+        die speichert dieses Projekt nicht. Was an ihrer Stelle wirkt, ist
+        ``limits.comments.je_gruppe_taeglich``.
+        """
+        rows = self.conn.execute(
+            "SELECT DISTINCT vorlage_key FROM campaign_group_texte "
+            "WHERE group_id = ? AND texttyp = ? AND status = ? AND vorlage_key <> ''",
+            (group_id, str(texttyp), VorschlagStatus.VEROEFFENTLICHT.value),
+        ).fetchall()
+        return {row["vorlage_key"] for row in rows}
+
+    def merke_verwendeten_text(
+        self,
+        campaign_id: str,
+        group_id: str,
+        texttyp: str,
+        nummer: int,
+        text: str,
+        vorlage_key: str,
+    ) -> None:
+        """Haelt fest, welcher Text wirklich hinausging - **vor** der Buchung.
+
+        Der Lauf waehlt seinen Kommentar seit dem 13.09.2026 erst, wenn er
+        den Beitrag kennt (``vorlagen.anlasstext``): Was in der Fassung
+        vorbereitet stand, ist dann nicht mehr das, was in der Gruppe steht.
+        Ohne diese Zeile stuenden zwei verschiedene Texte fuer denselben
+        Vorgang im Bestand, und die Uebersicht zeigte den, der nie abgesetzt
+        wurde.
+
+        Geschrieben wird nur, wenn die Fassung existiert - angelegt wird hier
+        nichts: Eine Zeile ohne Zuordnung waere ein Beitrag ohne Kampagne.
+        """
+        self.conn.execute(
+            "UPDATE campaign_group_texte SET text = ?, vorlage_key = ? "
+            "WHERE campaign_id = ? AND group_id = ? AND texttyp = ? AND nummer = ?",
+            (text, vorlage_key, campaign_id, group_id, str(texttyp), int(nummer)),
+        )
+        self.conn.commit()
+
+    def versuche_heute_je_gruppe(self, tag: str, texttyp: str = "") -> dict[str, int]:
+        """Je Gruppe: wie viele Versuche an diesem Tag - ueber alle Kampagnen.
+
+        Die Gegenseite kennt kein Kampagnenmodell, und die Leser einer Gruppe
+        erst recht nicht: Zwei Kampagnen mit je einem Kommentar sind fuer sie
+        zwei Kommentare von demselben Konto am selben Tag. Deshalb wird ueber
+        alle Kampagnen gezaehlt, genau wie in ``versuche_heute``.
+
+        Gezaehlt werden **Versuche, nicht Erfolge**: Ein abgelehnter Kommentar
+        war trotzdem einer, den die Gruppe gesehen hat - ihre Leser
+        unterscheiden nicht, ob ein Moderator ihn hinterher wegnimmt.
+
+        **Ein technischer Fehlschlag zaehlt aber nicht** (14.09.2026). Er ist
+        nie in der Gruppe angekommen; ihn mitzuzaehlen hiesse, einem
+        geschlossenen Browserfenster das Tageskontingent einer Gruppe zu
+        opfern. Bei ``je_gruppe_taeglich: 1`` ist das keine Feinheit, sondern
+        der ganze Tag: Ein einziger Aussetzer, und die Gruppe ist bis
+        Mitternacht draussen. Genau dieses Bild stand am 14.09.2026 im
+        Bericht - 24 Gruppen, ein Kommentar.
+
+        Dieselbe Unterscheidung wie ueberall im Haus: "Technik ist kein
+        Urteil" (``qualifikation.klassifiziere``). Alte Zeilen ohne ``grund``
+        zaehlen weiter mit - sie nachtraeglich einzustufen hiesse, ein Urteil
+        ueber Antworten zu faellen, die niemand mehr nachlesen kann.
+
+        Zurueck kommt ein Wortverzeichnis statt einer Einzelabfrage je
+        Gruppe: Der Lauf fragt den Stand fuer dreihundert Gruppen auf einmal,
+        und dreihundert Abfragen waeren derselbe Fehler wie eine Zaehlung je
+        Vergleich bei der Codevergabe.
+        """
+        # ``grund`` gibt es erst seit Migrationsschritt 22; leer heisst "nicht
+        # eingestuft" und zaehlt mit.
+        ohne_technik = "AND grund NOT IN ('technical_error')"
+        if texttyp:
+            rows = self.conn.execute(
+                "SELECT group_id, COUNT(*) AS n FROM post_versuche "  # noqa: S608
+                f"WHERE substr(begonnen_am, 1, 10) = ? AND texttyp = ? {ohne_technik} "
+                "GROUP BY group_id",
+                (tag, str(texttyp)),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT group_id, COUNT(*) AS n FROM post_versuche "  # noqa: S608
+                f"WHERE substr(begonnen_am, 1, 10) = ? {ohne_technik} GROUP BY group_id",
+                (tag,),
+            ).fetchall()
+        return {row["group_id"]: int(row["n"]) for row in rows}
+
+    def versuche_heute(self, tag: str, texttyp: str = "") -> int:
         """Wie viele Beitraege an diesem Tag hinausgingen - ueber **alle** Kampagnen.
 
         Ueber alle, weil die Gegenseite kein Kampagnenmodell hat: Gesperrt wird
@@ -1660,22 +1967,81 @@ class MarketingStore:
         ISO-Zeitstempel, dessen erste zehn Zeichen genau das sind. Der Index
         ``idx_versuche_zeit`` traegt die Abfrage.
         """
-        row = self.conn.execute(
-            "SELECT COUNT(*) FROM post_versuche WHERE substr(begonnen_am, 1, 10) = ?",
-            (tag,),
-        ).fetchone()
+        if texttyp:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM post_versuche "
+                "WHERE substr(begonnen_am, 1, 10) = ? AND texttyp = ?",
+                (tag, str(texttyp)),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM post_versuche WHERE substr(begonnen_am, 1, 10) = ?",
+                (tag,),
+            ).fetchone()
         return int(row[0]) if row else 0
 
-    def letzter_versuch(self) -> str:
-        """Zeitstempel des juengsten Beitragsversuchs, oder ''.
+    def letzter_versuch(self, texttyp: str = "") -> str:
+        """Zeitstempel des juengsten Versuchs, oder ''.
 
-        Grundlage des Mindestabstands. Auch hier ueber alle Kampagnen: Der
-        Abstand gilt dem Konto, nicht der Kampagne.
+        Grundlage des Mindestabstands. Ueber alle Kampagnen: Der Abstand gilt
+        dem Konto, nicht der Kampagne.
+
+        ``texttyp`` schraenkt auf eine Aktion ein (seit 12.09.2026). Ein
+        gemeinsamer Abstand fuer Beitrag und Kommentar hiesse, dass ein
+        gerade abgesetzter Beitrag einen Kommentar zwei Stunden aufhaelt -
+        die beiden haben verschiedene Taktungen, weil sie verschieden
+        auffaellig sind.
         """
-        row = self.conn.execute(
-            "SELECT begonnen_am FROM post_versuche ORDER BY begonnen_am DESC LIMIT 1"
-        ).fetchone()
+        if texttyp:
+            row = self.conn.execute(
+                "SELECT begonnen_am FROM post_versuche WHERE texttyp = ? "
+                "ORDER BY begonnen_am DESC LIMIT 1",
+                (str(texttyp),),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT begonnen_am FROM post_versuche ORDER BY begonnen_am DESC LIMIT 1"
+            ).fetchone()
         return str(row[0]) if row and row[0] else ""
+
+    # --- Die Bremse der Gegenseite, je Aktion ----------------------------
+    #
+    # Gespeichert in ``marketing_meta`` und nicht in einer eigenen Tabelle:
+    # Es sind zwei Werte je Aktion (bis wann, wie oft schon), sie ueberleben
+    # einen Neustart, und ein Schema dafuer waere mehr Aufwand als Auskunft.
+    # Dieselbe Stelle haelt auch den Zufallsschluessel des ``visitor_hash``.
+
+    def merke_sperre(self, aktion: str, bis: datetime, stufe: int) -> None:
+        """Haelt fest, dass diese Aktion bis ``bis`` ruht - und die wievielte es ist.
+
+        Die Stufe ist der Grund, warum hier ueberhaupt etwas gespeichert wird:
+        Ohne sie faenge der Backoff nach jedem Neustart wieder bei einer
+        Stunde an, und genau das Muster, das zur Bremsung gefuehrt hat,
+        begaenne von vorn.
+        """
+        self.set_meta(f"sperre:{aktion}:bis", _iso(bis))
+        self.set_meta(f"sperre:{aktion}:stufe", str(int(stufe)))
+
+    def sperre(self, aktion: str) -> tuple[datetime | None, int]:
+        """``(bis wann, Stufe)`` - oder ``(None, 0)``, wenn nichts vorliegt.
+
+        Eine abgelaufene Sperre wird **nicht** geloescht: Die Stufe ist die
+        Erinnerung daran, dass es schon einmal zu schnell ging. Sie sinkt
+        erst mit einem Erfolg (``loesche_sperre``).
+        """
+        roh = self.meta(f"sperre:{aktion}:bis")
+        stufe = int(self.meta(f"sperre:{aktion}:stufe", "0") or 0)
+        if not roh:
+            return None, stufe
+        try:
+            return datetime.fromisoformat(roh), stufe
+        except ValueError:
+            return None, stufe
+
+    def loesche_sperre(self, aktion: str) -> None:
+        """Nach einem Erfolg: Die Aktion laeuft, die Stufe faellt auf null."""
+        self.set_meta(f"sperre:{aktion}:bis", "")
+        self.set_meta(f"sperre:{aktion}:stufe", "0")
 
     def staende_je_gruppe(
         self, campaign_id: str, texttyp: Texttyp = Texttyp.POST
@@ -1902,20 +2268,51 @@ class MarketingStore:
     def beende_versuch(
         self, versuch_id: int, *, erfolg: bool, fehler: str = "", post_url: str = ""
     ) -> None:
-        """Schliesst den Versuch ab - Ausgang, Grund, gegebenenfalls die URL."""
+        """Schliesst den Versuch ab - Ausgang, Grund, gegebenenfalls die URL.
+
+        Die **Einstufung** der Antwort entsteht hier und nicht beim Aufrufer
+        (``qualifikation.grund``): Jeder Weg, der einen Versuch beendet -
+        Arbeitsseite, Automatik, Fernbetrieb -, kommt durch diese Funktion,
+        und eine Einstufung, die an drei Stellen gerechnet wird, ist drei
+        Einstufungen. Gerechnet, nicht uebergeben: So kann kein Aufrufer sie
+        vergessen und keiner sie anders vornehmen.
+        """
+        from fbgroups.marketing.qualifikation import grund as _grund
+
         self.conn.execute(
             "UPDATE post_versuche SET erfolg = ?, fehler = ?, post_url = ?, "
-            "job_status = ?, beendet_am = ? WHERE versuch_id = ?",
+            "grund = ?, job_status = ?, beendet_am = ? WHERE versuch_id = ?",
             (
                 int(erfolg),
                 fehler,
                 post_url,
+                _grund(fehler, erfolg=erfolg).value,
                 (JobStatus.PUBLISHED if erfolg else JobStatus.FAILED).value,
                 _iso(datetime.now(UTC)),
                 versuch_id,
             ),
         )
         self.conn.commit()
+
+    def gruende_je_gruppe(self, campaign_id: str = "") -> dict[str, dict[str, int]]:
+        """Je Gruppe: wie oft welche Antwort von Facebook kam.
+
+        Die Grundlage fuer die Spalte "Facebook Response" in der Uebersicht
+        (Punkt 18 der Anforderung). Gezaehlt wird **jeder** beendete Versuch,
+        der Erfolg eingeschlossen: "8 angenommen, 2 Link abgelehnt" ist eine
+        Auskunft, "2 Link abgelehnt" allein waere eine Andeutung.
+        """
+        wenn = "AND campaign_id = ?" if campaign_id else ""
+        rows = self.conn.execute(
+            "SELECT group_id, grund, COUNT(*) AS n FROM post_versuche "  # noqa: S608
+            f"WHERE beendet_am IS NOT NULL AND grund <> '' {wenn} "
+            "GROUP BY group_id, grund",
+            (campaign_id,) if campaign_id else (),
+        ).fetchall()
+        je_gruppe: dict[str, dict[str, int]] = {}
+        for row in rows:
+            je_gruppe.setdefault(row["group_id"], {})[row["grund"]] = int(row["n"])
+        return je_gruppe
 
     def versuche_for(self, campaign_id: str, group_id: str) -> list[PostVersuch]:
         rows = self.conn.execute(
@@ -2016,6 +2413,98 @@ class MarketingStore:
         )
         self.conn.commit()
 
+    def kampagne_bewertet(self, lauf_id: int, campaign_id: str) -> bool:
+        """Wurden die Gruppen dieser Kampagne in diesem Lauf schon neu bewertet?
+
+        Die Neubewertung steht zwischen Beitritt und Arbeit: Erst wenn sie
+        gelaufen ist, steht die Rangfolge fest, nach der gearbeitet wird.
+        Einmal je Kampagne und Lauf - ein zweiter Durchgang faende dieselben
+        Zahlen und kostete nur Zeit.
+        """
+        zeile = self.conn.execute(
+            "SELECT bewertet_am FROM automatik_lauf_kampagnen "
+            "WHERE lauf_id = ? AND campaign_id = ?",
+            (lauf_id, campaign_id),
+        ).fetchone()
+        return bool(zeile and zeile["bewertet_am"])
+
+    def merke_bewertung(self, lauf_id: int, campaign_id: str) -> None:
+        """Traegt ein, dass die Neubewertung dieser Kampagne gelaufen ist.
+
+        Auch nach einer **gescheiterten** Neubewertung gesetzt: Sonst
+        versuchte der Lauf sie bei jedem Schritt erneut, und ein Fehler in
+        der Bewertung hielte die Kampagne fuer immer vor der Arbeit fest -
+        genau der globale Abbruch, den die Fehlerisolierung verhindern soll.
+        """
+        self.conn.execute(
+            "UPDATE automatik_lauf_kampagnen SET bewertet_am = ? "
+            "WHERE lauf_id = ? AND campaign_id = ?",
+            (_iso(datetime.now(UTC)), lauf_id, campaign_id),
+        )
+        self.conn.commit()
+
+    def ueberspringe_gruppe(
+        self, lauf_id: int, campaign_id: str, group_id: str, grund: str
+    ) -> None:
+        """Legt eine Gruppe fuer **diesen** Lauf beiseite - mit Grund.
+
+        Der Kern der Fehlerisolierung: Was hier steht, wird im laufenden
+        Vorgang nicht mehr angefasst, gilt aber ausdruecklich **nicht** als
+        ungeeignet. Die Zeile haengt an der ``lauf_id`` und ist mit dem
+        naechsten Lauf verschwunden.
+
+        Ein bestehender Eintrag wird nicht ueberschrieben: Der **erste**
+        Grund ist der aussagekraeftige - was danach kommt, sind meist Folgen.
+        """
+        self.conn.execute(
+            "INSERT INTO automatik_lauf_uebersprungen "
+            "(lauf_id, campaign_id, group_id, grund, zeitpunkt) VALUES (?,?,?,?,?) "
+            "ON CONFLICT (lauf_id, campaign_id, group_id) DO NOTHING",
+            (lauf_id, campaign_id, group_id, grund[:200], _iso(datetime.now(UTC))),
+        )
+        self.conn.commit()
+
+    def uebersprungene_gruppen(self, lauf_id: int) -> dict[tuple[str, str], str]:
+        """``(campaign_id, group_id) -> Grund`` fuer diesen Lauf."""
+        rows = self.conn.execute(
+            "SELECT campaign_id, group_id, grund FROM automatik_lauf_uebersprungen "
+            "WHERE lauf_id = ?",
+            (lauf_id,),
+        ).fetchall()
+        return {(row["campaign_id"], row["group_id"]): row["grund"] for row in rows}
+
+    def beitrittskandidaten(self, campaign_id: str) -> list[str]:
+        """Gruppen **dieser Kampagne**, an die noch keine Anfrage ging.
+
+        Der Unterschied zu ``gruppen_ohne_anfrage`` ist der ganze Punkt der
+        neuen Reihenfolge: Dort wird der beste Bestand ueberhaupt gewaehlt,
+        hier die Gruppen der Kampagne, die gerade an der Reihe ist. Sonst
+        gingen die fuenfzig Anfragen des Tages an Gruppen, die in keiner
+        laufenden Kampagne stehen.
+
+        Ausgeschlossen bleiben Gruppen, an denen nicht gearbeitet wird
+        (``bearbeiten = 0``) - eine Anfrage dorthin waere ein Beitritt zu
+        einer Gruppe, die jemand ausdruecklich aussortiert hat. Sortiert nach
+        Score: Wird die Tagesmenge nie ausgeschoepft, sollen es die richtigen
+        gewesen sein.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT cg.group_id
+            FROM campaign_groups cg
+            JOIN groups g ON g.group_id = cg.group_id
+            LEFT JOIN group_marketing gm ON gm.group_id = cg.group_id
+            WHERE cg.campaign_id = ?
+              AND g.url_canonical <> ''
+              AND COALESCE(gm.bearbeiten, 1) = 1
+              AND gm.join_requested_at IS NULL
+              AND COALESCE(gm.marketing_status, 'not_contacted') = 'not_contacted'
+            ORDER BY COALESCE(g.score, -1) DESC, cg.group_id
+            """,
+            (campaign_id,),
+        ).fetchall()
+        return [row["group_id"] for row in rows]
+
     def kommentarstand(self, campaign_id: str) -> dict[str, int]:
         """Je Gruppe: wie viele Kommentarfassungen sind veroeffentlicht?
 
@@ -2034,14 +2523,31 @@ class MarketingStore:
     def gescheiterte_kommentarfassungen(
         self, campaign_id: str, max_versuche: int
     ) -> dict[str, set[int]]:
-        """Je Gruppe: welche Fassungen sind zu oft erfolglos gewesen?
+        """Je Gruppe: welche Fassungen sind zu oft **an der Gruppe** gescheitert?
 
         Sie werden uebersprungen, statt den Lauf an derselben Stelle
         festzuhalten. ``versuche`` zaehlt in ``campaign_group_texte`` bereits
         mit - es gab keinen Grund, dafuer etwas Neues zu bauen.
+
+        **Technische Fehlschlaege zaehlen nicht** (seit 12.09.2026). Ein
+        geschlossenes Browserfenster, ein Zeitablauf, eine Seite, die nicht
+        geladen hat: Das sind Aussagen ueber unseren Rechner, nicht ueber die
+        Gruppe. Mitgezaehlt fuehrten sie am 11.09.2026 dazu, dass alle zehn
+        Fassungen als aufgegeben galten und die Gruppe als erschoepft - und
+        am 12.09.2026 ein zweites Mal, diesmal in 78 Gruppen: vier Kampagnen
+        standen auf "fertig" mit null Kommentaren.
+
+        Dieselbe Trennung, die ``qualifikation.Beobachtung`` schon macht (sie
+        zaehlt nur ``MODERATION``) - sie fehlte nur hier. Im Zweifel gilt
+        ``TECHNISCH``: Eine geratene Ablehnung verurteilte eine Gruppe, gegen
+        die nichts vorliegt. Dass der Lauf deshalb nicht ewig an derselben
+        Fassung haengt, sichert der Schleifenwaechter des Treibers, und dass
+        er bei totem Browser aufhoert, der Technikwaechter.
         """
+        from fbgroups.marketing.qualifikation import Ausgangsart, klassifiziere
+
         rows = self.conn.execute(
-            "SELECT group_id, nummer FROM campaign_group_texte "
+            "SELECT group_id, nummer, fehler FROM campaign_group_texte "
             "WHERE campaign_id = ? AND texttyp = ? AND status <> ? AND versuche >= ?",
             (
                 campaign_id,
@@ -2049,6 +2555,254 @@ class MarketingStore:
                 VorschlagStatus.VEROEFFENTLICHT.value,
                 int(max_versuche),
             ),
+        ).fetchall()
+        heraus: dict[str, set[int]] = {}
+        # Technik und Bremse zaehlen beide nicht: Das eine sagt nichts ueber
+        # die Gruppe, das andere etwas ueber **unsere** Geschwindigkeit.
+        ohne_urteil = (
+            Ausgangsart.TECHNISCH,
+            Ausgangsart.RATE_LIMIT,
+            # "Die Gruppe nimmt gerade nichts mehr an" ist kein Urteil ueber
+            # den Text - die Warteschlange der Freigabe ist voll, mehr nicht.
+            Ausgangsart.GRUPPENLIMIT,
+        )
+        for row in rows:
+            if klassifiziere(row["fehler"] or "") in ohne_urteil:
+                continue
+            heraus.setdefault(row["group_id"], set()).add(int(row["nummer"]))
+        return heraus
+
+    # --- Qualifikation: die Frage vor dem Text ----------------------------
+    def merke_regeln(self, group_id: str, regeln) -> None:  # noqa: ANN001 - Regelbefund
+        """Haelt fest, was auf der Gruppenseite an Regeln stand.
+
+        Nur dieses eine Ergebnis wird gespeichert - das Urteil daraus rechnet
+        ``qualifikation.beurteile`` bei jedem Lesen neu. Ein ungelesener
+        Befund (``gelesen=False``) schreibt **nichts**: Er wuerde einen
+        frueher gelesenen ueberschreiben, und "nicht nachgesehen" ist kein
+        Beleg dafuer, dass die Regel weg ist. Dieselbe Ueberlegung wie bei
+        ``upsert_groups`` und COALESCE.
+        """
+        if not regeln.gelesen:
+            return
+        jetzt = _iso(datetime.now(UTC))
+        self.conn.execute(
+            "INSERT INTO group_marketing (group_id, regeln_gelesen_am, "
+            "regel_keine_links, regel_keine_werbung, regel_freigabe_noetig, "
+            "regel_neue_ohne_links, updated_at) VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(group_id) DO UPDATE SET "
+            "    regeln_gelesen_am     = excluded.regeln_gelesen_am, "
+            "    regel_keine_links     = excluded.regel_keine_links, "
+            "    regel_keine_werbung   = excluded.regel_keine_werbung, "
+            "    regel_freigabe_noetig = excluded.regel_freigabe_noetig, "
+            "    regel_neue_ohne_links = excluded.regel_neue_ohne_links, "
+            "    updated_at            = excluded.updated_at",
+            (
+                group_id,
+                jetzt,
+                int(regeln.keine_links),
+                int(regeln.keine_werbung),
+                int(regeln.freigabe_noetig),
+                int(regeln.neue_ohne_links),
+                jetzt,
+            ),
+        )
+        self.conn.commit()
+
+    def beobachtungen(self, campaign_id: str = "") -> dict:
+        """Je Gruppe: was bei den bisherigen Versuchen herauskam.
+
+        **Gelesen, nicht gefuehrt** - wie der Fortschritt in ``lauf.py``. Die
+        Zahlen stehen bereits in ``post_versuche``; ein Zaehler daneben waere
+        eine zweite Wahrheit, die beim ersten Abbruch von der ersten abweicht.
+
+        Ob ein Kommentar einen Link trug, sagt der Text der **Fassung**, an
+        der der Versuch hing - deshalb der Verbund ueber
+        ``(campaign_id, group_id, texttyp, nummer)``. Das ist der heutige
+        Text; wurde er seither neu erzeugt, beschreibt er den damaligen
+        Versuch nur noch ungefaehr. Eine eigene Spalte am Versuch waere
+        genauer und ginge nur fuer kuenftige Versuche - der Verbund gilt auch
+        rueckwirkend, und das ist hier mehr wert.
+
+        Technische Fehlschlaege werden **nicht** gezaehlt. Ein geschlossener
+        Browser sagt nichts ueber die Gruppe; mitgezaehlt machte er aus einem
+        zugeklappten Fenster ein Urteil - genau der Fehler vom 11.09.2026.
+
+        ``campaign_id`` leer heisst: ueber alle Kampagnen. Das ist der
+        Normalfall - gesperrt wird bei Facebook das Konto, und der Gruppe ist
+        gleich, unter welcher Kampagne ein Text stand.
+        """
+        from fbgroups.marketing.qualifikation import (
+            Ausgangsart,
+            Beobachtung,
+            ist_linkablehnung,
+            klassifiziere,
+        )
+
+        bedingung = "v.beendet_am IS NOT NULL"
+        werte: list[object] = []
+        if campaign_id:
+            bedingung += " AND v.campaign_id = ?"
+            werte.append(campaign_id)
+
+        rows = self.conn.execute(
+            f"""
+            SELECT v.group_id   AS group_id,
+                   v.texttyp    AS texttyp,
+                   v.erfolg     AS erfolg,
+                   v.fehler     AS fehler,
+                   COALESCE(t.text, '') AS text
+              FROM post_versuche v
+              LEFT JOIN campaign_group_texte t
+                     ON t.campaign_id = v.campaign_id
+                    AND t.group_id    = v.group_id
+                    AND t.texttyp     = v.texttyp
+                    AND t.nummer      = v.nummer
+             WHERE {bedingung}
+            """,  # noqa: S608 - die Bedingung ist hier gebaut, die Werte sind gebunden
+            werte,
+        ).fetchall()
+
+        # Gezaehlt wird in einfachen Zaehlern und erst am Ende zu
+        # ``Beobachtung`` gemacht: Der Datentyp ist eingefroren, und
+        # zehntausend Kopien beim Hochzaehlen waeren Aufwand ohne Gegenwert.
+        zaehler: dict[str, dict[str, int]] = {}
+        for row in rows:
+            gid = str(row["group_id"])
+            k = zaehler.setdefault(
+                gid,
+                {
+                    "beitrag_erfolg": 0, "beitrag_moderation": 0,
+                    "mit_link_erfolg": 0, "mit_link_moderation": 0,
+                    "ohne_link_erfolg": 0, "ohne_link_moderation": 0,
+                    "link_ausdruecklich": 0,
+                },
+            )
+            erfolg = bool(row["erfolg"])
+            ist_post = str(row["texttyp"]) == Texttyp.POST.value
+            if ist_post:
+                if erfolg:
+                    k["beitrag_erfolg"] += 1
+                elif klassifiziere(str(row["fehler"] or "")) is Ausgangsart.MODERATION:
+                    k["beitrag_moderation"] += 1
+                continue
+
+            mit_link = "{link}" in str(row["text"] or "")
+            vorsilbe = "mit_link" if mit_link else "ohne_link"
+            if erfolg:
+                k[f"{vorsilbe}_erfolg"] += 1
+                continue
+            fehler = str(row["fehler"] or "")
+            if klassifiziere(fehler) is Ausgangsart.MODERATION:
+                k[f"{vorsilbe}_moderation"] += 1
+                if ist_linkablehnung(fehler):
+                    k["link_ausdruecklich"] += 1
+
+        return {gid: Beobachtung(**werte_) for gid, werte_ in zaehler.items()}
+
+    def gescheiterte_fassungen_zuruecksetzen(
+        self, campaign_id: str, *, texttyp: Texttyp = Texttyp.KOMMENTAR
+    ) -> tuple[int, int]:
+        """Holt die **gescheiterten** Fassungen zurueck. Returns: (Fassungen, Gruppen).
+
+        Das Gegenstueck zu ``fehlgeschlagene_zuruecksetzen``, nur eine Ebene
+        tiefer: Jenes stellt den **Beitrag** eines Paares wieder her, dieses
+        die einzelnen Fassungen in ``campaign_group_texte``. Gebraucht wird es
+        seit dem 11.09.2026, als ein geschlossener Browser mitten im Lauf
+        jede der zehn Kommentarfassungen dreimal scheitern liess
+        (``BrowserContext.new_page: Target page ... has been closed``). Danach
+        galten alle zehn als aufgegeben, die Gruppe als erschoepft - wegen
+        eines Fensters, das jemand zugemacht hat.
+
+        **Veroeffentlichte Fassungen bleiben unberuehrt.** Sie stehen in der
+        Gruppe; sie zurueckzusetzen hiesse zu behaupten, sie staenden dort
+        nicht. Genau darin liegt der Unterschied zu ``campaign reset``, das
+        die ganze Kampagne auf Anfang stellt - einschliesslich dessen, was
+        bereits hinausgegangen ist.
+
+        **Der Text bleibt ebenfalls stehen**, und ``quelle`` entscheidet ueber
+        den Stand: Was ein Mensch angefasst hat, ist wieder "gespeichert", was
+        aus der Vorlage kam, ein Entwurf. Dieselbe Regel wie im Reset.
+
+        Mitgeloescht wird die **Erschoepfung** - aber nur bei den Gruppen, die
+        wirklich Fassungen zurueckbekommen. "nur 0 von 10 Kommentaren
+        moeglich" war ein Urteil ueber diese Versuche; sind die Versuche
+        zurueckgenommen, ist es das Urteil auch. Eine Erschoepfung aus einem
+        anderen Grund (keine Gruppen-URL, keine Vorlage) bleibt stehen: Sie
+        hat mit den Versuchen nichts zu tun.
+        """
+        betroffen = [
+            str(row["group_id"])
+            for row in self.conn.execute(
+                "SELECT DISTINCT group_id FROM campaign_group_texte "
+                "WHERE campaign_id = ? AND texttyp = ? AND status = ?",
+                (campaign_id, texttyp.value, VorschlagStatus.FEHLGESCHLAGEN.value),
+            ).fetchall()
+        ]
+        if not betroffen:
+            return (0, 0)
+
+        cursor = self.conn.execute(
+            "UPDATE campaign_group_texte "
+            "   SET status = CASE WHEN quelle = 'hand' THEN 'gespeichert' "
+            "                     ELSE 'entwurf' END, "
+            "       versuche = 0, "
+            "       fehler = '' "
+            " WHERE campaign_id = ? AND texttyp = ? AND status = ?",
+            (campaign_id, texttyp.value, VorschlagStatus.FEHLGESCHLAGEN.value),
+        )
+        fassungen = int(cursor.rowcount or 0)
+
+        platzhalter = ",".join("?" * len(betroffen))
+        self.conn.execute(
+            "UPDATE campaign_groups SET kommentar_erschoepft = 0, "  # noqa: S608
+            "kommentar_erschoepft_grund = '', kommentar_erschoepft_am = NULL "
+            f"WHERE campaign_id = ? AND group_id IN ({platzhalter}) "
+            "AND kommentar_erschoepft = 1",
+            (campaign_id, *betroffen),
+        )
+        self.conn.commit()
+        return (fassungen, len(betroffen))
+
+    def fassungen_mit_text(self, campaign_id: str, texttyp: Texttyp) -> dict[str, set[int]]:
+        """Je Gruppe: welche Fassungen dieses Zwecks tragen ueberhaupt einen Text?
+
+        Der Lauf braucht das, seit er auch Beitraege absetzt: Nicht jede
+        zugeordnete Gruppe hat einen Beitragstext, und ein Schritt fuer eine
+        Gruppe ohne Text koennte nur scheitern - der Fehlschlag stuende
+        hinterher als Urteil ueber die Gruppe da, obwohl er eines ueber
+        unsere Vorbereitung waere.
+
+        Gelesen, nicht gefuehrt - wie ``kommentarstand``: Die Wahrheit steht
+        in ``campaign_group_texte``, wo der Text auch entsteht.
+        """
+        rows = self.conn.execute(
+            "SELECT group_id, nummer FROM campaign_group_texte "
+            "WHERE campaign_id = ? AND texttyp = ? AND TRIM(text) <> ''",
+            (campaign_id, texttyp.value),
+        ).fetchall()
+        heraus: dict[str, set[int]] = {}
+        for row in rows:
+            heraus.setdefault(row["group_id"], set()).add(int(row["nummer"]))
+        return heraus
+
+    def fassungen_mit_link(self, campaign_id: str, texttyp: Texttyp) -> dict[str, set[int]]:
+        """Je Gruppe: welche Fassungen dieses Zwecks einen ``{link}`` tragen.
+
+        Der Unterschied zwischen "diese Gruppe nimmt keine Links" und "diese
+        Gruppe nimmt keine Kommentare". Ohne ihn muesste der Lauf in einer
+        linkscheuen Gruppe entweder alle Kommentare sperren oder keinen -
+        dabei ist derselbe Text ohne Link dort willkommen.
+
+        Gesucht wird im **gespeicherten** Text, in dem der Platzhalter noch
+        steht: Der Tracking-Link kommt erst beim Lesen hinein
+        (``beitrag.mit_link``), und genau deshalb ist er hier noch als
+        Platzhalter zu erkennen.
+        """
+        rows = self.conn.execute(
+            "SELECT group_id, nummer FROM campaign_group_texte "
+            "WHERE campaign_id = ? AND texttyp = ? AND text LIKE '%{link}%'",
+            (campaign_id, texttyp.value),
         ).fetchall()
         heraus: dict[str, set[int]] = {}
         for row in rows:
@@ -2212,21 +2966,64 @@ class MarketingStore:
             (code, url, campaign_id, group_id),
         )
         self.conn.commit()
+        # Der Browser-Code entsteht **hier** und damit auch sein Deckname.
+        # Getrennt vergeben hiesse: Der erste Beitrag mit Browser-Ziel traegt
+        # die lange Adresse, jeder spaetere die kurze - dieselbe Gruppe mit
+        # zwei Gesichtern, und niemand koennte sagen, warum.
+        self.vergib_kurzcodes(campaign_id, group_id)
         return code
 
-    def resolve_code(self, tracking_code: str) -> CampaignGroup | None:
-        """Findet Kampagne und Gruppe zu einem Tracking-Code - beiden Zielen.
+    def aufloesen(self, code: str) -> Aufloesung | None:
+        """Loest einen Code auf - den inneren wie den oeffentlichen.
 
-        Gesucht wird in **beiden** Spalten. Ohne das antwortete die
-        Weiterleitung auf jeden Browser-Code mit 404, und der Klick waere
-        verloren - bei einem Code, der bereits in einem Beitrag steht.
+        **Die eine Stelle, an der aus einer Adresse ein Datensatz wird.** Vier
+        Spalten kommen in Frage: die beiden Tracking-Codes (Store und Browser)
+        und ihre beiden Kurzcodes. Jeder von ihnen kann in einem
+        veroeffentlichten Beitrag stehen, und keiner darf ins Leere laufen -
+        auch der aelteste nicht, denn zurueckholen laesst sich ein Beitrag
+        nicht.
+
+        Zurueck kommt immer der **innere** Code. Das ist der Punkt der
+        Uebung: Gezaehlt, gespeichert und ausgewertet wird unter ihm, ganz
+        gleich, welcher Deckname in der Adresse stand. Nur so bleiben die
+        Auswertungen dieselben wie vor den Kurzcodes.
         """
         row = self.conn.execute(
-            "SELECT * FROM campaign_groups "
-            "WHERE tracking_code = ? OR tracking_code_browser = ?",
-            (tracking_code, tracking_code),
+            "SELECT * FROM campaign_groups WHERE tracking_code = ? "
+            "OR tracking_code_browser = ? OR public_code = ? OR public_code_browser = ?",
+            (code, code, code, code),
         ).fetchone()
-        return self._row_to_link(row) if row else None
+        if row is None:
+            return None
+
+        # Die Browser-Spalten zuerst: Ein nicht vergebener Browser-Code ist
+        # NULL und trifft keinen Vergleich, ein vergebener trifft genau einen.
+        browser = code in (row["tracking_code_browser"], row["public_code_browser"])
+        return Aufloesung(
+            link=self._row_to_link(row),
+            interner_code=(row["tracking_code_browser"] if browser else row["tracking_code"]),
+            oeffentlicher_code=(
+                (row["public_code_browser"] if browser else row["public_code"])
+                or (row["tracking_code_browser"] if browser else row["tracking_code"])
+            ),
+            ziel="browser" if browser else "store",
+        )
+
+    def resolve_code(self, tracking_code: str) -> CampaignGroup | None:
+        """Findet Kampagne und Gruppe zu einem Code. Siehe ``aufloesen``."""
+        treffer = self.aufloesen(tracking_code)
+        return treffer.link if treffer else None
+
+    def interner_code(self, code: str) -> str:
+        """Der gespeicherte Tracking-Code zu einem beliebigen Code.
+
+        Der Rueckfall auf die Eingabe ist bewusst: Ein unbekannter Code ist
+        keine Umbenennung, und ihn hier still zu leeren verschoebe die
+        Entscheidung "unbekannt - was nun?" an eine Stelle, die sie nicht
+        trifft. Wer nachschlagen will, ob es ihn gibt, nimmt ``aufloesen``.
+        """
+        treffer = self.aufloesen(code)
+        return treffer.interner_code if treffer else code
 
     def ziel_des_codes(self, tracking_code: str) -> str:
         """``browser`` oder ``store`` - woran der Code haengt.
@@ -2236,14 +3033,114 @@ class MarketingStore:
         am 31.08.2026 saemtliche Links zum Play Store, und der Browser kam nie
         vor.
         """
-        row = self.conn.execute(
-            "SELECT tracking_code_browser FROM campaign_groups "
-            "WHERE tracking_code = ? OR tracking_code_browser = ?",
-            (tracking_code, tracking_code),
-        ).fetchone()
-        if row is None:
-            return ""
-        return "browser" if row["tracking_code_browser"] == tracking_code else "store"
+        treffer = self.aufloesen(tracking_code)
+        return treffer.ziel if treffer else ""
+
+    def kurzcode_salt(self) -> str:
+        """Das Geheimnis, aus dem die Kurzcodes abgeleitet werden.
+
+        Entsteht beim ersten Bedarf und bleibt dann stehen - wie der Salt der
+        Besucherpruefsumme. Es ist kein Passwort; es verhindert das Gegenteil
+        der Kurzcodes: Ohne Geheimnis koennte jeder, der einen Beitrag sieht,
+        die Adressen der Nachbargruppen ausrechnen und damit den Aufbau der
+        Kampagne zurueckgewinnen.
+        """
+        salt = self.meta(_KURZCODE_SALT)
+        if not salt:
+            salt = secrets.token_hex(16)
+            self.set_meta(_KURZCODE_SALT, salt)
+        return salt
+
+    def vergib_kurzcodes(self, campaign_id: str, group_id: str) -> CampaignGroup | None:
+        """Legt die oeffentlichen Kurzcodes dieses Paares an - einmal, endgueltig.
+
+        Vergeben wird fuer **jeden vorhandenen** Tracking-Code des Paares:
+        immer den Store-Code, und den Browser-Code, sobald es ihn gibt. Einer
+        auf Vorrat entsteht nicht - dieselbe Regel wie bei
+        ``vergib_browsercode``, und aus demselben Grund: Jede vergebene
+        Adresse kann ab dem naechsten Beitrag oeffentlich sein.
+
+        Ein vorhandener Kurzcode wird **nie** ersetzt. Er steht
+        moeglicherweise schon in einer Gruppe, und ein Klick darauf muss
+        ankommen.
+
+        Der Vorspann kommt aus der bereits gespeicherten Tracking-Adresse und
+        nicht aus der Konfiguration: Beide Adressen desselben Paares sollen
+        auf denselben Dienst zeigen. Stuende hier ``app_base_url``, zeigte die
+        kurze Adresse nach einem Domainwechsel woandershin als die lange, und
+        gemerkt haette man es an einer Zahl, die nicht mehr steigt.
+        """
+        link = self.link_for(campaign_id, group_id)
+        if link is None:
+            return None
+
+        salt = self.kurzcode_salt()
+        for spalte, url_spalte, code, alt_url, vorhanden in (
+            ("public_code", "public_url", link.tracking_code, link.tracking_url, link.public_code),
+            (
+                "public_code_browser",
+                "public_url_browser",
+                link.tracking_code_browser,
+                link.tracking_url_browser,
+                link.public_code_browser,
+            ),
+        ):
+            if not code or vorhanden:
+                continue
+            kurz = self._freier_kurzcode(code, salt)
+            basis = alt_url.rsplit("/r/", 1)[0] if "/r/" in alt_url else ""
+            self.conn.execute(
+                f"UPDATE campaign_groups SET {spalte} = ?, {url_spalte} = ? "  # noqa: S608
+                f"WHERE campaign_id = ? AND group_id = ? AND {spalte} IS NULL",
+                (kurz, f"{basis}/r/{kurz}" if basis else "", campaign_id, group_id),
+            )
+        self.conn.commit()
+        return self.link_for(campaign_id, group_id)
+
+    def _freier_kurzcode(self, tracking_code: str, salt: str) -> str:
+        """Der abgeleitete Kurzcode - und bei einem Zusammenstoss der naechste.
+
+        Siebenstellig aus 29 Zeichen: Ein Zusammenstoss ist bei dreihundert
+        Gruppen nicht zu erwarten. Behandelt wird er trotzdem, denn zwei
+        Gruppen auf derselben Adresse schrieben Klicks der falschen Gruppe
+        gut - und das faellt in keiner Auswertung auf.
+        """
+        for runde in range(50):
+            kandidat = kurzcode(tracking_code, salt, runde=runde)
+            belegt = self.conn.execute(
+                "SELECT 1 FROM campaign_groups "
+                "WHERE public_code = ? OR public_code_browser = ? "
+                "OR tracking_code = ? OR tracking_code_browser = ?",
+                (kandidat, kandidat, kandidat, kandidat),
+            ).fetchone()
+            if belegt is None:
+                return kandidat
+        raise RuntimeError(f"Kein freier Kurzcode fuer {tracking_code} gefunden.")
+
+    def kurzcodes_nachtragen(self, campaign_id: str = "") -> int:
+        """Traegt fehlende Kurzcodes nach. Returns: fuer wie viele Paare.
+
+        Der Weg fuer den Bestand: Die Migration legt nur die Spalten an, die
+        Codes entstehen hier. Wiederholbar und ohne Wirkung auf vorhandene -
+        wer ihn zweimal laufen laesst, bekommt beim zweiten Mal eine Null.
+        """
+        fehlt = (
+            "(public_code IS NULL OR (tracking_code_browser IS NOT NULL "
+            "AND public_code_browser IS NULL))"
+        )
+        if campaign_id:
+            paare = self.conn.execute(
+                "SELECT campaign_id, group_id FROM campaign_groups "  # noqa: S608
+                f"WHERE campaign_id = ? AND {fehlt}",
+                (campaign_id,),
+            ).fetchall()
+        else:
+            paare = self.conn.execute(
+                f"SELECT campaign_id, group_id FROM campaign_groups WHERE {fehlt}"  # noqa: S608
+            ).fetchall()
+        for zeile in paare:
+            self.vergib_kurzcodes(zeile["campaign_id"], zeile["group_id"])
+        return len(paare)
 
     def record_event(self, event: TrackingEvent) -> int:
         """Schreibt ein Ereignis und liefert seine Kennung."""
@@ -2692,6 +3589,10 @@ class MarketingStore:
             # Code auf Vorrat entsteht.
             tracking_code_browser=row["tracking_code_browser"] or "",
             tracking_url_browser=row["tracking_url_browser"] or "",
+            public_code=row["public_code"] or "",
+            public_url=row["public_url"] or "",
+            public_code_browser=row["public_code_browser"] or "",
+            public_url_browser=row["public_url_browser"] or "",
             added_at=row["added_at"],
             post_status=row["post_status"],
             posted_at=row["posted_at"],
@@ -2727,5 +3628,10 @@ class MarketingStore:
             bearbeiten=bool(row["bearbeiten"]),
             ausschlussgrund=row["ausschlussgrund"],
             notes=row["notes"],
+            regeln_gelesen_am=row["regeln_gelesen_am"],
+            regel_keine_links=bool(row["regel_keine_links"]),
+            regel_keine_werbung=bool(row["regel_keine_werbung"]),
+            regel_freigabe_noetig=bool(row["regel_freigabe_noetig"]),
+            regel_neue_ohne_links=bool(row["regel_neue_ohne_links"]),
             updated_at=row["updated_at"],
         )

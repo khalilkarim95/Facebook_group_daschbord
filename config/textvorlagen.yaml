@@ -219,58 +219,75 @@ vorlagen:
             يمكن يفيد حدا منكم:
             {link}
 
+    # ------------------------------------------------------------ KOMMENTAR
+    #
+    # **Mit Link** - Entscheidung des Nutzers vom 11.09.2026, nachdem er die
+    # linklose Fassung gesehen hatte. Der Link steht **im Satz beim Namen**,
+    # nicht als nackte Zeile darunter.
+    #
+    # Was dagegen sprach und trotzdem so entschieden wurde: Facebook zeigte
+    # zu einem gesetzten Kommentar "Dein Kommentar wurde abgelehnt" mit dem
+    # Kriterium *"Link in Kommentar"*. Das ist eine **Regel der Gruppe**, die
+    # deren Leitung eingeschaltet hat - sie gilt in manchen Gruppen und in
+    # anderen nicht. Wo sie gilt, werden diese Kommentare abgelehnt; das ist
+    # bekannt und in Kauf genommen. (Im selben Dialog stand ein zweites
+    # Kriterium, gegen das kein Text hilft: "Neues Profil - Der Verfasser hat
+    # das Facebook-Konto erst seit hoechstens 1 Monat.")
+    #
+    # **Anklickbar laesst sich ein einzelnes Wort nicht machen.** Facebook
+    # kennt im Kommentar keine Textlinks; eine Adresse verlinkt sich selbst
+    # und bleibt sichtbar, ein Wort laesst sich nie verlinken. "Der Link im
+    # Wort" ist deshalb so weit umgesetzt, wie Facebook es zulaesst: Name und
+    # Adresse in einem Satz.
+    #
+    # Jede Fassung nennt **beide** Wege - Herunterladen und Website. Die
+    # Fassung weiss naemlich nicht, wohin ihr Link fuehrt: ``ziel_zu_nummer``
+    # schickt ungerade Nummern in den Browser und gerade in den Store, und
+    # Fassung 6 traegt wieder Vorlage 1. Eine Vorlage, die nur "lad die App"
+    # sagt, stuende damit in der Haelfte der Faelle ueber einem Link zur
+    # Website.
     kommentar:
       mit_stadt:
         - id: min_fatra
           text: |
-            أنا شفت هالتطبيق من فترة، اسمه بطريقك، فكرته إنه إذا بدك تبعت غرض صغير من {stadt} إلى {ziel} بتلاقي مسافر رايح بنفس الاتجاه.
-            {link}
+            أنا شفت هالتطبيق من فترة، اسمه بطريقك، فكرته إنه إذا بدك تبعت غرض صغير من {stadt} إلى {ziel} بتلاقي مسافر رايح بنفس الاتجاه. حمّل تطبيق بطريقك أو زور الموقع من هنا: {link}
 
         - id: kam_yom
           text: |
-            شفت بطريقك من كم يوم، بيخلّيك تلاقي مسافر عنده مكان بالحقيبة إذا بدك تبعت غرض صغير بين {stadt} و{ziel}.
-            {link}
+            شفت بطريقك من كم يوم، بيخلّيك تلاقي مسافر عنده مكان بالحقيبة إذا بدك تبعت غرض صغير بين {stadt} و{ziel}. تطبيق بطريقك بتحمّله أو بتفتح الموقع من هنا: {link}
 
         - id: ana_kaman
           text: |
-            أنا كمان شفت هالتطبيق، حسب ما فهمت بتسجل الغرض اللي بدك تبعته من {stadt} وبتلاقي مسافر مناسب بالطريق.
-            {link}
+            أنا كمان شفت هالتطبيق، حسب ما فهمت بتسجل الغرض اللي بدك تبعته من {stadt} وبتلاقي مسافر مناسب بالطريق. تطبيق بطريقك للتحميل أو لزيارة الموقع من هنا: {link}
 
         - id: sharakta
           text: |
-            حبيت شاركها معكم، شفت تطبيق بطريقك وفكرته إنه يربط اللي بده يبعت غرض صغير من {stadt} مع مسافر رايح إلى {ziel}.
-            {link}
+            حبيت شاركها معكم، شفت تطبيق بطريقك وفكرته إنه يربط اللي بده يبعت غرض صغير من {stadt} مع مسافر رايح إلى {ziel}. حمّل بطريقك أو زور موقعه من هنا: {link}
 
         - id: alyom
           text: |
-            شفت هالفكرة اليوم، بطريقك بتساعدك تلاقي مسافر إذا عندك غرض صغير بدك توصله من {stadt} إلى {ziel}.
-            {link}
+            شفت هالفكرة اليوم، بطريقك بتساعدك تلاقي مسافر إذا عندك غرض صغير بدك توصله من {stadt} إلى {ziel}. نزّل تطبيق بطريقك أو افتح الموقع من هنا: {link}
 
       ohne_stadt:
         - id: min_fatra
           text: |
-            أنا شفت هالتطبيق من فترة، اسمه بطريقك، فكرته إنه إذا بدك تبعت غرض صغير من {ziel} أو إليها بتلاقي مسافر رايح بنفس الاتجاه.
-            {link}
+            أنا شفت هالتطبيق من فترة، اسمه بطريقك، فكرته إنه إذا بدك تبعت غرض صغير من {ziel} أو إليها بتلاقي مسافر رايح بنفس الاتجاه. حمّل تطبيق بطريقك أو زور الموقع من هنا: {link}
 
         - id: kam_yom
           text: |
-            شفت بطريقك من كم يوم، بيخلّيك تلاقي مسافر عنده مكان بالحقيبة إذا بدك تبعت غرض صغير من أو إلى {ziel}.
-            {link}
+            شفت بطريقك من كم يوم، بيخلّيك تلاقي مسافر عنده مكان بالحقيبة إذا بدك تبعت غرض صغير من أو إلى {ziel}. تطبيق بطريقك بتحمّله أو بتفتح الموقع من هنا: {link}
 
         - id: ana_kaman
           text: |
-            أنا كمان شفت هالتطبيق، حسب ما فهمت بتسجل الغرض اللي بدك تبعته وبتلاقي مسافر مناسب بالطريق.
-            {link}
+            أنا كمان شفت هالتطبيق، حسب ما فهمت بتسجل الغرض اللي بدك تبعته وبتلاقي مسافر مناسب بالطريق. تطبيق بطريقك للتحميل أو لزيارة الموقع من هنا: {link}
 
         - id: sharakta
           text: |
-            حبيت شاركها معكم، شفت تطبيق بطريقك وفكرته إنه يربط اللي بده يبعت غرض صغير مع مسافر رايح أو جاي من {ziel}.
-            {link}
+            حبيت شاركها معكم، شفت تطبيق بطريقك وفكرته إنه يربط اللي بده يبعت غرض صغير مع مسافر رايح أو جاي من {ziel}. حمّل بطريقك أو زور موقعه من هنا: {link}
 
         - id: alyom
           text: |
-            شفت هالفكرة اليوم، بطريقك بتساعدك تلاقي مسافر إذا عندك غرض صغير بدك توصله من {ziel} أو إليها.
-            {link}
+            شفت هالفكرة اليوم، بطريقك بتساعدك تلاقي مسافر إذا عندك غرض صغير بدك توصله من {ziel} أو إليها. نزّل تطبيق بطريقك أو افتح الموقع من هنا: {link}
 
   de:
 
@@ -373,35 +390,39 @@ vorlagen:
             {link}
 
     # ------------------------------------------------------------ KOMMENTAR
+    # Mit Link im Satz, wie im arabischen Vorrat - siehe dort. Drei Fassungen
+    # bestanden frueher fast nur aus dem Link ("Fuer {zielgruppe} vielleicht
+    # interessant:"); sie nennen jetzt zusaetzlich, worum es geht.
     kommentar:
       mit_stadt:
         - id: hilfreich
           text: |
             Falls hier jemand aus {stadt} etwas in die Heimat schicken moechte:
             Bei B-Tarikak (بطريقك) findet man Reisende, die noch Platz im Koffer
-            haben.
-            {link}
+            haben - App laden oder Website oeffnen: {link}
 
         - id: direkt
           text: |
-            Fuer {zielgruppe} in {stadt} vielleicht interessant:
-            {link}
+            Fuer {zielgruppe} in {stadt} vielleicht interessant: Die App
+            B-Tarikak (بطريقك) bringt Reisende und Leute zusammen, die etwas
+            mitgeben moechten - laden oder auf der Website ansehen: {link}
 
         - id: empfehlung
           text: |
             Wer aus {stadt} fliegt, hat oft Platz - und wer etwas schicken
-            moechte, findet niemanden. Genau dafuer gibt es B-Tarikak (بطريقك):
-            {link}
+            moechte, findet niemanden. Genau dafuer gibt es B-Tarikak (بطريقك),
+            zum Laden oder im Browser: {link}
 
         - id: frage
           text: |
-            Suchst du gerade jemanden, der von {stadt} aus fliegt? Hier tragen
-            Reisende ihre Reise ein:
-            {link}
+            Suchst du gerade jemanden, der von {stadt} aus fliegt? Bei
+            B-Tarikak (بطريقك) tragen Reisende ihre Reise ein - App oder
+            Website: {link}
 
         - id: kurz
           text: |
-            Falls du in {stadt} etwas mitgeben moechtest, koennte das passen:
+            Falls du in {stadt} etwas mitgeben moechtest, koennte B-Tarikak
+            (بطريقك) passen - dort stehen die Reisen drin, App oder Website:
             {link}
 
       ohne_stadt:
@@ -409,27 +430,130 @@ vorlagen:
           text: |
             Falls hier jemand etwas in die Heimat schicken moechte: Bei
             B-Tarikak (بطريقك) findet man Reisende, die noch Platz im Koffer
-            haben.
-            {link}
+            haben - App laden oder Website oeffnen: {link}
 
         - id: direkt
           text: |
-            Fuer {zielgruppe} vielleicht interessant:
-            {link}
+            Fuer {zielgruppe} vielleicht interessant: Die App B-Tarikak
+            (بطريقك) bringt Reisende und Leute zusammen, die etwas mitgeben
+            moechten - laden oder auf der Website ansehen: {link}
 
         - id: empfehlung
           text: |
             Wer fliegt, hat oft Platz - und wer etwas schicken moechte, findet
-            niemanden. Genau dafuer gibt es B-Tarikak (بطريقك):
-            {link}
+            niemanden. Genau dafuer gibt es B-Tarikak (بطريقك), zum Laden oder
+            im Browser: {link}
 
         - id: frage
           text: |
-            Suchst du gerade jemanden, der demnaechst fliegt? Hier tragen
-            Reisende ihre Reise ein:
-            {link}
+            Suchst du gerade jemanden, der demnaechst fliegt? Bei B-Tarikak
+            (بطريقك) tragen Reisende ihre Reise ein - App oder Website: {link}
 
         - id: kurz
           text: |
-            Falls du etwas mitgeben moechtest, koennte das passen:
-            {link}
+            Falls du etwas mitgeben moechtest, koennte B-Tarikak (بطريقك)
+            passen - dort stehen die Reisen drin, App oder Website: {link}
+
+
+# ============================================================================
+# ANLASSBEZOGENE KOMMENTARE (13.09.2026)
+# ============================================================================
+#
+# WOFUER DAS DA IST
+#
+# Die Vorlagen unter "vorlagen:" gehoeren einer **Gruppe**: Sie stehen fest,
+# bevor irgendein Beitrag gelesen wurde, und sagen in jeder Lage dasselbe.
+# Unter einem Beitrag, in dem jemand nach einem Reisenden sucht, ist das eine
+# verpasste Gelegenheit; unter einer Reiseankuendigung ist es eingeworfene
+# Werbung.
+#
+# Diese Vorlagen gehoeren einem **Anlass**: Sie antworten auf das, was in dem
+# Beitrag steht. Welcher Anlass vorliegt, erkennt "marketing/inhalt.py"
+# (Anlass); der Text dazu steht hier. Wird kein Anlass erkannt, wird nicht
+# kommentiert - das ist der Regelfall und kein Mangel.
+#
+# KEIN LINK, UND DAS IST DER PUNKT
+#
+# Viele Gruppen lehnen einen Link im Kommentar automatisch ab; am 11.09.2026
+# stand "Dein Kommentar wurde abgelehnt - Link in Kommentar" im Dialog. Diese
+# Texte nennen deshalb nur den Namen (بطريقك) und tragen keine Adresse. Wo die
+# Gruppe Links ausdruecklich erlaubt UND der Beitrag ihn traegt
+# (entscheidung.Linkmodus.TRACKING_LINK), haengt "vorlagen.anlasstext" den
+# Platzhalter {link} in einer eigenen Zeile an - mechanisch, nicht erfunden.
+#
+# WAS IN JEDEM DIESER TEXTE NICHT STEHT
+#
+# Keine Behauptung ueber eine vorhandene Reise. "رحلتي موجودة على التطبيق"
+# oder "في مسافر جاهز" waere eine Aussage ueber Daten, die dieses Programm
+# nicht hat - es liest keine Reisen aus der App. Die Texte sagen deshalb
+# durchgehend "fiik tjarrib" / "mumkin tlaqi": Man kann dort suchen. Wer eine
+# Fassung ergaenzt, schreibt das mit.
+#
+# Kein Preis, keine Zusicherung ueber Zustellung oder Versicherung - dieselben
+# drei Zusicherungen wie im Vorrat oben.
+#
+# PLATZHALTER
+#
+#   {ziel}  Wohin der Weg geht (ziel_ar der Zielgruppe, sonst ziel_allgemein).
+#           {stadt} und {zielgruppe} sind hier NICHT erlaubt: Der Anlass
+#           kommt vom Beitrag, und wer dort gerade schreibt, muss nicht aus
+#           der Stadt der Gruppe kommen.
+
+anlaesse:
+  ar:
+    # Der haeufigste Fall und der, fuer den es die App gibt.
+    sucht_reisenden:
+      - id: lissa
+        text: >-
+          إذا لسا ما لقيت حدا، فيك تجرّب تطبيق بطريقك للبحث عن مسافر مناسب.
+      - id: shuf_musafirin
+        text: >-
+          إذا بدك تبعت غرض صغير، فيك تشوف المسافرين الموجودين على بطريقك.
+      - id: talaqi
+        text: >-
+          ممكن تلاقي مسافر مناسب عن طريق بطريقك، خصوصاً للطلبات الصغيرة من
+          ألمانيا لسوريا.
+
+    geschenk:
+      - id: hadiye
+        text: >-
+          إذا بدك تبعت هدية صغيرة لأهلك، فيك تشوف المسافرين من ألمانيا ع
+          سوريا على بطريقك.
+      - id: musaade
+        text: >-
+          بطريقك ممكن يساعدك تلاقي مسافر مناسب لنقل غرض صغير أو هدية.
+
+    gegenstand:
+      - id: sagheer
+        text: >-
+          إذا الغرض صغير، فيك تجرّب تلاقي مسافر من ألمانيا ع سوريا عن طريق
+          بطريقك.
+      - id: unshur
+        text: >-
+          فيك تنشر طلبك على بطريقك وتشوف إذا في مسافر مناسب.
+
+    versandweg:
+      - id: shagle_sagheere
+        text: >-
+          إذا بدك تبعت شغلة صغيرة لسوريا، فيك تشوف تطبيق بطريقك وتبحث عن
+          مسافر مناسب.
+
+    platz_im_koffer:
+      - id: majal
+        text: >-
+          إذا عندك مجال بالشنطة وبتحب تساعد بنقل أغراض صغيرة، فيك تشوف
+          الطلبات الموجودة على بطريقك.
+
+    bietet_mitnahme:
+      - id: talabat
+        text: >-
+          إذا عندك مجال بالشنطة، فيك تشوف الطلبات الموجودة على بطريقك، ويمكن
+          تلاقي حدا محتاج يرسل غرض صغير.
+
+    # Der Zusatz am Ende ist keine Hoeflichkeit, sondern die Grenze: Was ueber
+    # die Grenze darf, entscheidet nicht die App und nicht wir.
+    medikamente:
+      - id: dawa
+        text: >-
+          إذا لسا ما لقيت حدا، فيك تجرّب بطريقك للبحث عن مسافر مناسب، مع
+          التأكد من شروط نقل الدواء قبل الاتفاق.
