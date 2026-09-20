@@ -1,5 +1,6 @@
 """Kommandozeile.
 
+    fbgroups import-mitglieder PFAD    Eigene Mitgliederliste einlesen
     fbgroups serve                     Dienst starten: Uebersicht und Tracking
     fbgroups config-check              Konfiguration pruefen
     fbgroups auth login                Interaktiver Browser-Login fuer Automatisierung
@@ -12,12 +13,14 @@ Die Entdeckungsschicht ist am 20.09.2026 entfernt worden: ``import-seeds``,
 die fuenf Konfigurationsdateien, an denen sie hingen (``audiences.yaml``,
 ``cities.yaml``, ``categories.yaml``, ``queries.yaml``, ``providers.yaml``).
 Was der Bestand ueber eine Gruppe weiss, wird seither gepflegt und nicht mehr
-aus Begriffslisten abgeleitet.
+aus Begriffslisten abgeleitet. ``import-mitglieder`` ist seither der einzige
+Weg, Gruppen in den Bestand zu bekommen.
 """
 
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -27,6 +30,9 @@ from rich.table import Table
 from fbgroups.config import AppConfig, load_config
 from fbgroups.marketing.cli import campaign_app, marketing_app
 from fbgroups.marketing.tracking import app_base_url
+from fbgroups.mitglieder import lies_mitgliederdatei
+from fbgroups.scoring import score_all
+from fbgroups.storage import SqliteStore
 
 app = typer.Typer(
     add_completion=False,
@@ -48,6 +54,197 @@ def _config() -> AppConfig:
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]Konfigurationsfehler:[/red] {exc}")
         raise typer.Exit(code=1) from exc
+
+
+@app.command("import-mitglieder")
+def import_mitglieder_command(
+    pfad: Path = typer.Argument(
+        ...,
+        help="CSV mit der eigenen Mitgliederliste (Spalten: url, name, category, activity, ...).",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Nur anzeigen, nichts speichern."
+    ),
+    status_mitglied: bool = typer.Option(
+        True,
+        "--mitglied/--ohne-status",
+        help="Jede Zeile als 'mitglied' vermerken (Vorgabe). Mit --ohne-status "
+        "wird nur der Gruppenbestand geschrieben.",
+    ),
+) -> None:
+    """Liest die eigene Mitgliederliste ein - Gruppen, in denen wir schon drin sind.
+
+    Seit dem 20.09.2026 der einzige Weg in den Bestand: Der Seed-Import ist
+    mit der Entdeckungsschicht entfallen, und gesucht wird nicht mehr.
+
+    **Jede Zeile bedeutet "wir sind Mitglied"**, und genau das wird vermerkt
+    (``MarketingStatus.MEMBER``). Eine Beitrittsanfrage an eine Gruppe, in der
+    wir schon stehen, waere ein Handgriff ohne Zweck - und eine der wenigen
+    Handlungen, die bei Facebook auffallen. ``--ohne-status`` laesst den
+    Arbeitsstand unberuehrt, falls die Datei einmal etwas anderes enthaelt.
+
+    Ein bestehender Arbeitsstand wird **nicht** zurueckgesetzt: Wer schon
+    weiter ist als "mitglied" (angesprochen, Zusammenarbeit laeuft), bleibt
+    dort. Ein zweiter Lauf ueber dieselbe Datei aendert also nichts.
+    """
+    config = _config()
+
+    if not pfad.exists():
+        console.print(f"[red]Datei nicht gefunden:[/red] {pfad}")
+        raise typer.Exit(code=1)
+
+    bericht = lies_mitgliederdatei(pfad, config)
+
+    for fehler in bericht.fehler:
+        console.print(
+            f"[yellow]Zeile {fehler.zeile}:[/yellow] {fehler.grund}"
+            + (f"  ({fehler.wert})" if fehler.wert else "")
+        )
+
+    # Bewertet wird vor dem Speichern - sonst stuenden die Gruppen ohne Score
+    # in der Uebersicht, und die Arbeitsliste sortierte sie ans Ende.
+    gruppen = score_all(bericht.gruppen, config, {})
+
+    tabelle = Table(title=f"Mitgliederliste {bericht.quelle}", show_header=False, box=None)
+    tabelle.add_row("Zeilen", str(bericht.zeilen_gesamt))
+    tabelle.add_row("gelesene Gruppen", str(len(gruppen)))
+    tabelle.add_row("verworfen", str(len(bericht.fehler)))
+    tabelle.add_row("mit Mitgliederzahl", str(sum(1 for g in gruppen if g.member_count)))
+    tabelle.add_row("mit Aktivitaet", str(sum(1 for g in gruppen if g.activity_factor is not None)))
+    tabelle.add_row("mit Kategorie", str(sum(1 for g in gruppen if g.category)))
+    tabelle.add_row("bewertet", str(sum(1 for g in gruppen if g.score is not None)))
+    console.print(tabelle)
+
+    # Die drei Fallen der Quelldatei ausdruecklich benennen. Sie fielen sonst
+    # erst auf, wenn eine Gruppe nie in Klasse A auftaucht oder ein falscher
+    # Ortsname in einem Beitrag steht.
+    if bericht.ohne_namen:
+        console.print(
+            f"[yellow]{len(bericht.ohne_namen)} Zeile(n) ohne verwertbaren Namen:[/yellow] "
+            f"{', '.join(sorted(set(bericht.ohne_namen)))} - das ist kein Gruppenname, "
+            f"sondern Beifang der Erfassung. Der Name bleibt leer."
+        )
+    if bericht.unbekannte_kategorien:
+        console.print(
+            f"[yellow]Unbekannte Kategorien:[/yellow] "
+            f"{', '.join(sorted(set(bericht.unbekannte_kategorien)))}. Sie wurden "
+            f"uebergangen - ergaenzen in mitglieder.KATEGORIEN."
+        )
+    if bericht.verworfene_staedte:
+        console.print(
+            f"[dim]Spalte 'city' nicht uebernommen ({len(bericht.verworfene_staedte)}x: "
+            f"{', '.join(sorted(set(bericht.verworfene_staedte)))}): Sie nennt das "
+            f"Reiseziel, nicht den Sitz der Gruppe. Steht als Hinweis in den Notizen.[/dim]"
+        )
+
+    _zielprioritaet_zeigen(config, gruppen)
+
+    if dry_run:
+        console.print("[cyan]--dry-run:[/cyan] es wurde nichts gespeichert.")
+        return
+
+    if not gruppen:
+        console.print("[yellow]Nichts zu speichern.[/yellow]")
+        return
+
+    with SqliteStore(config.path("sqlite_path")) as store:
+        neu, bekannt = store.upsert_groups(gruppen)
+        gesamt = store.count_groups()
+    console.print(
+        f"[green]Gespeichert:[/green] {neu} neu, {bekannt} bereits bekannt "
+        f"- Bestand gesamt: {gesamt}"
+    )
+
+    if status_mitglied:
+        gesetzt, schon_weiter = _als_mitglied_vermerken(config, [g.group_id for g in gruppen])
+        console.print(
+            f"[green]Arbeitsstand:[/green] {gesetzt}x auf 'mitglied' gesetzt"
+            + (f", {schon_weiter} waren bereits weiter" if schon_weiter else "")
+        )
+
+
+def _zielprioritaet_zeigen(config: AppConfig, gruppen: list) -> None:
+    """Zeigt je Gruppe Klasse und Land - und warnt vor Klasse D.
+
+    Die Einstufung wird **gerechnet und nicht gespeichert**; sie taucht sonst
+    erst in der Uebersicht auf, wenn die Gruppen schon im Bestand stehen.
+    Hier steht sie direkt neben dem Import, denn sie entscheidet mehr als der
+    Score: ``Gruppenfortschritt.bearbeitbar`` schliesst Klasse **D ganz aus**.
+    Eine Gruppe mit 480.000 Mitgliedern, die als D hereinkommt, wird nie
+    bearbeitet - und niemand saehe, warum.
+
+    Gerechnet wird ueber ``zielgruppe.aus_group`` mit denselben Regeln, die
+    der Lauf benutzt. Eine zweite Rechnung koennte davon abweichen, und dann
+    naennte der Import eine andere Klasse als die Arbeitsliste.
+    """
+    from fbgroups.marketing import zielgruppe
+
+    regeln = zielgruppe.regeln_aus_config(config)
+    befunde = {g.group_id: zielgruppe.aus_group(g, regeln) for g in gruppen}
+
+    tabelle = Table(title="Zielprioritaet", header_style="bold")
+    tabelle.add_column("Klasse", width=8)
+    tabelle.add_column("Score", justify="right", width=9)
+    tabelle.add_column("Kategorie", width=10)
+    tabelle.add_column("Grund", width=30, no_wrap=True, overflow="ellipsis")
+    # Arabische Gruppennamen sind lang und tragen Emoji-Ketten. Ohne feste
+    # Breite bricht rich sie auf eine Zeile je Zeichen um, und die Tabelle
+    # wird unlesbar - die Klasse links ist ohnehin die Auskunft.
+    tabelle.add_column("Gruppe", width=30, no_wrap=True, overflow="ellipsis")
+
+    for gruppe in sorted(gruppen, key=lambda g: befunde[g.group_id].rang):
+        befund = befunde[gruppe.group_id]
+        klasse = befund.prioritaet.value.upper()
+        farbe = {"A": "green", "B": "cyan", "C": "yellow", "D": "red"}[klasse]
+        region = befund.region.value if befund.region.value != "unbekannt" else ""
+        tabelle.add_row(
+            f"[{farbe}]{klasse}[/{farbe}] {region}",
+            f"{gruppe.score:g}/{gruppe.score_max:g}" if gruppe.score is not None else "-",
+            gruppe.category or "-",
+            befund.grund[:34],
+            (gruppe.name or "[dim](ohne Namen)[/dim]")[:38],
+        )
+    console.print(tabelle)
+
+    ausgeschlossen = [g for g in gruppen if befunde[g.group_id].prioritaet.value == "d"]
+    if ausgeschlossen:
+        console.print(
+            f"[red]{len(ausgeschlossen)} Gruppe(n) in Klasse D - sie werden "
+            f"NICHT bearbeitet[/red] (kein erkennbarer Bezug in Name und "
+            f"Beschreibung). Abhilfe: Kategorie und Name im Bestand pflegen, "
+            f"oder die Begriffe in marketing.zielprioritaet erweitern."
+        )
+
+
+def _als_mitglied_vermerken(config: AppConfig, group_ids: list[str]) -> tuple[int, int]:
+    """Setzt den Arbeitsstand auf 'mitglied' - ohne einen weiteren zurueckzudrehen.
+
+    Dieselbe Regel wie bei ``marketing beitritt``: Der Sammelbefehl
+    ueberspringt jede Gruppe, die laut ``MARKETING_FORTSCHRITT`` schon weiter
+    ist. Wer die Leitung bereits angesprochen hat, faellt durch einen zweiten
+    Import nicht auf "mitglied" zurueck.
+    """
+    from fbgroups.marketing.models import MARKETING_FORTSCHRITT, MarketingStatus
+    from fbgroups.marketing.store import MarketingStore
+
+    ziel = MARKETING_FORTSCHRITT.index(MarketingStatus.MEMBER)
+    gesetzt = schon_weiter = 0
+
+    with MarketingStore(config.path("sqlite_path")) as store:
+        for group_id in group_ids:
+            eintrag = store.load_marketing(group_id)
+            try:
+                stand = MARKETING_FORTSCHRITT.index(eintrag.marketing_status)
+            except ValueError:
+                stand = -1
+            if stand >= ziel:
+                schon_weiter += 1
+                continue
+            eintrag.marketing_status = MarketingStatus.MEMBER
+            store.save_marketing(eintrag)
+            gesetzt += 1
+
+    return gesetzt, schon_weiter
 
 
 @app.command("serve")

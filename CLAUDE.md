@@ -75,12 +75,8 @@ Klassen `Audience`, `City` und `Category` gibt es nicht mehr.
   (`ActivitySource.SEARCH_DATES`) — sie las `last_post_at`, und das schreibt
   seither nichts mehr. Der Enum-Wert bleibt: Bestandsdaten können ihn tragen.
 
-**Was damit fehlt und bewusst nicht ersetzt wurde:** Es gibt **keinen Weg
-mehr, Gruppen in die Datenbank zu bekommen.** `import-seeds` war der einzige,
-und er ist entfernt. Wer den Bestand füllen will, braucht einen neuen
-Importweg — `data/from_lokal/fbgroups_de_eu_members.csv` hat ein anderes
-Format als die alten Seed-Dateien (`url,name,category,activity,rating,city,
-country,status,notes,last_updated,joined_at`).
+**Der Weg in den Bestand heißt jetzt `import-mitglieder`** (20.09.2026, siehe
+eigenen Abschnitt). `import-seeds` war der einzige davor und ist entfernt.
 
 ## Harte Projektgrenzen
 
@@ -125,6 +121,8 @@ $env:PYTHONIOENCODING="utf-8"        # sonst bricht arabische Terminalausgabe
 
 & $py -m fbgroups.cli config-check   # Konfiguration validieren
 & $py -m fbgroups.cli auth login     # Browser-Sitzung anlegen
+& $py -m fbgroups.cli import-mitglieder data\from_lokal\liste.csv --dry-run
+& $py -m fbgroups.cli import-mitglieder data\from_lokal\liste.csv
 & $py -m fbgroups.cli serve --port 3000
 ```
 
@@ -310,6 +308,76 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
   `None`; die Übersicht zeigt dafür `unknown`.
 - **`SqliteStore.upsert_groups`** überschreibt `review_status` und `notes` eines
   bestehenden Datensatzes nie – manuelle Bewertungen überleben jeden Reimport.
+
+### Die Mitgliederliste ist der Weg in den Bestand (`mitglieder.py`)
+
+```
+fbgroups import-mitglieder <datei.csv> [--dry-run] [--ohne-status]
+```
+
+Seit dem 20.09.2026 der **einzige** Weg, Gruppen in die Datenbank zu bekommen.
+Was hereinkommt, hat ein Mensch von Hand gesammelt: Gruppen, in denen wir
+bereits Mitglied sind.
+
+- **Jede Zeile bedeutet „wir sind Mitglied"**, und genau das wird vermerkt
+  (`MarketingStatus.MEMBER`). Eine Beitrittsanfrage an eine Gruppe, in der wir
+  schon stehen, wäre ein Handgriff ohne Zweck — und eine der wenigen
+  Handlungen, die bei Facebook auffallen. `--ohne-status` lässt den
+  Arbeitsstand unberührt.
+- **Ein erreichter Stand wird nie zurückgedreht.** Wer laut
+  `MARKETING_FORTSCHRITT` schon weiter ist (Leitung angesprochen,
+  Zusammenarbeit läuft), bleibt dort. Ein zweiter Lauf über dieselbe Datei
+  ändert damit nichts — dieselbe Regel wie bei `marketing beitritt`.
+- **Das Dateiformat ist eine fremde Tabelle, nicht unser Datenmodell.** Drei
+  Spalten bedeuten etwas anderes, als ihr Name verspricht; das ist der
+  eigentliche Inhalt des Moduls:
+
+  | Spalte | Was drinsteht | Was daraus wird |
+  |---|---|---|
+  | `category` | Anzeigename („Reise & Transport") | Kennung (`reise`) über `KATEGORIEN` |
+  | `city` | **Reiseziel** („Damaskus", „دمشق") | **nichts** — Hinweis in `notes` |
+  | `country` | Raum („Deutschland / Europa") | `Group.country` |
+  | `activity` | Kopf der Gruppenseite | Sichtbarkeit, Mitgliederzahl, Beiträge/Tag |
+
+- **`category` muss übersetzt werden, sonst greift die Zielpriorität nie.**
+  `marketing.zielprioritaet.kategorien` nennt `reise` und `versand`; stünde
+  „Reise & Transport" im Bestand, träfe die Regel keine einzige Gruppe — und
+  die Kampagne arbeitete wieder in den Gemeinschaftsgruppen, ohne dass
+  irgendwo eine Fehlermeldung entstünde. Ein Wert, den `KATEGORIEN` nicht
+  kennt, wird **gemeldet und nicht geraten**.
+- **`city` wird verworfen, und das ist der Kern.** `Group.city` trägt 15
+  Score-Punkte und belegt in `zielgruppe.bestimme_region` `Region.DE`. Mit
+  „Damaskus" darin gälte eine syrische Zielangabe als deutscher Sitz: Die
+  Gruppe stünde vor den tatsächlich deutschen und bekäme Punkte, die sie nicht
+  verdient hat. Verloren ist die Angabe nicht — sie steht ausdrücklich benannt
+  in `notes` („Reiseziel laut Liste: Damaskus"), dieselbe Zurückhaltung wie
+  bei einem Beitragstitel, der kein Gruppenname ist.
+- **„25 ungelesene Beiträge" ist keine Beitragszahl.** Der teuerste Fehlgriff,
+  den der Seitenkopf anbietet: Es ist **unser eigener Postfachstand**. Als
+  Rate gelesen ergäbe er 25 Beiträge am Tag und damit den vollen
+  Aktivitätsfaktor — 25 von 100 Punkten für eine Gruppe, über deren Betrieb
+  wir nichts wissen. `_BEITRAEGE_RE` verlangt deshalb das „pro Tag".
+- **`الإشعارات` ist kein Gruppenname.** Es heißt „Benachrichtigungen" und ist
+  die Überschrift *neben* der Gruppe, beim Sammeln mitgenommen. Ungefiltert
+  stünde es als Name im Bestand, würde bewertet und erschiene über einem
+  Beitrag — dieselbe Falle wie ein Beitragstitel, der früher als Gruppenname
+  im Export landete. `KEIN_NAME` fängt es ab; der Name bleibt **leer**, die
+  Gruppe bleibt erhalten (die URL ist echt, und Mitglied sind wir auch).
+- **Der Import zeigt die Zielpriorität gleich mit.** Gerechnet, nicht
+  gespeichert — über dieselbe `zielgruppe.aus_group`, die der Lauf benutzt.
+  Sie steht dort, weil sie mehr entscheidet als der Score:
+  `Gruppenfortschritt.bearbeitbar` schließt Klasse **D ganz aus**. Eine Gruppe
+  mit 480.000 Mitgliedern, die als D hereinkommt, wird nie bearbeitet — und
+  ohne diese Tabelle sähe niemand, warum.
+- **`parse_member_count` steht in `textnorm.py`.** Zwei Wege lesen dieselbe
+  Zeichenkette — den Kopf einer Gruppenseite: der Browser live
+  (`automation/actions.py`), dieses Modul aus einer CSV-Spalte. Zwei Parser
+  wären zwei Wahrheiten über dieselbe Zahl, und ein CSV-Leser soll dafür nicht
+  Playwright laden müssen.
+- **Der Import trägt keine Daten auf den Server.** `ausrollen.sh` überträgt
+  ausschließlich `src config pyproject.toml`. Wer den Bestand des Servers
+  füllen will, kopiert die Datei dorthin und lässt den Befehl **dort** laufen
+  — nach der Regel, dass alles, was den Bestand ändert, auf den VPS gehört.
 
 ## Marketing-Erweiterung (`marketing/`)
 

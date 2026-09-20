@@ -6,6 +6,15 @@ Der Abgleich unterscheidet bewusst zwei Schriftsysteme:
   aber nicht mitten in einem unverwandten Wort zufaellig anschlagen.
 * Arabisch: Vergleich als Teilstring. Artikel und Praepositionen haengen
   direkt am Wort, "سوريين" steckt in "السوريين" - eine Wortgrenze gaebe es dort nicht.
+
+Daneben steht ``parse_member_count``: Mitgliederzahlen kommen in vielen
+Schreibweisen ("12.500", "12,5k", "3 Mio") und muessen zu einer Zahl werden.
+Die Funktion stand bis zum 20.09.2026 im Seed-Importer und danach kurz in
+``automation/actions.py``. Sie steht hier, weil **zwei** Wege dieselbe
+Zeichenkette lesen - den Kopf einer Gruppenseite: der Browser liest ihn live,
+``mitglieder.py`` liest ihn aus einer CSV-Spalte. Zwei Parser waeren zwei
+Wahrheiten ueber dieselbe Zahl, und ein CSV-Leser soll dafuer nicht Playwright
+laden muessen.
 """
 
 from __future__ import annotations
@@ -88,3 +97,47 @@ def contains_term(haystack_normalized: str, term: str) -> bool:
     # damit "arab" auch "araber"/"arabisch" trifft.
     pattern = r"(?<!\w)" + re.escape(term_norm)
     return bool(re.search(pattern, haystack_normalized))
+
+
+# --- Mitgliederzahlen ------------------------------------------------------
+
+# Die Einheit darf kein Wortanfang sein: sonst liest "4.200 Mitglieder"
+# das M als Millionen-Marker.
+_MEMBER_COUNT_RE = re.compile(r"(\d[\d.,\s\u00a0]*)\s*(k|tsd|mio|m)?(?![a-zA-Z])", re.IGNORECASE)
+
+
+def parse_member_count(raw: str | None) -> int | None:
+    """Wandelt Angaben wie ``12.500``, ``12,5k`` oder ``3 Mio`` in eine Zahl."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+
+    match = _MEMBER_COUNT_RE.search(text)
+    if not match:
+        return None
+
+    number_part = match.group(1).strip()
+    suffix = (match.group(2) or "").lower()
+
+    # "12.500" ist deutsch fuer 12500, "12,5" ist ein Dezimalwert.
+    # Das geschuetzte Leerzeichen kommt aus Facebooks eigener Anzeige.
+    cleaned = number_part.replace(" ", "").replace("\u00a0", "")
+    if "," in cleaned and "." in cleaned:
+        cleaned = cleaned.replace(".", "").replace(",", ".")
+    elif "," in cleaned:
+        cleaned = cleaned.replace(",", ".") if suffix else cleaned.replace(",", "")
+    elif "." in cleaned and suffix:
+        pass  # "1.5k"
+    elif "." in cleaned:
+        cleaned = cleaned.replace(".", "")
+
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
+
+    multiplier = {"k": 1_000, "tsd": 1_000, "mio": 1_000_000, "m": 1_000_000}.get(suffix, 1)
+    result = int(value * multiplier)
+    return result if result >= 0 else None

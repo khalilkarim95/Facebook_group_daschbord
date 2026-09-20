@@ -46,6 +46,8 @@ $py = ".\.venv\Scripts\python.exe"
 
 & $py -m fbgroups.cli config-check                 # Konfiguration prüfen
 & $py -m fbgroups.cli auth login                   # Browser-Sitzung anlegen
+& $py -m fbgroups.cli import-mitglieder liste.csv --dry-run   # nur anzeigen
+& $py -m fbgroups.cli import-mitglieder liste.csv  # Mitgliederliste einlesen
 & $py -m fbgroups.cli serve --port 3000            # Übersicht und Tracking-Links
 & $py -m fbgroups.cli campaign --help              # Kampagnen
 & $py -m fbgroups.cli marketing --help             # Arbeitsstand, Auswertung
@@ -53,6 +55,30 @@ $py = ".\.venv\Scripts\python.exe"
 
 Nach `pip install -e .` steht zusätzlich der Befehl `fbgroups` direkt zur
 Verfügung. Die Kampagnenbefehle sind in `CLAUDE.md` vollständig beschrieben.
+
+## Die Mitgliederliste
+
+`import-mitglieder` ist der einzige Weg in den Bestand. Erwartet wird eine CSV
+mit mindestens der Spalte `url`; erkannt werden außerdem `name`, `category`,
+`activity`, `country`, `rating`, `city` und `notes`.
+
+**Jede Zeile bedeutet „wir sind Mitglied"** und wird als solche vermerkt. Ein
+bereits weiter fortgeschrittener Arbeitsstand wird nicht zurückgedreht.
+
+Drei Spalten bedeuten etwas anderes, als ihr Name verspricht:
+
+| Spalte | Inhalt | Ergebnis |
+|---|---|---|
+| `category` | Anzeigename („Reise & Transport") | Kennung `reise` — sonst greift die Zielpriorität nie |
+| `city` | **Reiseziel** („Damaskus") | verworfen, steht als Hinweis in den Notizen |
+| `activity` | Kopf der Gruppenseite | Sichtbarkeit, Mitgliederzahl, Beiträge/Tag |
+
+Aus `activity` wird nur übernommen, was ausdrücklich dasteht. „25 ungelesene
+Beiträge" ist der eigene Postfachstand und **keine** Beitragszahl je Tag.
+
+Der Befehl zeigt anschließend die Zielpriorität je Gruppe. Klasse **D wird
+nicht bearbeitet** — steht dort eine Gruppe, die bearbeitet werden soll, fehlt
+ihr Kategorie oder Bezug im Namen.
 
 ## Validierung, Status und Score
 
