@@ -537,11 +537,15 @@ def test_kein_anlass_wird_gemeldet_und_nicht_als_fehlschlag_gebucht() -> None:
 
 
 def test_kein_anlass_zaehlt_nicht_gegen_den_technikwaechter() -> None:
-    """Fuenf technische Fehlschlaege beenden den Lauf - fuenf "kein Anlass" nicht.
+    """Der Waechter sieht "kein Anlass" nicht - und eine tote Adresse auch nicht.
 
-    Der Browser arbeitet ja. Waere es mitgezaehlt, endete ein Lauf nach fuenf
-    Gruppen ohne passenden Beitrag - also an einem ganz gewoehnlichen Tag.
+    Der Browser arbeitet ja. Seit dem 20.09.2026 beendet ein technischer
+    Fehlschlag den Lauf ohnehin nicht mehr (die Gruppe faellt aus der
+    Kampagne, nicht der Lauf); gemeldet wird trotzdem nur, was etwas ueber
+    den Rechner sagen koennte.
     """
     quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
 
-    assert "if not ergebnis.kein_anlass and technik.melde(ergebnis):" in quelltext
+    assert "not ergebnis.kein_anlass" in quelltext
+    assert "and not ergebnis.beitrag_weg" in quelltext
+    assert "and technik.melde(ergebnis)" in quelltext

@@ -291,6 +291,17 @@ class AutomatikErgebnis(BaseModel):
     Gruppe; im Protokoll muss der Unterschied trotzdem stehen.
     """
 
+    beitrag_weg: bool = False
+    """Die versuchten Adressen zeigen ins Leere - den Beitrag gibt es nicht mehr.
+
+    **Kein Urteil ueber die Gruppe**, und deshalb ein eigenes Feld
+    (20.09.2026): Sie wird fuer diesen Lauf beiseitegelegt, aber **nicht**
+    aus der Kampagne ausgeschlossen. Ihre Beitragsliste ist bloss aelter als
+    unser Bestand; sie dafuer auszuschliessen hiesse, die falsche Stelle zu
+    bestrafen. Der oertliche Lauf liest es an derselben Stelle
+    (``automatik._fuehre_schritt_aus``).
+    """
+
     kein_anlass: bool = False
     """Heute stand hier nichts, worauf eine Antwort etwas beigetragen haette.
 
@@ -1809,9 +1820,13 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                         meldung.group_id,
                         f"technisch: {meldung.fehler}"[:160],
                     )
-                store.schliesse_gruppe_aus(
-                    meldung.group_id, f"automatisch: {meldung.fehler}"
-                )
+                # **Nicht bei einer toten Adresse.** Dieselbe Bedingung wie
+                # oertlich: Was fehlt, ist ein Beitrag, den es nicht mehr
+                # gibt - die Gruppe kann voellig in Ordnung sein.
+                if not meldung.beitrag_weg:
+                    store.schliesse_gruppe_aus(
+                        meldung.group_id, f"automatisch: {meldung.fehler}"
+                    )
 
             if isinstance(ergebnis, Sperre):
                 return JSONResponse({"ok": False, "grund": ergebnis.grund})

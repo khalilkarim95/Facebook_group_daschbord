@@ -1862,9 +1862,9 @@ dann „Abgebrochen: 5 technische Fehlschlaege". Drei Fehler wirkten zusammen.
     halten **sofort** an. Beim ersten Mal so eindeutig wie beim fünften, und
     vier weitere Anläufe kosten vier Gruppen einen Vermerk.
   * **Gewöhnliche technische Fehlschläge** legen ihre **Gruppe** beiseite;
-    der Lauf geht weiter. Die Notbremse bleibt, aber weit hinten
-    (`GRENZE` = 12, über verschiedene Gruppen): Dann liegt es doch am
-    Rechner.
+    der Lauf geht weiter. Die gezählte Notbremse (`GRENZE` = 12) stand hier
+    bis zum 20.09.2026 daneben — siehe „Kein technischer Fehlschlag beendet
+    den Lauf mehr".
   * Ein Erfolg **oder** eine Ablehnung setzt zurück — dann arbeitet der
     Browser ja.
 - **`gruppe_beiseite` steht neben `kein_anlass`.** Beide legen die Gruppe für
@@ -2190,6 +2190,50 @@ nie eine zweite Gruppe gab.
 - Wirksam wird der Ausschluss ueber `links_zum_bearbeiten`, das
   `COALESCE(gm.bearbeiten, 1) = 1` filtert: Die Gruppe faellt aus der
   Arbeitsliste der Kampagne, und der naechste Schritt greift zur naechsten.
+
+### Kein technischer Fehlschlag beendet den Lauf mehr (20.09.2026)
+
+```
+technischer Fehlschlag  ->  Gruppe beiseite + aus der Kampagne, naechste Gruppe
+Sitzungsfehler          ->  Lauf anhalten (der einzige verbliebene Grund)
+```
+
+Der Anlass ist derselbe Lauf wie im Abschnitt davor, einen Schritt später:
+Er endete wieder mit *„12 technische Fehlschlaege in Folge, ueber
+verschiedene Gruppen hinweg"* — und wieder gab es nur **eine** Gruppe. Die
+Anweisung des Nutzers dazu ist wörtlich: nicht abbrechen, sondern die Gruppe
+aus der Kampagne nehmen und es mit der nächsten versuchen.
+
+- **Die Ursache lag im Rückfall ohne gelesene Texte**
+  (`automatik._ohne_urteil_kommentieren`). Findet die Gruppenseite ihre
+  Artikel nicht, kommen die Beiträge **ohne Text** herein („Keine Artikel im
+  Aufbau gefunden - es wird trotzdem gesucht"); dann greift der Rückfall, und
+  der nahm **einen** Beitrag: den lautesten. Die Rangfolge ist
+  deterministisch, ein Fehlschlag ändert nichts an ihr — also fiel die Wahl
+  jedes Mal auf dieselbe gelöschte Adresse. Der Weg **mit** gelesenen Texten
+  ging seit dem 15.09.2026 zum nächsten Beitrag weiter; dieser hier nicht,
+  und weil die Artikel im Betrieb oft fehlen, ist er keineswegs der
+  Sonderfall. Jetzt gelten dort dieselben drei Regeln: tote Adresse →
+  nächster Beitrag, technischer Fehlschlag → nächster Beitrag, Ablehnung der
+  Gruppe → Gruppe beiseite. Der gemeinsame Ausgang steht in `_abschluss` —
+  zwei Fassungen wären zwei Regeln für denselben Fall.
+- **Die gezählte Notbremse ist weg.** `_Technikwaechter.melde` liefert `True`
+  nur noch beim **Sitzungsfehler**; `ABBRUCH_TECHNIK` und `GRENZE` gibt es
+  nicht mehr. Gezählt wird weiter (`folge`), aber die Zahl beendet nichts —
+  sie steht im Protokoll. Was einen technischen Fehlschlag jetzt beantwortet,
+  ist der Ausschluss aus der Kampagne (Abschnitt davor), und der trifft die
+  Gruppe, um die es geht, statt den Lauf.
+- **Der Einwand dagegen bleibt richtig und ist die Kehrseite:** Geht der
+  Browser auf eine Art kaputt, die `ist_sitzungsfehler` nicht kennt, nimmt
+  der Lauf eine Gruppe nach der anderen aus der Kampagne. Deshalb steht der
+  Grund an jeder Zeile (`automatisch: ...`), deshalb ist der Ausschluss ein
+  Haken und kein Befehl, und deshalb bleibt der Tracking-Code gültig.
+- **`beitrag_weg` reist jetzt auch im Fernbetrieb mit.** Der örtliche Lauf
+  las es seit dem 20.09.2026, bevor er ausschließt; `POST /automatik/ergebnis`
+  bekam es gar nicht erst zu sehen — der Server sah nur `gruppe_beiseite` und
+  konnte „hier nimmt niemand einen Kommentar an" nicht von „diese drei
+  Beiträge gibt es nicht mehr" unterscheiden. Eine gelöschte Adresse hätte
+  damit im Regelfall (Fernbetrieb) eine gesunde Gruppe ausgeschlossen.
 
 ### Kampagnenzustände: „gerade geht nichts" ist nicht „fertig"
 

@@ -270,16 +270,24 @@ def test_fuenf_fehlende_kommentarfelder_beenden_den_lauf_nicht() -> None:
         )
 
 
-def test_die_notbremse_bleibt_aber_weit_hinten() -> None:
-    """Scheitern **verschiedene** Gruppen in Folge, liegt es doch am Rechner."""
+def test_kein_technischer_fehlschlag_beendet_den_lauf_mehr() -> None:
+    """**Die Anweisung vom 20.09.2026.**
+
+    Vorher endete der Lauf nach zwoelf technischen Fehlschlaegen in Folge -
+    mit der Begruendung, dann liege es am Rechner. Im Betrieb war es zweimal
+    dieselbe Fehldiagnose: **eine** Gruppe, zwoelfmal angefasst. Gewuenscht
+    ist etwas anderes, und es steht woanders im Code: die Gruppe aus der
+    Kampagne nehmen und es mit der naechsten versuchen
+    (``store.schliesse_gruppe_aus``).
+    """
     waechter = automatik._Technikwaechter()
     ausgang = automatik.Schrittergebnis(erfolg=False, fehler=KEIN_FELD)
 
-    aufgehoert = [waechter.melde(ausgang) for _ in range(automatik._Technikwaechter.GRENZE)]
+    aufgehoert = [waechter.melde(ausgang) for _ in range(50)]
 
-    assert aufgehoert[-1] is True
-    assert not any(aufgehoert[:-1])
-    assert automatik._Technikwaechter.GRENZE >= 12
+    assert not any(aufgehoert), "kein Abbruch, so viele es auch sind"
+    assert waechter.folge == 50, "gezaehlt wird trotzdem - fuers Protokoll"
+    assert not hasattr(automatik, "ABBRUCH_TECHNIK"), "der Abbruchtext ist weg"
 
 
 def test_ein_erfolg_setzt_die_zaehlung_zurueck() -> None:
@@ -348,6 +356,79 @@ def test_ein_geloeschter_beitrag_schliesst_die_gruppe_nicht_aus(config) -> None:
     # naechsten Gruppe geht. Ausschluss: nein.
     assert ergebnis.gruppe_beiseite is True
     assert ergebnis.beitrag_weg is True
+
+
+def _ohne_text(url: str, *, laut: int = 0) -> dict:
+    """Ein Fund ohne Text - so liefert ``urls.beitragslinks`` die ganze Seite."""
+    return {"post_url": url, "text": "", "interactions": laut, "comments": 0}
+
+
+def test_ohne_lesbaren_text_bleibt_es_nicht_bei_einem_beitrag(config) -> None:
+    """**Der Lauf vom 20.09.2026, der dieselbe tote Adresse Dutzende Male rief.**
+
+    Findet die Gruppenseite ihre Artikel nicht, kommen die Beitraege ohne
+    Text herein ("Keine Artikel im Aufbau gefunden - es wird trotzdem
+    gesucht"). Dann greift der Rueckfall, und der nahm bis dahin **einen**
+    Beitrag: den lautesten. Die Rangfolge ist deterministisch, ein
+    Fehlschlag aendert nichts an ihr - also fiel die Wahl jedes Mal auf
+    dieselbe geloeschte Adresse, bis der Lauf abbrach.
+    """
+    feld = _Feldsuche(klappt_bei={"p/3"})
+
+    ergebnis = _kern(
+        config,
+        [_ohne_text("p/1", laut=100), _ohne_text("p/2", laut=50), _ohne_text("p/3")],
+        feld,
+    )
+
+    assert feld.versucht == ["p/1", "p/2", "p/3"], "der Reihe nach, nicht immer derselbe"
+    assert ergebnis.erfolg is True
+
+
+def test_ohne_lesbaren_text_wird_die_gruppe_beiseitegelegt(config) -> None:
+    """Nimmt keiner der drei an, geht es zur **naechsten Gruppe** weiter.
+
+    Ohne diese Flagge bot der Server dieselbe Gruppe sofort wieder an - die
+    Schleife, an deren Ende die Abbruchmeldung stand.
+    """
+    feld = _Feldsuche(klappt_bei=set())
+
+    ergebnis = _kern(config, [_ohne_text("p/1"), _ohne_text("p/2")], feld)
+
+    assert ergebnis.gruppe_beiseite is True
+    assert ergebnis.erfolg is False
+    assert "2 Beitraege versucht" in ergebnis.fehler
+
+
+def test_ohne_lesbaren_text_bleibt_eine_tote_adresse_ohne_urteil(config) -> None:
+    """Auch hier gilt: ``beitrag_weg`` schliesst die Gruppe nicht aus."""
+    def weg(_context, post_url: str, _text: str) -> Kommentarausgang:
+        return Kommentarausgang(
+            False, hinweis="هذا المحتوى غير متوفر حاليًا", beitrag_weg=True
+        )
+
+    ergebnis = _kern(config, [_ohne_text("p/1"), _ohne_text("p/2")], weg)
+
+    assert ergebnis.beitrag_weg is True
+    assert ergebnis.gruppe_beiseite is True
+    assert "nicht mehr vorhanden" in ergebnis.fehler
+
+
+def test_der_fernbetrieb_meldet_beitrag_weg_mit() -> None:
+    """Sonst schliesst der Server die Gruppe wegen einer toten Adresse aus.
+
+    Der oertliche Lauf liest ``beitrag_weg``, bevor er ausschliesst; der
+    Fernbetrieb - der Regelfall - meldete es bis zum 20.09.2026 nicht einmal.
+    """
+    from pathlib import Path
+
+    quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
+    web = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
+
+    assert '"beitrag_weg": ergebnis.beitrag_weg,' in quelltext, "gemeldet"
+    assert "beitrag_weg: bool = False" in web, "und angenommen"
+    endpunkt = web.split("def automatik_ergebnis(", 1)[1]
+    assert "if not meldung.beitrag_weg:" in endpunkt.split("@app.post", 1)[0], "und gelesen"
 
 
 def test_der_ausschluss_lieset_beitrag_weg() -> None:

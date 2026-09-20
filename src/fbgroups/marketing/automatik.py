@@ -377,25 +377,31 @@ class _Technikwaechter:
     * **Sitzungsfehler** (Fenster zu, Anmeldung abgelaufen) beenden den Lauf
       sofort. Dort hilft keine naechste Gruppe.
     * **Gewoehnliche technische Fehlschlaege** legen ihre **Gruppe** beiseite
-      (``Schrittergebnis.gruppe_beiseite``) - der Lauf geht weiter, und die
-      Fehlerisolierung je Gruppe ist genau dafuer da.
-    * Die Notbremse bleibt, aber weit hinten (``GRENZE``): Wenn in Folge
-      **verschiedene** Gruppen technisch scheitern, liegt es doch am
-      Rechner. Ein Erfolg oder eine Ablehnung setzt zurueck.
-    """
+      (``Schrittergebnis.gruppe_beiseite``) und nehmen sie aus der Kampagne -
+      der Lauf geht weiter, und die Fehlerisolierung je Gruppe ist genau
+      dafuer da.
 
-    #: Weit hinten und ueber **verschiedene** Gruppen gezaehlt: Bei
-    #: ``MAX_BEITRAEGE_JE_SCHRITT`` = 3 sind das mindestens zwoelf erfolglose
-    #: Beitraege in mindestens zwoelf Anlaeufen - dann liegt es nicht mehr an
-    #: den Gruppen.
-    GRENZE = 12
+    **Die gezaehlte Notbremse ist weg** (20.09.2026, Anweisung des Nutzers).
+    Bis dahin endete der Lauf nach ``GRENZE`` = 12 technischen Fehlschlaegen
+    in Folge mit dem Satz "ueber verschiedene Gruppen hinweg - dann liegt es
+    am Rechner". Im Betrieb war das zweimal dieselbe Fehldiagnose: Es war
+    **eine** Gruppe, die der Lauf zwoelfmal anfasste, weil der Rueckfall ohne
+    gelesene Texte sie nie beiseitelegte. Der Nutzer hat entschieden, was
+    stattdessen geschehen soll - "nicht abbrechen, sondern die Gruppe aus der
+    Kampagne entfernen und es mit der naechsten versuchen" -, und genau das
+    tut jeder technische Fehlschlag jetzt.
+
+    Damit gibt es **einen** Grund, einen Lauf zu beenden: die Sitzung. Was
+    bleibt, ist die Zaehlung (``folge``) - sie erklaert im Protokoll, wie oft
+    es hintereinander nicht ging, ohne daraus ein Ende zu machen.
+    """
 
     def __init__(self) -> None:
         self.folge = 0
         self.sitzung = ""
 
     def melde(self, ergebnis: Schrittergebnis) -> bool:
-        """Returns: ob der Lauf jetzt aufhoeren soll."""
+        """Returns: ob der Lauf jetzt aufhoeren soll. **Nur bei der Sitzung.**"""
         if ergebnis.erfolg or not ist_technisch(ergebnis.fehler):
             self.folge = 0
             self.sitzung = ""
@@ -406,13 +412,11 @@ class _Technikwaechter:
             self.sitzung = ergebnis.fehler
             return True
         self.folge += 1
-        return self.folge >= self.GRENZE
+        return False
 
     def meldung(self) -> str:
         """Warum der Lauf aufgehoert hat - im Klartext fuer den Menschen."""
-        if self.sitzung:
-            return ABBRUCH_SITZUNG.format(fehler=self.sitzung[:120])
-        return ABBRUCH_TECHNIK.format(n=self.folge)
+        return ABBRUCH_SITZUNG.format(fehler=self.sitzung[:120])
 
 
 def ist_technisch(fehler: str) -> bool:
@@ -454,15 +458,6 @@ def ist_sitzungsfehler(fehler: str) -> bool:
     text = (fehler or "").lower()
     return any(muster in text for muster in _SITZUNG)
 
-
-ABBRUCH_TECHNIK = (
-    "Abgebrochen: {n} technische Fehlschlaege in Folge, ueber verschiedene "
-    "Gruppen hinweg - dann liegt es nicht mehr an den Gruppen, sondern am "
-    "Rechner. Es wurde nichts als Urteil ueber eine Gruppe vermerkt; "
-    "technische Fehlschlaege zaehlen nicht gegen sie. Die Kampagne bleibt "
-    "aktiv: Browser pruefen (fbgroups auth login) und den Lauf erneut "
-    "starten - er setzt dort auf, wo er stand."
-)
 
 ABBRUCH_SITZUNG = (
     "Angehalten: Der Browser oder die Anmeldung ist weg ({fehler}). "
@@ -1492,10 +1487,9 @@ def entscheide_und_kommentiere(
     # tun. Das ist die ehrlichere Stelle fuer den Rueckfall: Wir wissen
     # nichts ueber die Beitraege, nicht "sie passen nicht".
     if not any(p.get("text", "").strip() for p in unkommentiert):
-        bester = max(unkommentiert, key=lambda p: p["interactions"] + p["comments"])
-        # ``text`` ist der vorbereitete und bereits aufgeloeste Text des
-        # Servers - hier wird nichts ersetzt und nichts gewaehlt.
-        return _ausgang(kommentieren(context, bester["post_url"], text), bester["post_url"])
+        return _ohne_urteil_kommentieren(
+            context, unkommentiert, text, kommentieren=kommentieren
+        )
 
     # **Erst das Urteil, dann die Wahl.** Jeder gelesene Beitrag bekommt
     # seinen Befund (Thema, Absicht, Bezug, Anlass) und seine Entscheidung
@@ -1611,36 +1605,121 @@ def entscheide_und_kommentiere(
         )
         gescheitert.add(gewaehlt.post_url)
 
-    if letzter is not None and letzter.beitrag_weg:
-        # **Alle versuchten Adressen zeigen ins Leere.** Die Gruppe hat damit
-        # nichts zu tun: Ihre Beitragsliste ist bloss aelter als der Bestand.
-        # Beiseite fuer diesen Lauf, damit der naechste Schritt zur naechsten
-        # Gruppe geht - aber ausdruecklich **ohne** Ausschluss.
-        return replace(
-            letzter,
-            fehler=f"{len(gescheitert)} Beitraege nicht mehr vorhanden",
-            gruppe_beiseite=True,
-            beitrag_weg=True,
-        )
-
     if letzter is not None:
-        # Alle versuchten Beitraege haben technisch nicht angenommen. Das ist
-        # **kein** Urteil ueber die Gruppe (``ist_technisch``), aber hier ist
-        # heute nichts zu holen: Die Gruppe wird fuer diesen Lauf
-        # beiseitegelegt, statt beim naechsten Durchgang dieselben Beitraege
-        # noch einmal anzufassen. Dieselbe Behandlung wie bei einer
-        # Ablehnung - nur der Grund im Protokoll ist ein anderer.
-        return replace(
-            letzter,
-            fehler=f"{letzter.fehler} ({len(gescheitert)} Beitraege versucht)",
-            gruppe_beiseite=True,
-        )
+        return _abschluss(letzter, len(gescheitert))
 
     gruende = ", ".join(sorted({g.entscheidung.grund for g in gelegenheiten})[:2])
     return Schrittergebnis(
         erfolg=False,
         fehler=f"kein passender Beitrag ({gruende})",
         kein_anlass=True,
+    )
+
+
+def _ohne_urteil_kommentieren(
+    context,
+    unkommentiert: list[dict],
+    text: str,
+    *,
+    kommentieren,
+) -> Schrittergebnis:
+    """Der Rueckfall, wenn **kein** Beitrag lesbaren Text hat - der Reihe nach.
+
+    Ohne einen einzigen Text ist keine Entscheidung moeglich; dann gilt die
+    alte Regel (der belebteste Beitrag zuerst), statt gar nichts zu tun. Wir
+    wissen dann nichts ueber die Beitraege - das ist etwas anderes als "sie
+    passen nicht".
+
+    **Neu ist nur, dass es hier nicht bei einem Beitrag bleibt** (20.09.2026).
+    Bis dahin stand hier eine einzige Zeile: der lauteste Beitrag, ein
+    Versuch, fertig. Die Rangfolge ist deterministisch, und ein Fehlschlag
+    aendert nichts an ihr - also steuerte der naechste Durchgang **dieselbe**
+    Adresse an. Im Betrieb war genau das der Lauf, der eine geloeschte
+    Adresse Dutzende Male aufrief:
+
+        Found 3 post(s) in 5 round(s)
+        Navigating to post .../959155973211617/
+        Diesen Beitrag gibt es nicht mehr: هذا المحتوى غير متوفر حاليًا
+        fehlgeschlagen: ...                      (und wieder von vorn)
+
+    Der Weg mit gelesenen Texten ging diesen Schritt seit dem 15.09.2026
+    weiter; dieser hier nicht - und weil die Gruppenseite ihre Artikel oft
+    gar nicht hergibt (``urls.beitragslinks`` findet dann Adressen ohne
+    Text), ist er im Betrieb keineswegs der Sonderfall. Jetzt gelten hier
+    dieselben drei Regeln wie dort: tote Adresse -> naechster Beitrag,
+    technischer Fehlschlag -> naechster Beitrag, Ablehnung der Gruppe ->
+    Gruppe beiseite.
+    """
+    nach_rang = sorted(
+        unkommentiert, key=lambda p: p["interactions"] + p["comments"], reverse=True
+    )
+    versucht = 0
+    letzter: Schrittergebnis | None = None
+
+    for gewaehlt in nach_rang[:MAX_BEITRAEGE_JE_SCHRITT]:
+        versucht += 1
+        # ``text`` ist der vorbereitete und bereits aufgeloeste Text des
+        # Servers - hier wird nichts ersetzt und nichts gewaehlt.
+        letzter = _ausgang(
+            kommentieren(context, gewaehlt["post_url"], text), gewaehlt["post_url"]
+        )
+        if letzter.erfolg or letzter.gruppe_beiseite:
+            return letzter
+
+        if letzter.beitrag_weg:
+            console.print(
+                "[dim]  [Ergebnis] Beitrag nicht mehr vorhanden"
+                "[/dim] [dim][Aktion] naechster Beitrag[/dim]"
+            )
+            continue
+
+        if not ist_technisch(letzter.fehler):
+            # Eine Ablehnung gilt der Gruppe und beim naechsten Beitrag
+            # genauso - sie zu wiederholen hiesse, gegen die Gruppe zu
+            # arbeiten.
+            return replace(letzter, gruppe_beiseite=True)
+
+        console.print(
+            f"[yellow]  [Ergebnis] technisch fehlgeschlagen: {letzter.fehler}"
+            f"[/yellow] [dim][Aktion] naechster Beitrag[/dim]"
+        )
+
+    if letzter is None:  # pragma: no cover - ``unkommentiert`` ist nie leer
+        return Schrittergebnis(
+            erfolg=False, fehler="kein Beitrag zum Kommentieren", kein_anlass=True
+        )
+    return _abschluss(letzter, versucht)
+
+
+def _abschluss(letzter: Schrittergebnis, versucht: int) -> Schrittergebnis:
+    """Was aus einem Schritt wird, in dem **kein** Beitrag angenommen hat.
+
+    Die gemeinsame Stelle beider Wege (mit und ohne gelesene Texte) - zwei
+    Fassungen waeren zwei Regeln fuer denselben Ausgang.
+
+    In beiden Faellen wird die Gruppe fuer **diesen Lauf** beiseitegelegt,
+    statt beim naechsten Durchgang dieselben Beitraege noch einmal
+    anzufassen. Der Unterschied steht im Grund - und er entscheidet
+    daneben ueber den Ausschluss aus der Kampagne:
+
+    * ``beitrag_weg`` - alle versuchten Adressen zeigen ins Leere. Die Gruppe
+      hat damit nichts zu tun: Ihre Beitragsliste ist bloss aelter als unser
+      Bestand, und sie dafuer auszuschliessen hiesse, die falsche Stelle zu
+      bestrafen.
+    * sonst - die Technik hat nicht mitgespielt. Kein Urteil ueber die Gruppe
+      (``ist_technisch``), aber hier ist heute nichts zu holen.
+    """
+    if letzter.beitrag_weg:
+        return replace(
+            letzter,
+            fehler=f"{versucht} Beitraege nicht mehr vorhanden",
+            gruppe_beiseite=True,
+            beitrag_weg=True,
+        )
+    return replace(
+        letzter,
+        fehler=f"{letzter.fehler} ({versucht} Beitraege versucht)",
+        gruppe_beiseite=True,
     )
 
 
@@ -2138,6 +2217,14 @@ def fuehre_lauf_fern_aus(
                     # gleich wieder an. Ohne dieses Feld lief der Lauf am
                     # 14.09.2026 in derselben Gruppe im Kreis.
                     "gruppe_beiseite": ergebnis.gruppe_beiseite,
+                    # **Eine tote Adresse ist kein Fehler der Gruppe.** Ohne
+                    # dieses Feld schloss der Server sie trotzdem aus der
+                    # Kampagne aus: Er sah nur ``gruppe_beiseite`` und konnte
+                    # "hier nimmt niemand einen Kommentar an" nicht von "diese
+                    # drei Beitraege gibt es nicht mehr" unterscheiden. Der
+                    # oertliche Lauf las es seit dem 20.09.2026, der
+                    # Fernbetrieb - der Regelfall - meldete es nicht einmal.
+                    "beitrag_weg": ergebnis.beitrag_weg,
                     # Damit der Server die Gruppe fuer **diesen** Lauf
                     # beiseitelegen kann, wie es der oertliche Lauf tut.
                     "lauf_id": s.get("lauf_id", 0),
@@ -2186,8 +2273,14 @@ def fuehre_lauf_fern_aus(
 
             # Derselbe Waechter wie oertlich: Ein toter Browser ist kein Fall
             # fuer die Fehlerisolierung je Gruppe - er betrifft alle. Ein
-            # "kein Anlass" gehoert nicht dazu: Der Browser arbeitet ja.
-            if not ergebnis.kein_anlass and technik.melde(ergebnis):
+            # "kein Anlass" gehoert nicht dazu: Der Browser arbeitet ja. Eine
+            # tote Adresse ebenso wenig - sie sagt nichts ueber den Rechner,
+            # und oertlich stand diese Ausnahme schon.
+            if (
+                not ergebnis.kein_anlass
+                and not ergebnis.beitrag_weg
+                and technik.melde(ergebnis)
+            ):
                 return technik.meldung()
 
             getan += 1
