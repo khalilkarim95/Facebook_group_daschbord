@@ -1910,42 +1910,38 @@ class MarketingStore:
         zwei Kommentare von demselben Konto am selben Tag. Deshalb wird ueber
         alle Kampagnen gezaehlt, genau wie in ``versuche_heute``.
 
-        Gezaehlt werden **Versuche, nicht Erfolge**: Ein abgelehnter Kommentar
-        war trotzdem einer, den die Gruppe gesehen hat - ihre Leser
-        unterscheiden nicht, ob ein Moderator ihn hinterher wegnimmt.
+        **Gezaehlt werden Erfolge, nicht Versuche** (20.09.2026, Regel 3/4 des
+        Nutzers). Bis dahin zaehlte jeder Versuch ausser dem technischen
+        Fehlschlag, und die Begruendung dafuer war: Ein abgelehnter Kommentar
+        sei trotzdem einer gewesen, den die Gruppe gesehen hat. Das trifft auf
+        die Moderation zu und auf sonst nichts - ein Kommentar, den Facebook
+        gar nicht angenommen hat, stand nie dort. Die Tagesmenge einer Gruppe
+        fuer etwas zu verbrauchen, das ihre Leser nie gesehen haben, ist
+        dieselbe Art Verwechslung, an der am 14.09.2026 24 Gruppen mit je
+        einem Kommentar im Bericht standen.
 
-        **Ein technischer Fehlschlag zaehlt aber nicht** (14.09.2026). Er ist
-        nie in der Gruppe angekommen; ihn mitzuzaehlen hiesse, einem
-        geschlossenen Browserfenster das Tageskontingent einer Gruppe zu
-        opfern. Bei ``je_gruppe_taeglich: 1`` ist das keine Feinheit, sondern
-        der ganze Tag: Ein einziger Aussetzer, und die Gruppe ist bis
-        Mitternacht draussen. Genau dieses Bild stand am 14.09.2026 im
-        Bericht - 24 Gruppen, ein Kommentar.
-
-        Dieselbe Unterscheidung wie ueberall im Haus: "Technik ist kein
-        Urteil" (``qualifikation.klassifiziere``). Alte Zeilen ohne ``grund``
-        zaehlen weiter mit - sie nachtraeglich einzustufen hiesse, ein Urteil
-        ueber Antworten zu faellen, die niemand mehr nachlesen kann.
+        Der Schutz geht dadurch nicht verloren, er wandert nur: Was die Gruppe
+        wirklich ablehnt, steht in ``qualifikation.Beobachtung`` und
+        beschraenkt sie dort; was das Konto bremst, faengt
+        ``Ausgangsart.RATE_LIMIT`` mit seinem Backoff ab.
 
         Zurueck kommt ein Wortverzeichnis statt einer Einzelabfrage je
         Gruppe: Der Lauf fragt den Stand fuer dreihundert Gruppen auf einmal,
         und dreihundert Abfragen waeren derselbe Fehler wie eine Zaehlung je
         Vergleich bei der Codevergabe.
         """
-        # ``grund`` gibt es erst seit Migrationsschritt 22; leer heisst "nicht
-        # eingestuft" und zaehlt mit.
-        ohne_technik = "AND grund NOT IN ('technical_error')"
+        nur_erfolge = "AND erfolg = 1"
         if texttyp:
             rows = self.conn.execute(
                 "SELECT group_id, COUNT(*) AS n FROM post_versuche "  # noqa: S608
-                f"WHERE substr(begonnen_am, 1, 10) = ? AND texttyp = ? {ohne_technik} "
+                f"WHERE substr(begonnen_am, 1, 10) = ? AND texttyp = ? {nur_erfolge} "
                 "GROUP BY group_id",
                 (tag, str(texttyp)),
             ).fetchall()
         else:
             rows = self.conn.execute(
                 "SELECT group_id, COUNT(*) AS n FROM post_versuche "  # noqa: S608
-                f"WHERE substr(begonnen_am, 1, 10) = ? {ohne_technik} GROUP BY group_id",
+                f"WHERE substr(begonnen_am, 1, 10) = ? {nur_erfolge} GROUP BY group_id",
                 (tag,),
             ).fetchall()
         return {row["group_id"]: int(row["n"]) for row in rows}
@@ -1958,10 +1954,19 @@ class MarketingStore:
         Zwei Kampagnen mit je zwanzig Beitraegen sind vierzig Beitraege an einem
         Tag.
 
-        Gezaehlt werden Versuche, nicht Erfolge. Ein fehlgeschlagener Beitrag
-        war trotzdem ein Beitrag, den die Gegenseite gesehen hat - ihn nicht
-        mitzuzaehlen hiesse, nach zwanzig Fehlschlaegen mit voller Portion
-        weiterzumachen.
+        **Gezaehlt werden Erfolge, nicht Versuche** (20.09.2026, Regel 3/4 des
+        Nutzers). Bis dahin zaehlte jeder Versuch, und die Begruendung war:
+        Ein fehlgeschlagener Beitrag sei trotzdem einer gewesen, den die
+        Gegenseite gesehen hat - nach zwanzig Fehlschlaegen mit voller Portion
+        weiterzumachen sei leichtsinnig.
+
+        **Der Einwand bleibt richtig und ist woanders aufgehoben.** Genau
+        dafuer gibt es ``Ausgangsart.RATE_LIMIT``: Sagt Facebook selbst, dass
+        es zu viel wird, pausiert die Aktion mit einem Backoff, der sich
+        verdoppelt und den Neustart ueberlebt. Und ``_Technikwaechter``
+        beendet den Lauf, wenn der Rechner selbst nicht mehr mitmacht. Was
+        hier entfaellt, ist allein das *stille* Verbrauchen der Tagesmenge
+        durch etwas, das nie in einer Gruppe stand.
 
         ``tag`` ist ein ISO-Datum (``2026-08-29``); ``begonnen_am`` ist ein
         ISO-Zeitstempel, dessen erste zehn Zeichen genau das sind. Der Index
@@ -1970,21 +1975,34 @@ class MarketingStore:
         if texttyp:
             row = self.conn.execute(
                 "SELECT COUNT(*) FROM post_versuche "
-                "WHERE substr(begonnen_am, 1, 10) = ? AND texttyp = ?",
+                "WHERE substr(begonnen_am, 1, 10) = ? AND texttyp = ? AND erfolg = 1",
                 (tag, str(texttyp)),
             ).fetchone()
         else:
             row = self.conn.execute(
-                "SELECT COUNT(*) FROM post_versuche WHERE substr(begonnen_am, 1, 10) = ?",
+                "SELECT COUNT(*) FROM post_versuche "
+                "WHERE substr(begonnen_am, 1, 10) = ? AND erfolg = 1",
                 (tag,),
             ).fetchone()
         return int(row[0]) if row else 0
 
     def letzter_versuch(self, texttyp: str = "") -> str:
-        """Zeitstempel des juengsten Versuchs, oder ''.
+        """Zeitstempel des juengsten **erfolgreichen** Versuchs, oder ''.
 
         Grundlage des Mindestabstands. Ueber alle Kampagnen: Der Abstand gilt
         dem Konto, nicht der Kampagne.
+
+        **Nur Erfolge** (20.09.2026, Regel 7/8 des Nutzers). Bis dahin setzte
+        jeder Versuch die Uhr, auch ein gescheiterter - und das war der
+        teuerste Leerlauf des Laufs: Ein Kommentar, den Facebook nicht
+        annahm, hielt den naechsten volle zehn bis zwanzig Minuten auf,
+        obwohl nichts hinausgegangen war. Bei einer Gruppe, in der gerade
+        nichts geht, wartete der Lauf so eine Viertelstunde je Fehlschlag
+        und schrieb in einer Stunde keinen einzigen Kommentar.
+
+        Der Takt ist der Abstand zwischen zwei Dingen, die **in einer Gruppe
+        stehen**. Wo nichts steht, gibt es nichts abzuwarten; der Lauf geht
+        sofort zur naechsten Gruppe weiter.
 
         ``texttyp`` schraenkt auf eine Aktion ein (seit 12.09.2026). Ein
         gemeinsamer Abstand fuer Beitrag und Kommentar hiesse, dass ein
@@ -1994,13 +2012,14 @@ class MarketingStore:
         """
         if texttyp:
             row = self.conn.execute(
-                "SELECT begonnen_am FROM post_versuche WHERE texttyp = ? "
+                "SELECT begonnen_am FROM post_versuche WHERE texttyp = ? AND erfolg = 1 "
                 "ORDER BY begonnen_am DESC LIMIT 1",
                 (str(texttyp),),
             ).fetchone()
         else:
             row = self.conn.execute(
-                "SELECT begonnen_am FROM post_versuche ORDER BY begonnen_am DESC LIMIT 1"
+                "SELECT begonnen_am FROM post_versuche WHERE erfolg = 1 "
+                "ORDER BY begonnen_am DESC LIMIT 1"
             ).fetchone()
         return str(row[0]) if row and row[0] else ""
 

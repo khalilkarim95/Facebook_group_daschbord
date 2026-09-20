@@ -1553,10 +1553,23 @@ def entscheide_und_kommentiere(
         # Fassung, nicht ihre Ausfertigung.
         letzter = replace(ergebnis, text=gewaehlter_text, vorlage_key=schluessel)
 
-        if letzter.erfolg or letzter.gruppe_beiseite or not ist_technisch(letzter.fehler):
-            # Erfolg, Ablehnung, Gruppenlimit, Bremse - alles Ausgaenge, die
-            # fuer den naechsten Beitrag genauso gelten.
+        if letzter.erfolg or letzter.gruppe_beiseite:
             return letzter
+
+        if not ist_technisch(letzter.fehler):
+            # **Eine Ablehnung gilt der Gruppe, nicht dieser Fassung**
+            # (20.09.2026, Regel 5 des Nutzers). Sagt Facebook hier nein,
+            # sagt es das beim naechsten Beitrag und bei der naechsten
+            # Fassung genauso - die Gruppe wird deshalb fuer **diesen Lauf**
+            # beiseitegelegt, und der Lauf geht sofort zur naechsten weiter.
+            #
+            # Vorher kam sie gleich wieder an die Reihe, nur mit einer
+            # anderen Fassung: In einer Gruppe, die gerade nichts annimmt,
+            # verbrauchte der Lauf so eine Fassung nach der anderen, bis die
+            # Gruppe als erschoepft galt - ein dauerhaftes Urteil aus einer
+            # Stunde. Beiseitegelegt ist kein Urteil: Morgen wird sie neu
+            # beurteilt.
+            return replace(letzter, gruppe_beiseite=True)
 
         console.print(
             f"[yellow]  [Ergebnis] technisch fehlgeschlagen: {letzter.fehler}"
@@ -1569,7 +1582,8 @@ def entscheide_und_kommentiere(
         # **kein** Urteil ueber die Gruppe (``ist_technisch``), aber hier ist
         # heute nichts zu holen: Die Gruppe wird fuer diesen Lauf
         # beiseitegelegt, statt beim naechsten Durchgang dieselben Beitraege
-        # noch einmal anzufassen.
+        # noch einmal anzufassen. Dieselbe Behandlung wie bei einer
+        # Ablehnung - nur der Grund im Protokoll ist ein anderer.
         return replace(
             letzter,
             fehler=f"{letzter.fehler} ({len(gescheitert)} Beitraege versucht)",

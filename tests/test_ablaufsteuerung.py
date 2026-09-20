@@ -134,6 +134,13 @@ def test_eine_ablehnung_wird_nicht_am_naechsten_beitrag_wiederholt(config) -> No
     Der Unterschied zur Technik ist der ganze Punkt: Ein fehlendes
     Kommentarfeld liegt am Beitrag, eine Ablehnung an uns oder der Gruppe.
     Sie dreimal zu wiederholen hiesse, gegen die Gruppe zu arbeiten.
+
+    **Seit dem 20.09.2026 legt sie die Gruppe ausserdem beiseite** (Regel 5
+    des Nutzers). Vorher blieb die Gruppe in der Liste und kam gleich wieder
+    an die Reihe, nur mit einer anderen Fassung - in einer Gruppe, die gerade
+    nichts annimmt, verbrauchte der Lauf so eine Fassung nach der anderen,
+    bis sie als erschoepft galt. Beiseitegelegt ist kein Urteil: Es gilt fuer
+    diesen Lauf, morgen wird sie neu beurteilt.
     """
     versucht: list[str] = []
 
@@ -144,7 +151,7 @@ def test_eine_ablehnung_wird_nicht_am_naechsten_beitrag_wiederholt(config) -> No
     ergebnis = _kern(config, [_post("p/1"), _post("p/2"), _post("p/3")], abgelehnt)
 
     assert ergebnis.erfolg is False
-    assert ergebnis.gruppe_beiseite is False
+    assert ergebnis.gruppe_beiseite is True, "Regel 5: die Gruppe wird uebersprungen"
     assert len(versucht) == 1, "eine Ablehnung wird nicht dreimal geholt"
 
 

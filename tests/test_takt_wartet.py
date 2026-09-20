@@ -214,14 +214,23 @@ def test_der_beitrittstakt_bleibt_wie_er_war() -> None:
 
 # --- Ein Kommentar je Gruppe und Tag - und was ihn verbraucht -------------
 
-def test_ein_technischer_fehlschlag_verbraucht_kein_tageskontingent(tmp_path) -> None:
-    """**Der Grund fuer "24 Gruppen, ein Kommentar"** (14.09.2026).
+def test_kein_fehlschlag_verbraucht_ein_tageskontingent(tmp_path) -> None:
+    """**Der Grund fuer "24 Gruppen, ein Kommentar"** (14.09.2026) - erweitert.
 
-    ``je_gruppe_taeglich: 1`` zaehlt **Versuche**, nicht Erfolge - richtig,
-    denn ein abgelehnter Kommentar war trotzdem einer, den die Gruppe
-    gesehen hat. Ein technischer Fehlschlag ist aber nie dort angekommen.
-    Ihn mitzuzaehlen hiess: ein geschlossenes Browserfenster kostet die
-    Gruppe den ganzen Tag.
+    Damals wurde allein der **technische** Fehlschlag herausgenommen: Er ist
+    nie in der Gruppe angekommen, und ihn mitzuzaehlen hiess, dass ein
+    geschlossenes Browserfenster die Gruppe den ganzen Tag kostet. Die
+    Ablehnung zaehlte weiter mit, mit der Begruendung, die Gruppe habe ihn
+    ja gesehen.
+
+    **Seit dem 20.09.2026 zaehlt auch sie nicht** (Regel 3/4 des Nutzers).
+    Die alte Begruendung trifft auf die Moderation zu - auf einen Kommentar,
+    den Facebook gar nicht erst angenommen hat, trifft sie nicht: Er stand
+    dort nie. Gezaehlt wird, was wirklich in der Gruppe steht.
+
+    Der Schutz wandert damit nur: Was die Gruppe ablehnt, beschraenkt sie
+    ueber ``qualifikation.Beobachtung``; was das Konto bremst, faengt
+    ``Ausgangsart.RATE_LIMIT`` mit seinem Backoff ab.
     """
     from fbgroups.marketing.models import Campaign, CampaignGroup, PostVersuch
     from fbgroups.marketing.qualifikation import Ablehnungsgrund
@@ -263,5 +272,14 @@ def test_ein_technischer_fehlschlag_verbraucht_kein_tageskontingent(tmp_path) ->
 
         gezaehlt = store.versuche_heute_je_gruppe(heute, "kommentar")
 
+        # Und die Gegenprobe: Ein **erfolgreicher** Kommentar zaehlt sehr
+        # wohl - sonst pruefte dieser Test nur, dass nichts gezaehlt wird.
+        erfolgreich = store.beginne_versuch(
+            PostVersuch(campaign_id="k", group_id="g-abgelehnt", texttyp="kommentar", nummer=2)
+        )
+        store.beende_versuch(erfolgreich, erfolg=True)
+        nach_erfolg = store.versuche_heute_je_gruppe(heute, "kommentar")
+
     assert gezaehlt.get("g-technik", 0) == 0, "Technik ist kein Urteil ueber die Gruppe"
-    assert gezaehlt.get("g-abgelehnt") == 1, "die Gruppe hat ihn gesehen"
+    assert gezaehlt.get("g-abgelehnt", 0) == 0, "abgelehnt heisst: stand nie in der Gruppe"
+    assert nach_erfolg["g-abgelehnt"] == 1, "ein veroeffentlichter Kommentar zaehlt"

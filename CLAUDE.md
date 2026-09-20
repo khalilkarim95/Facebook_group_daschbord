@@ -2066,6 +2066,63 @@ weder Netz noch Datenbank noch Playwright, wie `kaltmodus.py` und
   Form. Ohne das wäre die Auswahlregel nur noch mit Browser prüfbar — genau
   das soll die Aufteilung verhindern.
 
+### SUCCESS zaehlt, FAILED nicht (20.09.2026)
+
+```
+SUCCESS         -> Tagesmenge +1, Gruppenmenge +1, Takt abwarten
+FAILED/SKIPPED  -> nichts zaehlen, kein Takt, sofort zur naechsten Gruppe
+```
+
+Zehn Regeln des Nutzers, und ihr Kern ist eine einzige Unterscheidung: **Ein
+Kommentar zaehlt erst, wenn er wirklich in der Gruppe steht.** Vier davon
+waren bereits erfuellt (10 je Gruppe, Gruppe ueberspringen, naechste Kampagne,
+nie den ganzen Lauf beenden); vier waren verletzt, alle an derselben Wurzel.
+
+- **`versuche_heute` und `versuche_heute_je_gruppe` zaehlen `erfolg = 1`.**
+  Bis dahin zaehlte jeder Versuch ausser dem technischen Fehlschlag, und die
+  Begruendung lautete: Ein abgelehnter Kommentar sei trotzdem einer gewesen,
+  den die Gruppe gesehen hat. Das trifft auf die **Moderation** zu — auf einen
+  Kommentar, den Facebook gar nicht erst angenommen hat, trifft es nicht: Er
+  stand dort nie. Die Tagesmenge einer Gruppe dafuer zu verbrauchen ist
+  dieselbe Verwechslung, an der am 14.09.2026 24 Gruppen mit je einem
+  Kommentar im Bericht standen.
+- **`letzter_versuch` liefert nur den juengsten *erfolgreichen* Versuch.** Das
+  war der teuerste Leerlauf des Laufs: Ein Kommentar, den Facebook nicht
+  annahm, hielt den naechsten volle zehn bis zwanzig Minuten auf, obwohl
+  nichts hinausgegangen war. Eine Gruppe, in der gerade nichts geht, kostete
+  so eine Viertelstunde je Fehlschlag. Der Takt ist der Abstand zwischen zwei
+  Dingen, die **in einer Gruppe stehen**; wo nichts steht, gibt es nichts
+  abzuwarten.
+- **Der Schutz ist nicht weg, er wandert.** Der alte Einwand („nach zwanzig
+  Fehlschlaegen mit voller Portion weiterzumachen ist leichtsinnig") bleibt
+  richtig und ist woanders aufgehoben: `Ausgangsart.RATE_LIMIT` pausiert die
+  Aktion mit einem Backoff, der sich verdoppelt und den Neustart ueberlebt,
+  sobald Facebook selbst sagt, dass es zu viel wird; `_Technikwaechter`
+  beendet den Lauf, wenn der Rechner nicht mehr mitmacht; und was die Gruppe
+  ablehnt, beschraenkt sie ueber `qualifikation.Beobachtung`. Was entfaellt,
+  ist allein das **stille** Verbrauchen der Tagesmenge durch etwas, das nie in
+  einer Gruppe stand.
+- **Eine Ablehnung legt die Gruppe fuer diesen Lauf beiseite** (Regel 5).
+  Vorher kam sie gleich wieder an die Reihe, nur mit einer anderen Fassung: In
+  einer Gruppe, die gerade nichts annimmt, verbrauchte der Lauf so eine
+  Fassung nach der anderen, bis sie als **erschoepft** galt — ein dauerhaftes
+  Urteil aus einer einzigen Stunde. `gruppe_beiseite` ist kein Urteil: Es gilt
+  fuer diesen Lauf, morgen wird die Gruppe neu beurteilt. Technische
+  Fehlschlaege wurden schon vorher so behandelt; neu ist, dass die Ablehnung
+  denselben Weg geht — nur der Grund im Protokoll ist ein anderer.
+- **Was das bedeutet, wenn der Tag schlecht laeuft:** Ein Lauf mit 200
+  Fehlschlaegen hat danach immer noch seine vollen 100 Kommentare uebrig, und
+  keiner der 200 hat ihn gebremst. Das ist ausdruecklich so gewollt — die
+  Bremse kommt jetzt von der Gegenseite (`RATE_LIMIT`) und nicht mehr von der
+  eigenen Buchhaltung.
+- **Die Zahlen stehen in `settings.yaml`**: `limits.comments.daily: 100`
+  (harte Obergrenze, Regel 2/10), `limits.comments.je_gruppe_taeglich`,
+  `delays.comment`. Zehn je Gruppe und Kampagne ist dagegen
+  `lauf.ZIEL_JE_GRUPPE` und zaehlt **veroeffentlichte** Fassungen aus
+  `campaign_group_texte.status` — ein Fehlschlag bringt eine Gruppe damit nie
+  naeher an ihre zehn.
+- Festgehalten in `tests/test_kommentarregeln.py`, eine Regel je Test.
+
 ### Kampagnenzustände: „gerade geht nichts" ist nicht „fertig"
 
 - **`Kampagnenfortschritt.abgeschlossen` steht neben `fertig`.** `fertig`
