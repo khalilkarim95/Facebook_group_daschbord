@@ -2278,7 +2278,12 @@ Buchhaltung der Kampagne, und sie stand bis dahin in jedem Beitrag.
   `test_der_alte_lange_link_funktioniert_weiter`.
 - **Fehlt der Kurzcode, geht die lange Adresse hinaus.** Der Rueckfall ist
   Absicht: Ein Datensatz aus der Zeit davor soll einen Beitrag bekommen, der
-  funktioniert, und nicht einen ohne Link.
+  funktioniert, und nicht einen ohne Link. **Seit dem 20.09.2026 sagt der Lauf
+  es aber** (`automatik._fuehre_schritt_aus`): Genau dieser Rueckfall ist der
+  einzige Weg, auf dem "FB-SYR-BER-010-B" in eine Gruppe kommt - also die
+  lange rohe Adresse, die dort nichts zu suchen hat. Ohne die Meldung faellt
+  es erst auf, wenn der Beitrag steht; nachgetragen wird es mit
+  `campaign kurzlinks`.
 - **Der Vorspann kommt aus der gespeicherten Tracking-Adresse**, nicht aus
   `app_base_url`: Beide Adressen desselben Paares sollen auf denselben Dienst
   zeigen. `refresh-urls` stellt deshalb alle **vier** um — nur die Haelfte

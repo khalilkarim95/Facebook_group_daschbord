@@ -104,6 +104,74 @@ def test_die_karte_nennt_die_app_und_nicht_den_store(client: TestClient) -> None
         assert "play.google.com" not in zeile
 
 
+def test_auch_der_kurzcode_bekommt_die_karte(bestand: Path, client: TestClient) -> None:
+    """**Die Luecke, die dieser Test schliesst.**
+
+    Geprueft war bisher allein der innere Code (``FB-SYR-DUE-004``). In einen
+    Beitrag geht aber der **Kurzcode** - ``url_fuer`` setzt ihn ein, sobald es
+    einen gibt. Baute der Dienst die Karte nur fuer die lange Form, saehe die
+    Testreihe gruen aus, waehrend in der Gruppe eine nackte Adresse stuende:
+    Ohne Karte ueberspringt ``post_to_group`` das Verbergen
+    (``if karte and link_verbergen``), und die Adresse bleibt im Text.
+    """
+    with MarketingStore(bestand) as store:
+        link = store.link_for(KAMPAGNE, GID)
+
+    assert link.public_code, "add_link vergibt keinen Kurzcode mehr"
+    assert link.public_code != link.tracking_code
+
+    antwort = client.get(f"/r/{link.public_code}", headers=ABRUFER)
+
+    assert antwort.status_code == 200, "der Kurzcode bekommt keine Vorschauseite"
+    for angabe in ("og:title", "og:description", "og:image", "og:site_name"):
+        assert f"property='{angabe}'" in antwort.text
+
+
+def test_die_karte_traegt_das_app_logo(client: TestClient, config) -> None:
+    """Ohne Bild zeigt Facebook gar keine Karte - und dann bleibt die Adresse.
+
+    Das ist die stillste Stelle der ganzen Kette: Steht in
+    ``marketing.vorschau.bild`` nichts oder etwas Unerreichbares, entsteht
+    keine Karte, ``_link_verbergen`` laeuft nie, und im Beitrag steht die
+    lange Adresse - ohne dass irgendwo ein Fehler gemeldet wuerde.
+    """
+    bild = str(config.get("marketing", "vorschau", "bild", default="") or "")
+
+    assert bild.startswith("http"), "ohne og:image baut Facebook keine Karte"
+    assert f"og:image' content='{bild}'" in client.get(f"/r/{CODE}", headers=ABRUFER).text
+
+
+def test_der_kurzcode_wird_in_den_text_gesetzt_nicht_das_aktenzeichen() -> None:
+    """Was im Beitrag steht, ist der Deckname - nicht die Buchhaltung.
+
+    ``FB-SYR-BER-010-B`` nennt jedem Leser Kanal, Zielgruppe, Stadt und
+    laufende Nummer. Der Rueckfall auf diese Form ist Absicht (ein Beitrag
+    ohne Link waere schlimmer), aber er ist der Grund, aus dem eine lange
+    rohe Adresse in einer Gruppe landen kann - der Lauf warnt seit dem
+    20.09.2026 davor.
+    """
+    lang = "FB-SYR-BER-010-B"
+    ohne = CampaignGroup(
+        campaign_id="k",
+        group_id="1",
+        tracking_code=lang,
+        tracking_url=f"https://go.b-tarikak.de/r/{lang}",
+    )
+    mit = CampaignGroup(
+        campaign_id="k",
+        group_id="1",
+        tracking_code=lang,
+        tracking_url=f"https://go.b-tarikak.de/r/{lang}",
+        public_code="bp3g3fq",
+        public_url="https://go.b-tarikak.de/r/bp3g3fq",
+    )
+
+    assert ohne.url_fuer("store").endswith(lang)
+    assert mit.url_fuer("store").endswith("bp3g3fq")
+    # Die Auswertung laeuft in beiden Faellen unter dem inneren Code.
+    assert mit.code_fuer("store") == lang
+
+
 def test_og_url_bleibt_die_zaehlende_adresse(client: TestClient) -> None:
     """Zeigte sie auf das Ziel, fuehrte die Karte an der Zaehlung vorbei."""
     seite = client.get(f"/r/{CODE}", headers=ABRUFER).text

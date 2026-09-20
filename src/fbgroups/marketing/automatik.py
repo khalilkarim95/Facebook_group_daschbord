@@ -940,6 +940,17 @@ def _text_schritt(
         # ``{link}`` - und braucht dieselbe Adresse. Ohne sie stand am
         # 14.09.2026 "{link}" woertlich in einem Kommentar.
         link_url = link.url_fuer(ziel)
+        # **Ohne Kurzcode geht die Buchhaltung hinaus.** ``url_fuer`` faellt
+        # auf den inneren Code zurueck, und der nennt jedem Leser Kanal,
+        # Zielgruppe, Stadt und laufende Nummer ("FB-SYR-BER-010-B"). Das ist
+        # kein Fehlschlag - ein Beitrag ohne Link waere schlimmer -, aber es
+        # ist genau die lange rohe Adresse, die im Beitrag nichts zu suchen
+        # hat. Gesagt wird es hier, weil es sonst erst auffaellt, wenn der
+        # Beitrag in der Gruppe steht; nachgetragen wird es mit
+        # ``campaign kurzlinks``.
+        ohne_kurzcode = bool(link_url) and link.oeffentlicher_code_fuer(
+            ziel
+        ) == link.code_fuer(ziel)
         wartezeit = _wartezeit(store, kaltmodus_aktiv, abstand)
 
     gruppe = gruppen.get(schritt.group_id)
@@ -954,6 +965,14 @@ def _text_schritt(
         f"[bold]{schritt.gruppe_name}[/bold] - {_zweck(schritt)} "
         f"{schritt.kommentar_nr}/{schritt.kommentar_ziel} (Fassung {schritt.nummer})"
     )
+
+    if ohne_kurzcode:
+        console.print(
+            f"[yellow]  Kein Kurzcode - die lange Adresse geht hinaus: {link_url}[/yellow]"
+        )
+        console.print(
+            f"[dim]  Nachtragen mit: fbgroups campaign kurzlinks {schritt.campaign_id}[/dim]"
+        )
 
     if trocken:
         console.print("[dim]  --dry-run: nichts wird abgesetzt[/dim]")
