@@ -211,6 +211,83 @@ def test_ein_erfolg_legt_die_gruppe_nicht_beiseite() -> None:
     assert not ergebnis.gruppe_beiseite
 
 
+# --- Regel 5 verschaerft: raus aus der Kampagne ---------------------------
+
+
+def test_ein_technischer_fehlschlag_schliesst_die_gruppe_aus(store: MarketingStore) -> None:
+    """Anweisung vom 20.09.2026, nach einem Lauf im Kreis.
+
+    Der Uebersprung gilt nur fuer **diesen** Lauf; beim naechsten Start
+    stuende dieselbe Gruppe wieder ganz vorn. "Kein Kommentarfeld" ist dort
+    keine Eigenschaft des Browsers, sondern eine der Gruppe - wo Facebook das
+    Feld nicht anbietet, erscheint es auch beim dreissigsten Anlauf nicht.
+    """
+    vorher = store.load_marketing(GID)
+    assert vorher.bearbeiten is True
+
+    assert store.schliesse_gruppe_aus(GID, "automatisch: Kommentarfeld nicht gefunden")
+
+    nachher = store.load_marketing(GID)
+    assert nachher.bearbeiten is False
+    assert "Kommentarfeld" in nachher.ausschlussgrund
+
+
+def test_der_tracking_code_bleibt_beim_ausschluss_gueltig(store: MarketingStore) -> None:
+    """Er steht moeglicherweise in einem veroeffentlichten Beitrag.
+
+    Ein Klick darauf muss ankommen und gezaehlt werden - der Ausschluss ist
+    ein Urteil ueber unsere Arbeit, nicht ueber einen Link, der schon drausen
+    ist. Dieselbe Regel wie beim Ausschluss von Hand.
+    """
+    vorher = store.link_for(KAMPAGNE, GID)
+    store.schliesse_gruppe_aus(GID, "automatisch: kein Kommentarfeld")
+    nachher = store.link_for(KAMPAGNE, GID)
+
+    assert nachher is not None
+    assert nachher.tracking_code == vorher.tracking_code
+    assert nachher.public_code == vorher.public_code
+
+
+def test_ein_menschenurteil_wird_nicht_ueberschrieben(store: MarketingStore) -> None:
+    """Was ein Mensch hingeschrieben hat, ist die bessere Auskunft.
+
+    Sonst stuende nach dem naechsten Aussetzer "automatisch: ..." neben einer
+    Gruppe, die jemand aus einem ganz anderen Grund ausgeschlossen hat.
+    """
+    eintrag = store.load_marketing(GID)
+    eintrag.bearbeiten = False
+    eintrag.ausschlussgrund = "passt thematisch nicht"
+    store.save_marketing(eintrag)
+
+    assert store.schliesse_gruppe_aus(GID, "automatisch: kein Kommentarfeld") is False
+    assert store.load_marketing(GID).ausschlussgrund == "passt thematisch nicht"
+
+
+def test_eine_ausgeschlossene_gruppe_faellt_aus_der_kampagne(store: MarketingStore) -> None:
+    """**Der eigentliche Zweck: Die Schleife endet.**
+
+    ``links_zum_bearbeiten`` filtert ``COALESCE(gm.bearbeiten, 1) = 1`` - die
+    ausgeschlossene Gruppe steht damit nicht mehr in der Arbeitsliste der
+    Kampagne, und der naechste Schritt greift zur naechsten Gruppe. Genau das
+    fehlte, als ein Lauf dieselbe Gruppe Dutzende Male anfasste.
+
+    Geprueft wird ueber den Speicher und nicht am Datenmodell: Die Filterung
+    liegt in der Abfrage, und ein Test am ``Gruppenfortschritt`` haette den
+    Weg gar nicht beruehrt, auf dem es schiefging.
+    """
+    vorher = {link.group_id for link in store.links_zum_bearbeiten(KAMPAGNE)}
+    assert GID in vorher
+
+    store.schliesse_gruppe_aus(GID, "automatisch: Kommentarfeld nicht gefunden")
+
+    nachher = {link.group_id for link in store.links_zum_bearbeiten(KAMPAGNE)}
+    assert GID not in nachher
+    # Die uebrigen Gruppen der Kampagne bleiben - ausgeschlossen wird eine,
+    # nicht die Kampagne.
+    assert nachher == vorher - {GID}
+    assert nachher
+
+
 # --- Regel 2 und 10: hundert am Tag, harte Obergrenze ----------------------
 
 

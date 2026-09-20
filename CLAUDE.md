@@ -2123,6 +2123,46 @@ nie den ganzen Lauf beenden); vier waren verletzt, alle an derselben Wurzel.
   naeher an ihre zehn.
 - Festgehalten in `tests/test_kommentarregeln.py`, eine Regel je Test.
 
+### Ein technischer Fehlschlag schliesst die Gruppe aus (20.09.2026)
+
+```
+technischer Fehlschlag  ->  1. Uebersprung fuer DIESEN Lauf (braucht lauf_id)
+                            2. bearbeiten = 0  (braucht sie NICHT)
+```
+
+Der Anlass ist ein Lauf, der in **einer** Gruppe im Kreis lief — derselbe
+Beitrag, dieselbe Fassung 1, Dutzende Male — und mit *„12 technische
+Fehlschlaege in Folge, ueber verschiedene Gruppen hinweg"* endete, obwohl es
+nie eine zweite Gruppe gab.
+
+- **Der Ausschluss haengt nicht mehr an der Lauf-Kennung.** In `web.py` stand
+  `if meldung.gruppe_beiseite and meldung.lauf_id:` — beides in **einer**
+  Bedingung. Kommt die Kennung nicht mit, fiel damit jede Folge des
+  Fehlschlags weg, und der Server bot dieselbe Gruppe sofort wieder an. Jetzt
+  sind es zwei Schritte: Der **Uebersprung** braucht die Kennung (er gilt fuer
+  genau diesen Lauf), der **Ausschluss** nicht.
+- **`store.schliesse_gruppe_aus` ist die eine Stelle**, die beide Wege
+  benutzen — oertlich (`automatik._fuehre_schritt_aus`) und fern
+  (`POST /automatik/ergebnis`). Zwei Fassungen waeren zwei Regeln.
+- **Das hebt „Technik ist kein Urteil" teilweise auf, und das ist bewusst.**
+  Die alte Regel entstand am 11.09.2026, als ein geschlossenes Browserfenster
+  45 Gruppen als erschoepft gelten liess. Sie bleibt richtig fuer
+  `kommentar_erschoepft` — aber „kein Kommentarfeld" in derselben Gruppe beim
+  dreissigsten Anlauf ist keine Eigenschaft des Browsers mehr, sondern eine
+  der Gruppe.
+- **Ausgeschlossen, nicht geloescht** — und darin liegt der Schutz:
+  `bearbeiten = 0` ist die Achse „arbeiten wir daran?", nicht
+  `marketing_status`; dass wir Mitglied sind, bleibt stehen. Der
+  **Tracking-Code bleibt gueltig** (er steht moeglicherweise in einem
+  veroeffentlichten Beitrag). Der Grund steht daneben und ist in der
+  Uebersicht zu lesen; zuruecknehmen ist ein Haken, kein Befehl.
+- **Ein Menschenurteil wird nie ueberschrieben.** Steht die Gruppe schon auf
+  ausgeschlossen, bleibt ihr Grund stehen — „passt thematisch nicht" ist die
+  bessere Auskunft als „automatisch: ...".
+- Wirksam wird der Ausschluss ueber `links_zum_bearbeiten`, das
+  `COALESCE(gm.bearbeiten, 1) = 1` filtert: Die Gruppe faellt aus der
+  Arbeitsliste der Kampagne, und der naechste Schritt greift zur naechsten.
+
 ### Kampagnenzustände: „gerade geht nichts" ist nicht „fertig"
 
 - **`Kampagnenfortschritt.abgeschlossen` steht neben `fertig`.** `fertig`

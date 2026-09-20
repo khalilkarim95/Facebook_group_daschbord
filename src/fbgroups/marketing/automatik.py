@@ -1012,6 +1012,17 @@ def _text_schritt(
     if ergebnis.gruppe_beiseite:
         with MarketingStore(pfad) as store:
             _ueberspringen(store, lauf_id, schritt, f"technisch: {ergebnis.fehler}"[:160])
+            # **Und dauerhaft aus der Kampagne** (20.09.2026). Der Uebersprung
+            # gilt nur fuer diesen Lauf; beim naechsten Start stuende dieselbe
+            # Gruppe wieder ganz vorn. "Kein Kommentarfeld" ist dort keine
+            # Eigenschaft des Browsers, sondern eine der Gruppe.
+            if store.schliesse_gruppe_aus(
+                schritt.group_id, f"automatisch: {ergebnis.fehler}"
+            ):
+                console.print(
+                    f"[yellow]  {schritt.gruppe_name}: aus der Bearbeitung genommen "
+                    f"({ergebnis.fehler[:60]})[/yellow]"
+                )
 
     # Technische Fehlschlaege in Folge ueber **verschiedene** Gruppen: Dann
     # liegt es nicht mehr an den Gruppen. Ein Sitzungsfehler haelt sofort an.

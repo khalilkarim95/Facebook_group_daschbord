@@ -1788,16 +1788,29 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     meldung.group_id,
                     meldung.fehler or "keine Beitraege mehr",
                 )
-            if meldung.gruppe_beiseite and meldung.lauf_id:
+            if meldung.gruppe_beiseite:
                 # Gebucht ist der Ausgang bereits (oben, ueber
-                # ``melde_vorschlag``) - das hier ist die Fehlerisolierung:
-                # Die Gruppe kommt in **diesem** Lauf nicht wieder dran,
-                # damit der naechste Schritt zur naechsten Gruppe geht.
-                store.ueberspringe_gruppe(
-                    meldung.lauf_id,
-                    meldung.campaign_id,
-                    meldung.group_id,
-                    f"technisch: {meldung.fehler}"[:160],
+                # ``melde_vorschlag``) - das hier ist die Fehlerisolierung.
+                #
+                # **Zwei Stufen, und die zweite ist neu** (20.09.2026):
+                #
+                # 1. Die Gruppe kommt in **diesem** Lauf nicht wieder dran.
+                #    Das braucht die ``lauf_id``; ohne sie faellt der Vermerk
+                #    weg - und genau dann lief der Lauf in derselben Gruppe
+                #    im Kreis.
+                # 2. Sie wird **aus der Kampagne ausgeschlossen**. Das
+                #    braucht keine ``lauf_id`` und wirkt deshalb auch dort,
+                #    wo Stufe 1 ins Leere liefe. Anweisung des Nutzers nach
+                #    einem Lauf, der dieselbe Gruppe Dutzende Male anfasste.
+                if meldung.lauf_id:
+                    store.ueberspringe_gruppe(
+                        meldung.lauf_id,
+                        meldung.campaign_id,
+                        meldung.group_id,
+                        f"technisch: {meldung.fehler}"[:160],
+                    )
+                store.schliesse_gruppe_aus(
+                    meldung.group_id, f"automatisch: {meldung.fehler}"
                 )
 
             if isinstance(ergebnis, Sperre):

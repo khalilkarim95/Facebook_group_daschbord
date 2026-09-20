@@ -308,7 +308,20 @@ def test_eine_ablehnung_der_gruppe_setzt_ebenfalls_zurueck() -> None:
 # --- 6./7. Beide Laeufe legen die Gruppe beiseite --------------------------
 
 def test_beide_laeufe_legen_die_gruppe_beiseite() -> None:
-    """Eine zweite Zaehlweise waere ein zweiter Lauf mit anderem Ausgang."""
+    """Eine zweite Zaehlweise waere ein zweiter Lauf mit anderem Ausgang.
+
+    **Der Ausschluss haengt nicht an der Lauf-Kennung** (20.09.2026). Hier
+    stand bis dahin die Zeile ``if meldung.gruppe_beiseite and
+    meldung.lauf_id:`` - beides in **einer** Bedingung. Fehlt die Kennung,
+    fiel damit nicht nur der Uebersprung weg, sondern jede Folge des
+    Fehlschlags: Der Server bot dieselbe Gruppe sofort wieder an, und der
+    Lauf fasste sie Dutzende Male an, bis der Technikwaechter abbrach - mit
+    der Meldung "ueber verschiedene Gruppen hinweg", obwohl es nie eine
+    zweite gab.
+
+    Getrennt geprueft, weil es zwei Dinge sind: Der **Uebersprung** braucht
+    die Kennung (er gilt fuer genau diesen Lauf), der **Ausschluss** nicht.
+    """
     from pathlib import Path
 
     quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
@@ -316,8 +329,14 @@ def test_beide_laeufe_legen_die_gruppe_beiseite() -> None:
 
     assert "if ergebnis.gruppe_beiseite:" in quelltext, "oertlich"
     assert '"gruppe_beiseite": ergebnis.gruppe_beiseite' in quelltext, "gemeldet"
-    assert "if meldung.gruppe_beiseite and meldung.lauf_id:" in web, "auf dem Server"
-    assert "gruppe_beiseite" in web
+    assert "if meldung.gruppe_beiseite:" in web, "auf dem Server"
+    assert "if meldung.gruppe_beiseite and meldung.lauf_id:" not in web, (
+        "der Ausschluss darf nicht an der Lauf-Kennung haengen"
+    )
+
+    # Beide Wege schliessen die Gruppe aus - an derselben Stelle im Speicher.
+    assert "schliesse_gruppe_aus(" in quelltext, "oertlich ausgeschlossen"
+    assert "schliesse_gruppe_aus(" in web, "fern ausgeschlossen"
 
 
 def test_der_ausgang_wird_trotzdem_gebucht() -> None:

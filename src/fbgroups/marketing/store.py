@@ -2313,6 +2313,47 @@ class MarketingStore:
         )
         self.conn.commit()
 
+    def schliesse_gruppe_aus(self, group_id: str, grund: str) -> bool:
+        """Nimmt eine Gruppe dauerhaft aus der Bearbeitung. Returns: ob neu.
+
+        **Die Anweisung vom 20.09.2026**, und sie hebt eine aeltere Regel auf:
+        Bis dahin galt "Technik ist kein Urteil" ausnahmslos - ein technischer
+        Fehlschlag legte die Gruppe hoechstens fuer *diesen Lauf* beiseite
+        (``ueberspringe_gruppe``). Der Grund dafuer war teuer erkauft: Am
+        11.09.2026 liess ein geschlossenes Browserfenster 45 Gruppen als
+        erschoepft gelten.
+
+        Im Betrieb kippte die Abwaegung trotzdem. Ein Lauf blieb in **einer**
+        Gruppe haengen - derselbe Beitrag, dieselbe Fassung 1, Dutzende Male -
+        und endete mit "12 technische Fehlschlaege in Folge, ueber
+        verschiedene Gruppen hinweg", obwohl es nie eine zweite Gruppe gab.
+        "Kein Kommentarfeld" ist dort eben **keine** Eigenschaft des Browsers,
+        sondern eine der Gruppe: Wo Facebook das Feld gar nicht anbietet, wird
+        es auch beim dreissigsten Anlauf nicht erscheinen.
+
+        **Ausgeschlossen, nicht geloescht** - und das ist der Unterschied, der
+        die alte Sorge auffaengt:
+
+        * ``bearbeiten = 0`` ist die Achse "arbeiten wir daran?", nicht
+          ``marketing_status``. Dass wir Mitglied sind, bleibt stehen.
+        * Der **Tracking-Code bleibt gueltig**. Er steht moeglicherweise in
+          einem veroeffentlichten Beitrag, und ein Klick darauf muss ankommen.
+        * Der Grund steht dabei und ist in der Uebersicht zu lesen. Wer ihn
+          fuer falsch haelt, hakt die Zeile an und nimmt den Ausschluss
+          zurueck - ein Klick, kein Befehl.
+
+        **Ein Menschenurteil wird nie ueberschrieben.** Steht die Gruppe schon
+        auf ausgeschlossen, bleibt ihr Grund stehen: Was ein Mensch
+        hingeschrieben hat, ist die bessere Auskunft als "technisch: ...".
+        """
+        eintrag = self.load_marketing(group_id)
+        if not eintrag.bearbeiten:
+            return False
+        eintrag.bearbeiten = False
+        eintrag.ausschlussgrund = grund[:160]
+        self.save_marketing(eintrag)
+        return True
+
     def gruende_je_gruppe(self, campaign_id: str = "") -> dict[str, dict[str, int]]:
         """Je Gruppe: wie oft welche Antwort von Facebook kam.
 
