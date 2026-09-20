@@ -1446,6 +1446,35 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                         f"nur {gruppe.veroeffentlicht} von {gruppe.ziel} Kommentaren moeglich",
                     )
                     return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
+                # **Ruht noch eine Gruppe, ist der Lauf nicht durch**
+                # (20.09.2026). Vor dieser Zeile endete ein Lauf ueber
+                # zwoelf Gruppen nach zwoelf Schritten: In neun von ihnen
+                # stand gerade nichts Passendes, jede war damit fuer den
+                # ganzen Lauf beiseitegelegt - 11 von 120 Kommentaren, und
+                # die Meldung lautete "nicht vollstaendig abgeschlossen".
+                # Gewartet wird wie beim Takt: Der Treiber schlaeft und
+                # fragt erneut, und die Reihenfolge entscheidet weiterhin
+                # der Server.
+                #
+                # **Vor** dem Festschreiben: ``_stand_fortschreiben``
+                # beurteilt den Lauf, und eine ruhende Gruppe ist kein
+                # Abschluss.
+                if ruhend := store.naechste_rueckkehr(lauf_id):
+                    anzahl, wann = ruhend
+                    sekunden = automatik.ruhesekunden(wann)
+                    return JSONResponse(
+                        {
+                            "schritt": None,
+                            "weiter": False,
+                            "fertig": False,
+                            "warten": sekunden,
+                            "meldung": (
+                                f"{anzahl} Gruppe(n) ruhen - naechste in "
+                                f"{int(sekunden / 60)} Min wieder dran"
+                            ),
+                        }
+                    )
+
                 # Den Stand festschreiben, bevor die Antwort hinausgeht.
                 #
                 # Der oertliche Lauf tut das am Ende von ``fuehre_lauf_aus``;
@@ -1735,6 +1764,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         den, den der Server vorbereitet hat.
         """
         _nur_lokal(request)
+        from fbgroups.marketing import automatik
         from fbgroups.marketing.arbeit import Ergebnis, Sperre, melde_vorschlag
 
         with _store() as store:
@@ -1751,11 +1781,17 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 # gebucht zaehlte es gegen die Fassung und irgendwann gegen
                 # die Gruppe, obwohl nichts gegen sie vorliegt.
                 if meldung.lauf_id:
+                    # **Auf Zeit** (20.09.2026): "Hier steht gerade nichts
+                    # Passendes" ist keine Aussage ueber die naechste
+                    # Stunde. Als Uebersprung fuer den ganzen Lauf gebucht
+                    # war eine Kampagne mit zwoelf Gruppen nach zwoelf
+                    # Schritten zu Ende.
                     store.ueberspringe_gruppe(
                         meldung.lauf_id,
                         meldung.campaign_id,
                         meldung.group_id,
                         f"kein Anlass: {meldung.fehler}"[:160],
+                        ruhe_minuten=automatik.ruhe_minuten(cfg),
                     )
                 return JSONResponse({"ok": True, "stand": "kein_anlass"})
 
@@ -1814,11 +1850,18 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 #    wo Stufe 1 ins Leere liefe. Anweisung des Nutzers nach
                 #    einem Lauf, der dieselbe Gruppe Dutzende Male anfasste.
                 if meldung.lauf_id:
+                    # Eine tote Adresse ist kein Fehler der Gruppe: Sie ruht
+                    # und kommt zurueck. Ein technischer Fehlschlag legt sie
+                    # fuer den Lauf beiseite - sie wird gleich darunter
+                    # ohnehin aus der Kampagne genommen.
                     store.ueberspringe_gruppe(
                         meldung.lauf_id,
                         meldung.campaign_id,
                         meldung.group_id,
                         f"technisch: {meldung.fehler}"[:160],
+                        ruhe_minuten=(
+                            automatik.ruhe_minuten(cfg) if meldung.beitrag_weg else 0
+                        ),
                     )
                 # **Nicht bei einer toten Adresse.** Dieselbe Bedingung wie
                 # oertlich: Was fehlt, ist ein Beitrag, den es nicht mehr

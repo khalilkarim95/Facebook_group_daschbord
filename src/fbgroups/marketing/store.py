@@ -22,7 +22,7 @@ import json
 import secrets
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from fbgroups.marketing.kurzcode import kurzcode
@@ -319,12 +319,21 @@ CREATE TABLE IF NOT EXISTS automatik_lauf_kampagnen (
 -- In eine Spalte gezwungen waere ein abgestuerzter Browser ein Urteil ueber
 -- die Gruppe - genau die Verwechslung, an der am 11.09.2026 45 Gruppen als
 -- erschoepft galten.
+--
+-- ``wiederholen_ab`` macht aus dem Beiseitelegen eine **Ruhezeit**
+-- (20.09.2026). Vorher galt jeder Uebersprung fuer den ganzen Lauf, und bei
+-- zwoelf Gruppen war der Lauf nach zwoelf Schritten zu Ende: "kein passender
+-- Beitrag" in jeder von ihnen, 11 von 120 Kommentaren, fertig. "Heute steht
+-- hier gerade nichts Passendes" ist aber keine Aussage ueber die naechste
+-- Stunde - morgen frueh stehen dort andere Beitraege, und in einer halben
+-- Stunde oft auch. Leer (NULL) heisst weiterhin: fuer diesen Lauf erledigt.
 CREATE TABLE IF NOT EXISTS automatik_lauf_uebersprungen (
-    lauf_id     INTEGER NOT NULL,
-    campaign_id TEXT NOT NULL,
-    group_id    TEXT NOT NULL,
-    grund       TEXT NOT NULL DEFAULT '',
-    zeitpunkt   TEXT NOT NULL,
+    lauf_id       INTEGER NOT NULL,
+    campaign_id   TEXT NOT NULL,
+    group_id      TEXT NOT NULL,
+    grund         TEXT NOT NULL DEFAULT '',
+    zeitpunkt     TEXT NOT NULL,
+    wiederholen_ab TEXT,
     PRIMARY KEY (lauf_id, campaign_id, group_id),
     FOREIGN KEY (lauf_id) REFERENCES automatik_lauf(lauf_id) ON DELETE CASCADE
 );
@@ -2504,34 +2513,90 @@ class MarketingStore:
         self.conn.commit()
 
     def ueberspringe_gruppe(
-        self, lauf_id: int, campaign_id: str, group_id: str, grund: str
+        self,
+        lauf_id: int,
+        campaign_id: str,
+        group_id: str,
+        grund: str,
+        *,
+        ruhe_minuten: int = 0,
     ) -> None:
-        """Legt eine Gruppe fuer **diesen** Lauf beiseite - mit Grund.
+        """Legt eine Gruppe beiseite - fuer diesen Lauf oder auf Zeit.
 
-        Der Kern der Fehlerisolierung: Was hier steht, wird im laufenden
-        Vorgang nicht mehr angefasst, gilt aber ausdruecklich **nicht** als
-        ungeeignet. Die Zeile haengt an der ``lauf_id`` und ist mit dem
-        naechsten Lauf verschwunden.
+        Der Kern der Fehlerisolierung: Was hier steht, wird nicht mehr
+        angefasst, gilt aber ausdruecklich **nicht** als ungeeignet. Die
+        Zeile haengt an der ``lauf_id`` und ist mit dem naechsten Lauf
+        verschwunden.
 
-        Ein bestehender Eintrag wird nicht ueberschrieben: Der **erste**
-        Grund ist der aussagekraeftige - was danach kommt, sind meist Folgen.
+        ``ruhe_minuten`` macht daraus eine **Ruhezeit** (20.09.2026): Die
+        Gruppe kommt nach Ablauf von selbst zurueck in die Reihenfolge. Das
+        ist der Unterschied zwischen zwei Aussagen, die vorher dieselbe
+        Zeile schrieben:
+
+        * *"Hier ging es nicht"* - ein Fehlschlag, der der Gruppe anhaengt.
+          Ohne Ruhezeit, wie bisher.
+        * *"Hier steht gerade nichts Passendes"* - eine Aussage ueber diesen
+          Augenblick. In einer halben Stunde stehen andere Beitraege da, und
+          ein Lauf, der zwoelf Gruppen einmal ansieht und dann aufhoert,
+          schreibt elf Kommentare statt hundertzwanzig.
+
+        Ein bestehender Eintrag behaelt seinen **Grund**: Der erste ist der
+        aussagekraeftige, was danach kommt, sind meist Folgen. Die Ruhezeit
+        wird dagegen fortgeschrieben - sonst kaeme dieselbe Gruppe sofort
+        wieder, scheiterte wieder und liefe im Kreis. Eine Ruhezeit macht
+        aus einem Uebersprung **ohne** Zeit nie einen mit: "fuer diesen Lauf
+        erledigt" ist die staerkere Aussage.
         """
+        jetzt = datetime.now(UTC)
+        bis = _iso(jetzt + timedelta(minutes=ruhe_minuten)) if ruhe_minuten > 0 else None
         self.conn.execute(
             "INSERT INTO automatik_lauf_uebersprungen "
-            "(lauf_id, campaign_id, group_id, grund, zeitpunkt) VALUES (?,?,?,?,?) "
-            "ON CONFLICT (lauf_id, campaign_id, group_id) DO NOTHING",
-            (lauf_id, campaign_id, group_id, grund[:200], _iso(datetime.now(UTC))),
+            "(lauf_id, campaign_id, group_id, grund, zeitpunkt, wiederholen_ab) "
+            "VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT (lauf_id, campaign_id, group_id) DO UPDATE SET "
+            "  zeitpunkt = excluded.zeitpunkt, "
+            "  wiederholen_ab = CASE "
+            "    WHEN excluded.wiederholen_ab IS NULL THEN NULL "
+            "    WHEN automatik_lauf_uebersprungen.wiederholen_ab IS NULL THEN NULL "
+            "    ELSE MAX(automatik_lauf_uebersprungen.wiederholen_ab, "
+            "             excluded.wiederholen_ab) END",
+            (lauf_id, campaign_id, group_id, grund[:200], _iso(jetzt), bis),
         )
         self.conn.commit()
 
     def uebersprungene_gruppen(self, lauf_id: int) -> dict[tuple[str, str], str]:
-        """``(campaign_id, group_id) -> Grund`` fuer diesen Lauf."""
+        """``(campaign_id, group_id) -> Grund`` - nur die **jetzt** ruhenden.
+
+        Eine abgelaufene Ruhezeit steht weiter in der Tabelle (sie ist das
+        Protokoll dieses Laufs), zaehlt hier aber nicht mehr: Die Gruppe ist
+        zurueck in der Reihenfolge.
+        """
         rows = self.conn.execute(
             "SELECT campaign_id, group_id, grund FROM automatik_lauf_uebersprungen "
-            "WHERE lauf_id = ?",
-            (lauf_id,),
+            "WHERE lauf_id = ? AND (wiederholen_ab IS NULL OR wiederholen_ab > ?)",
+            (lauf_id, _iso(datetime.now(UTC))),
         ).fetchall()
         return {(row["campaign_id"], row["group_id"]): row["grund"] for row in rows}
+
+    def naechste_rueckkehr(self, lauf_id: int) -> tuple[int, str] | None:
+        """Wie viele Gruppen ruhen und wann die erste zurueckkommt.
+
+        Die Antwort auf die Frage, die ueber das Ende eines Laufs
+        entscheidet: *Kommt noch etwas?* Ruht auch nur eine Gruppe, ist der
+        Lauf nicht durch - er wartet. ``None`` heisst: Hier kommt nichts
+        mehr von selbst, aufhoeren ist richtig.
+
+        Returns: ``(Anzahl, Zeitpunkt der naechsten Rueckkehr)`` oder ``None``.
+        """
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS anzahl, MIN(wiederholen_ab) AS naechste "
+            "FROM automatik_lauf_uebersprungen "
+            "WHERE lauf_id = ? AND wiederholen_ab IS NOT NULL AND wiederholen_ab > ?",
+            (lauf_id, _iso(datetime.now(UTC))),
+        ).fetchone()
+        if row is None or not row["anzahl"]:
+            return None
+        return int(row["anzahl"]), str(row["naechste"])
 
     def beitrittskandidaten(self, campaign_id: str) -> list[str]:
         """Gruppen **dieser Kampagne**, an die noch keine Anfrage ging.

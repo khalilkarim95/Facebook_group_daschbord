@@ -2270,6 +2270,58 @@ aus der Kampagne nehmen und es mit der nächsten versuchen.
   Beiträge gibt es nicht mehr" unterscheiden. Eine gelöschte Adresse hätte
   damit im Regelfall (Fernbetrieb) eine gesunde Gruppe ausgeschlossen.
 
+### Eine Gruppe ohne passenden Beitrag ruht (20.09.2026)
+
+```
+kein Anlass / tote Adresse  ->  Ruhezeit (30 Min), dann wieder in der Reihe
+technischer Fehlschlag      ->  Schlussstrich fuer diesen Lauf + aus der Kampagne
+ruht noch eine Gruppe       ->  der Lauf wartet, statt sich fertig zu melden
+```
+
+Der Anlass ist ein Lauf über zwölf Gruppen, der nach **zwölf Schritten**
+aufhörte: In neun davon stand „kein passender Beitrag", und jede war damit
+für den ganzen Lauf weg — 11 von 120 Kommentaren, Meldung „nicht vollständig
+abgeschlossen". Verlangt war das Gegenteil: zwischen den Gruppen hin und her
+gehen, bis jede ihre zehn Kommentare hat, und niemals aufhören.
+
+- **`automatik_lauf_uebersprungen.wiederholen_ab`** (Migrationsschritt 24,
+  rein additiv) macht aus dem Schlussstrich eine **Ruhezeit**. `NULL` heißt
+  unverändert „für diesen Lauf erledigt" — die Bedeutung, die jede bestehende
+  Zeile hatte. Die Dauer steht in `settings.yaml`
+  (`automatik.ruhe_minuten`, 30).
+- **Zwei Aussagen, die vorher dieselbe Zeile schrieben.** „Hier ging es
+  nicht" hängt der Gruppe an; „hier steht gerade nichts Passendes" hängt dem
+  Augenblick an. Nur das Zweite ruht — in einer halben Stunde stehen dort
+  andere Beiträge. Dreißig Minuten sind die Abwägung: kürzer holt der Lauf
+  dieselbe Gruppenseite neu, ohne dass sich dort etwas geändert hätte;
+  länger steht eine Kampagne mit wenigen Gruppen still.
+- **Der erste Grund bleibt, die Ruhezeit wird fortgeschrieben.** Bliebe auch
+  sie stehen (`ON CONFLICT DO NOTHING`), käme dieselbe Gruppe sofort wieder,
+  scheiterte wieder und liefe im Kreis. Eine Ruhezeit macht aus einem
+  Schlussstrich **nie** einen zeitlichen: „für diesen Lauf erledigt" ist die
+  stärkere Aussage, sonst holte ein späteres „kein Anlass" eine
+  ausgeschlossene Gruppe zurück.
+- **`store.naechste_rueckkehr` entscheidet über das Ende des Laufs.** Ruht
+  auch nur eine Gruppe, ist er nicht durch: Beide Treiber warten (örtlich
+  `fuehre_lauf_aus`, fern über `warten` aus `/automatik/naechster`) — derselbe
+  Weg wie beim Takt. `None` heißt: Hier kommt nichts mehr von selbst,
+  aufhören ist richtig.
+- **Der Schlaf ist gedeckelt wie jeder hier** (`automatik.ruhesekunden`, eine
+  Viertelstunde, nach unten 30 Sekunden). Danach wird neu gefragt, statt
+  einer Zahl zu vertrauen, die vor einer halben Stunde gerechnet wurde.
+- **Ein Schlaf setzt den Schleifenwächter zurück** (`_Schleifenwaechter.
+  vergiss`). Er sucht einen Schritt, der sich **ohne Fortschritt**
+  wiederholt; eine Ruhezeit ist Fortschritt — die Gruppe war zwischen den
+  beiden Malen gar nicht an der Reihe. Ohne das legte er bei einer Kampagne
+  mit einer einzigen Gruppe nach vier Ruhezeiten endgültig weg.
+- **Der technische Fehlschlag ruht ausdrücklich nicht.** Dort ist der
+  Schlussstrich richtig: Die Gruppe fällt ohnehin aus der Kampagne (siehe
+  „Ein technischer Fehlschlag schliesst die Gruppe aus"). Eine **tote
+  Adresse** dagegen ruht — sie sagt nichts über die Gruppe.
+- Festgehalten in `tests/test_ruhezeit.py`; die beiden Treibertests zeigen
+  den Unterschied im Betrieb: Mit „kein Anlass" kommt die erste Gruppe ein
+  zweites Mal dran, mit „kein Kommentarfeld" nicht.
+
 ### Kampagnenzustände: „gerade geht nichts" ist nicht „fertig"
 
 - **`Kampagnenfortschritt.abgeschlossen` steht neben `fertig`.** `fertig`

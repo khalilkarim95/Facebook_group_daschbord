@@ -827,3 +827,23 @@ automatik:
   # fuehrt. Ausgeschaltet begrenzen ihn nur noch MAX_VERSUCHE_JE_FASSUNG (3)
   # und danach "erschoepft".
   mitgliedschaft_pflicht: false
+
+  # Wie lange eine Gruppe ruht, in der gerade nichts Passendes stand.
+  #
+  # Der Anlass (20.09.2026): Ein Lauf ueber zwoelf Gruppen war nach zwoelf
+  # Schritten zu Ende - in neun davon stand "kein passender Beitrag", und
+  # jede war damit fuer den ganzen Lauf beiseitegelegt. 11 von 120
+  # Kommentaren. "Hier steht gerade nichts" ist aber eine Aussage ueber
+  # diesen Augenblick; in einer halben Stunde stehen dort andere Beitraege.
+  #
+  # Die Zahl ist eine Abwaegung: Zu kurz, und der Lauf holt dieselbe
+  # Gruppenseite alle paar Minuten neu, ohne dass sich dort etwas geaendert
+  # haette; zu lang, und eine Kampagne mit wenigen Gruppen steht still.
+  # Dreissig Minuten sind ungefaehr die Zeit, in der eine lebendige Gruppe
+  # einen neuen Beitrag bekommt - und der ist der einzige Grund, es noch
+  # einmal zu versuchen.
+  #
+  # Gilt fuer "kein Anlass" und fuer eine geloeschte Beitragsadresse. Ein
+  # technischer Fehlschlag ruht NICHT: Dort wird die Gruppe aus der Kampagne
+  # genommen (siehe "Ein technischer Fehlschlag schliesst die Gruppe aus").
+  ruhe_minuten: 30

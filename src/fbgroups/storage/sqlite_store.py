@@ -22,7 +22,7 @@ from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEM
 from fbgroups.marketing.store import SCHEMA_VORSCHLAEGE as MARKETING_VORSCHLAEGE_SCHEMA
 from fbgroups.models import Group, GroupPost, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 
 def _iso_oder_none(zeitpunkt: datetime | None) -> str | None:
@@ -419,6 +419,22 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ON campaign_groups(public_code)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_groups_public_browser "
         "ON campaign_groups(public_code_browser)",
+    ),
+    # Die Ruhezeit statt des Uebersprungs fuer den ganzen Lauf (20.09.2026).
+    #
+    # Der Anlass ist ein Lauf ueber zwoelf Gruppen, der nach zwoelf Schritten
+    # endete: In neun von ihnen stand gerade nichts Passendes ("kein
+    # passender Beitrag"), und jede einzelne war damit fuer den ganzen Lauf
+    # beiseitegelegt - 11 von 120 Kommentaren, und der Lauf meldete, er sei
+    # durch. "Hier steht gerade nichts" ist aber keine Aussage ueber die
+    # naechste Stunde.
+    #
+    # Rein additiv, und die Spalte bleibt fuer alte Zeilen **leer**: NULL
+    # heisst unveraendert "fuer diesen Lauf erledigt" - die Bedeutung, die
+    # jede bestehende Zeile hatte.
+    24: (
+        MARKETING_SCHEMA,
+        "ALTER TABLE automatik_lauf_uebersprungen ADD COLUMN wiederholen_ab TEXT",
     ),
 }
 

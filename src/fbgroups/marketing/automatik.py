@@ -343,6 +343,16 @@ class _Schleifenwaechter:
         self.letzter: tuple | None = None
         self.wiederholungen = 0
 
+    def vergiss(self) -> None:
+        """Nach einem Schlaf faengt die Zaehlung neu an.
+
+        Der Waechter sucht einen Schritt, der sich **ohne Fortschritt**
+        wiederholt. Eine Ruhezeit ist Fortschritt: Die Gruppe war zwischen
+        den beiden Malen gar nicht an der Reihe.
+        """
+        self.letzter = None
+        self.wiederholungen = 0
+
     def haengt(self, schritt: lauf.Schritt) -> bool:
         kennung = (schritt.art, schritt.campaign_id, schritt.group_id, schritt.nummer)
         if kennung == self.letzter:
@@ -622,6 +632,26 @@ def fuehre_lauf_aus(
                     continue
                 if _erschoepfung_eintragen(store, fortschritt):
                     continue
+                # **Ruht noch eine Gruppe, ist der Lauf nicht durch**
+                # (20.09.2026). Der Lauf soll zwischen den Gruppen hin und
+                # her gehen, bis jede ihre zehn Kommentare hat - nicht nach
+                # einem Durchgang aufhoeren, weil gerade in keiner etwas
+                # Passendes stand.
+                ruhend = store.naechste_rueckkehr(lauf_id)
+                if ruhend and not trocken:
+                    anzahl, wann = ruhend
+                    sekunden = ruhesekunden(wann)
+                    console.print(
+                        f"[yellow]{anzahl} Gruppe(n) ruhen - naechste in "
+                        f"{int(sekunden / 60)} Min[/yellow]"
+                    )
+                    schlafen(sekunden)
+                    # Der Schlaf ist Fortschritt: Danach ist eine andere
+                    # Gruppe an der Reihe, auch wenn derselbe Schritt
+                    # herauskommt. Sonst zaehlte der Schleifenwaechter ihn
+                    # als Stillstand und legte die Gruppe endgueltig weg.
+                    waechter.vergiss()
+                    continue
                 break
 
             if waechter.haengt(schritt):
@@ -686,6 +716,45 @@ def _schlafe(sekunden: float) -> None:
     time.sleep(sekunden)
 
 
+#: Wie lange eine Gruppe ruht, in der gerade nichts Passendes stand.
+#:
+#: Die Zahl beantwortet eine Abwaegung: Zu kurz, und der Lauf holt dieselbe
+#: Gruppenseite alle paar Minuten neu, ohne dass sich dort etwas geaendert
+#: haette; zu lang, und eine Kampagne mit wenigen Gruppen steht still.
+#: Dreissig Minuten sind ungefaehr die Zeit, in der eine lebendige Gruppe
+#: einen neuen Beitrag bekommt - und der ist der einzige Grund, es noch
+#: einmal zu versuchen.
+RUHE_MINUTEN = 30
+
+
+def ruhe_minuten(config: AppConfig) -> int:
+    """Wie lange eine Gruppe ruht - aus ``settings.yaml``, sonst die Vorgabe."""
+    wert = config.get("automatik", "ruhe_minuten", default=RUHE_MINUTEN)
+    try:
+        return max(int(wert), 1)
+    except (TypeError, ValueError):
+        return RUHE_MINUTEN
+
+
+def ruhesekunden(wiederholen_ab: str, *, jetzt: datetime | None = None) -> float:
+    """Bis zur Rueckkehr der naechsten Gruppe - gedeckelt wie jeder Schlaf.
+
+    Dieselbe Obergrenze wie bei ``wartesekunden`` (eine Viertelstunde):
+    Danach wird neu gefragt, statt einer Zahl zu vertrauen, die vor einer
+    halben Stunde gerechnet wurde. Nach unten dreissig Sekunden - ein
+    Zeitpunkt, der gerade verstrichen ist, soll keine Schleife ohne Pause
+    ergeben.
+    """
+    jetzt = jetzt or datetime.now(UTC)
+    try:
+        ziel = datetime.fromisoformat(wiederholen_ab)
+    except ValueError:
+        return 60.0
+    if ziel.tzinfo is None:
+        ziel = ziel.replace(tzinfo=UTC)
+    return float(min(max((ziel - jetzt).total_seconds(), 30.0), 15 * 60))
+
+
 def wartesekunden(wartezeit: str) -> float:
     """Aus "noch 2 Min" werden 180 Sekunden - eine Minute Aufschlag.
 
@@ -700,9 +769,17 @@ def wartesekunden(wartezeit: str) -> float:
 
 
 def _ueberspringen(
-    store: MarketingStore, lauf_id: int, schritt: lauf.Schritt, grund: str
+    store: MarketingStore,
+    lauf_id: int,
+    schritt: lauf.Schritt,
+    grund: str,
+    *,
+    ruhe: int = 0,
 ) -> None:
-    """Eine Gruppe fuer diesen Lauf beiseitelegen - mit Grund und mit Ansage.
+    """Eine Gruppe beiseitelegen - mit Grund und mit Ansage.
+
+    ``ruhe`` in Minuten macht daraus eine **Ruhezeit**: Die Gruppe kommt von
+    selbst zurueck. Ohne sie gilt der Uebersprung fuer den ganzen Lauf.
 
     Bei einem Schritt ohne Gruppe (der Neubewertung) wird stattdessen die
     Bewertung als erledigt vermerkt: Sonst stuende die Kampagne bei jedem
@@ -711,8 +788,14 @@ def _ueberspringen(
     if not schritt.group_id:
         store.merke_bewertung(lauf_id, schritt.campaign_id)
         return
-    store.ueberspringe_gruppe(lauf_id, schritt.campaign_id, schritt.group_id, grund)
-    console.print(f"[yellow]  {schritt.gruppe_name}: in diesem Lauf uebersprungen[/yellow]")
+    store.ueberspringe_gruppe(
+        lauf_id, schritt.campaign_id, schritt.group_id, grund, ruhe_minuten=ruhe
+    )
+    console.print(
+        f"[yellow]  {schritt.gruppe_name}: "
+        + (f"ruht {ruhe} Min, dann wieder dran" if ruhe else "in diesem Lauf uebersprungen")
+        + "[/yellow]"
+    )
 
 
 def _fuehre_schritt_aus(
@@ -995,7 +1078,18 @@ def _text_schritt(
     if ergebnis.kein_anlass:
         console.print(f"[dim]  kein Anlass: {ergebnis.fehler}[/dim]")
         with MarketingStore(pfad) as store:
-            _ueberspringen(store, lauf_id, schritt, f"kein Anlass: {ergebnis.fehler}")
+            # **Auf Zeit, nicht fuer den ganzen Lauf** (20.09.2026). "Hier
+            # steht gerade nichts Passendes" ist eine Aussage ueber diesen
+            # Augenblick; in einer halben Stunde stehen dort andere
+            # Beitraege. Als Uebersprung fuer den Lauf gebucht war eine
+            # Kampagne mit zwoelf Gruppen nach zwoelf Schritten zu Ende.
+            _ueberspringen(
+                store,
+                lauf_id,
+                schritt,
+                f"kein Anlass: {ergebnis.fehler}",
+                ruhe=ruhe_minuten(config),
+            )
         return False
 
     # 3. SCHREIBEN: Ausgang buchen - ueber denselben Weg wie die Arbeitsseite.
@@ -1010,7 +1104,17 @@ def _text_schritt(
     # steht ausdruecklich woanders (``kommentar_erschoepft``).
     if ergebnis.gruppe_beiseite:
         with MarketingStore(pfad) as store:
-            _ueberspringen(store, lauf_id, schritt, f"technisch: {ergebnis.fehler}"[:160])
+            # Eine tote Adresse ist kein Fehler der Gruppe: Sie ruht und
+            # kommt zurueck. Ein technischer Fehlschlag legt sie dagegen
+            # fuer den Lauf beiseite - sie wird gleich darunter ohnehin aus
+            # der Kampagne genommen.
+            _ueberspringen(
+                store,
+                lauf_id,
+                schritt,
+                f"technisch: {ergebnis.fehler}"[:160],
+                ruhe=ruhe_minuten(config) if ergebnis.beitrag_weg else 0,
+            )
             # **Und dauerhaft aus der Kampagne** (20.09.2026). Der Uebersprung
             # gilt nur fuer diesen Lauf; beim naechsten Start stuende dieselbe
             # Gruppe wieder ganz vorn. "Kein Kommentarfeld" ist dort keine
@@ -2478,6 +2582,8 @@ __all__ = [
     "hole_oder_starte_lauf",
     "merke_bremse",
     "entscheide_und_kommentiere",
+    "ruhe_minuten",
+    "ruhesekunden",
     "vorgaben_lesen",
     "waehle_und_kommentiere",
     "wartesekunden",
