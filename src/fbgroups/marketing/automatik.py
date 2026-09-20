@@ -82,6 +82,10 @@ class Schrittergebnis:
     """Aus welcher Vorlage er kam (``ar/anlaesse/geschenk/hadiye``)."""
 
     gruppe_beiseite: bool = False
+    #: Diesen **Beitrag** gibt es nicht mehr. Weder ein Urteil ueber die
+    #: Gruppe noch ein technischer Fehlschlag: Die Adresse zeigt ins Leere,
+    #: und der naechste Beitrag derselben Gruppe kann gehen.
+    beitrag_weg: bool = False
     """Diese Gruppe fuer **diesen Lauf** beiseitelegen - ohne Urteil.
 
     Der Unterschied zu ``kein_anlass`` ist der Grund, nicht die Folge: Dort
@@ -1016,7 +1020,12 @@ def _text_schritt(
             # gilt nur fuer diesen Lauf; beim naechsten Start stuende dieselbe
             # Gruppe wieder ganz vorn. "Kein Kommentarfeld" ist dort keine
             # Eigenschaft des Browsers, sondern eine der Gruppe.
-            if store.schliesse_gruppe_aus(
+            # **Nicht bei einer toten Adresse.** Die Gruppe kann voellig in
+            # Ordnung sein; was fehlt, ist ein Beitrag, den es nicht mehr
+            # gibt. Sie dafuer auszuschliessen hiesse, die falsche Stelle zu
+            # bestrafen - dieselbe Verwechslung wie "Technik ist kein
+            # Urteil", nur eine Ebene tiefer.
+            if not ergebnis.beitrag_weg and store.schliesse_gruppe_aus(
                 schritt.group_id, f"automatisch: {ergebnis.fehler}"
             ):
                 console.print(
@@ -1026,7 +1035,7 @@ def _text_schritt(
 
     # Technische Fehlschlaege in Folge ueber **verschiedene** Gruppen: Dann
     # liegt es nicht mehr an den Gruppen. Ein Sitzungsfehler haelt sofort an.
-    if technik.melde(ergebnis):
+    if not ergebnis.beitrag_weg and technik.melde(ergebnis):
         console.print(f"[red]{technik.meldung()}[/red]")
         return True
     return False
@@ -1564,6 +1573,20 @@ def entscheide_und_kommentiere(
         # Fassung, nicht ihre Ausfertigung.
         letzter = replace(ergebnis, text=gewaehlter_text, vorlage_key=schluessel)
 
+        if letzter.beitrag_weg:
+            # **Diese Adresse zeigt ins Leere.** Weitergehen zum naechsten
+            # Beitrag - wie bei einem technischen Ausgang, aber ohne dessen
+            # Folgen: Er zaehlt nicht gegen den Technikwaechter und macht aus
+            # der Gruppe kein Urteil. Im Betrieb war genau das der Fall, der
+            # den Lauf Dutzende Male dieselbe geloeschte Adresse ansteuern
+            # liess - und am Ende die Gruppe dafuer bezahlen.
+            console.print(
+                "[dim]  [Ergebnis] Beitrag nicht mehr vorhanden"
+                "[/dim] [dim][Aktion] naechster Beitrag[/dim]"
+            )
+            gescheitert.add(gewaehlt.post_url)
+            continue
+
         if letzter.erfolg or letzter.gruppe_beiseite:
             return letzter
 
@@ -1587,6 +1610,18 @@ def entscheide_und_kommentiere(
             f"[/yellow] [dim][Aktion] naechster Beitrag[/dim]"
         )
         gescheitert.add(gewaehlt.post_url)
+
+    if letzter is not None and letzter.beitrag_weg:
+        # **Alle versuchten Adressen zeigen ins Leere.** Die Gruppe hat damit
+        # nichts zu tun: Ihre Beitragsliste ist bloss aelter als der Bestand.
+        # Beiseite fuer diesen Lauf, damit der naechste Schritt zur naechsten
+        # Gruppe geht - aber ausdruecklich **ohne** Ausschluss.
+        return replace(
+            letzter,
+            fehler=f"{len(gescheitert)} Beitraege nicht mehr vorhanden",
+            gruppe_beiseite=True,
+            beitrag_weg=True,
+        )
 
     if letzter is not None:
         # Alle versuchten Beitraege haben technisch nicht angenommen. Das ist
@@ -1771,6 +1806,7 @@ def _ausgang(roh, post_url: str) -> Schrittergebnis:  # noqa: ANN001
         # Gruppenlimit gilt fuer die ganze Gruppe, und drei weitere Anlaeufe
         # waeren drei sichere Fehlschlaege.
         gruppe_beiseite=bool(getattr(roh, "gruppenlimit", False)),
+        beitrag_weg=bool(getattr(roh, "beitrag_weg", False)),
     )
 
 

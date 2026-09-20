@@ -305,6 +305,67 @@ def test_eine_ablehnung_der_gruppe_setzt_ebenfalls_zurueck() -> None:
     assert waechter.folge == 0
 
 
+# --- Ein geloeschter Beitrag ist kein Fehler der Gruppe (20.09.2026) ------
+
+
+def test_ein_geloeschter_beitrag_fuehrt_zum_naechsten(config) -> None:
+    """**Der Fall aus dem Browser.**
+
+    Unter der Adresse stand "هذا المحتوى غير متوفر حاليًا" - den Beitrag gibt
+    es nicht mehr. Ohne eigene Erkennung endete das als "Kommentarfeld nicht
+    gefunden", also als Aussage ueber die **Gruppe**; der Lauf steuerte
+    dieselbe tote Adresse Dutzende Male an und bezahlte am Ende die Gruppe.
+    """
+    versucht: list[str] = []
+
+    def weg(_context, post_url: str, _text: str) -> Kommentarausgang:
+        versucht.append(post_url)
+        return Kommentarausgang(
+            False, hinweis="هذا المحتوى غير متوفر حاليًا", beitrag_weg=True
+        )
+
+    ergebnis = _kern(config, [_post("p/1"), _post("p/2"), _post("p/3")], weg)
+
+    assert len(versucht) > 1, "nach einer toten Adresse kommt die naechste"
+    assert ergebnis.beitrag_weg is True
+    assert ergebnis.erfolg is False
+
+
+def test_ein_geloeschter_beitrag_schliesst_die_gruppe_nicht_aus(config) -> None:
+    """Die Gruppe kann voellig in Ordnung sein.
+
+    Was fehlt, ist ein Beitrag - ihre Beitragsliste ist bloss aelter als
+    unser Bestand. Sie dafuer auszuschliessen hiesse, die falsche Stelle zu
+    bestrafen; deshalb traegt das Ergebnis ``beitrag_weg``, und
+    ``_fuehre_schritt_aus`` liest es, bevor es ausschliesst.
+    """
+    def weg(_context, post_url: str, _text: str) -> Kommentarausgang:
+        return Kommentarausgang(False, hinweis="content isn't available", beitrag_weg=True)
+
+    ergebnis = _kern(config, [_post("p/1"), _post("p/2")], weg)
+
+    # Beiseite fuer diesen Lauf: ja - damit der naechste Schritt zur
+    # naechsten Gruppe geht. Ausschluss: nein.
+    assert ergebnis.gruppe_beiseite is True
+    assert ergebnis.beitrag_weg is True
+
+
+def test_der_ausschluss_lieset_beitrag_weg() -> None:
+    """Der Quelltext haelt fest, dass beides zusammengehoert.
+
+    Ohne die Bedingung schloesse eine einzige geloeschte Adresse eine gesunde
+    Gruppe dauerhaft aus - und niemand saehe, warum.
+    """
+    from pathlib import Path
+
+    quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
+
+    assert "if not ergebnis.beitrag_weg and store.schliesse_gruppe_aus(" in quelltext
+    # Und der Technikwaechter zaehlt ihn nicht mit: Eine tote Adresse sagt
+    # nichts ueber den Rechner.
+    assert "if not ergebnis.beitrag_weg and technik.melde(ergebnis):" in quelltext
+
+
 # --- 6./7. Beide Laeufe legen die Gruppe beiseite --------------------------
 
 def test_beide_laeufe_legen_die_gruppe_beiseite() -> None:

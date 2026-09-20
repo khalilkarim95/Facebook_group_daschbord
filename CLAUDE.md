@@ -2123,6 +2123,34 @@ nie den ganzen Lauf beenden); vier waren verletzt, alle an derselben Wurzel.
   naeher an ihre zehn.
 - Festgehalten in `tests/test_kommentarregeln.py`, eine Regel je Test.
 
+### Ein geloeschter Beitrag ist kein Fehler der Gruppe (20.09.2026)
+
+Im Browser stand unter der Adresse **„هذا المحتوى غير متوفر حاليًا"** — den
+Beitrag gibt es nicht mehr. Kein Kommentarfeld, weil es den Beitrag nicht
+gibt. Ohne eigene Erkennung endete das als „Kommentarfeld nicht gefunden",
+also als Aussage ueber die **Gruppe**: Der Lauf steuerte dieselbe tote Adresse
+Dutzende Male an, und am Ende bezahlte die Gruppe dafuer.
+
+- **`BEITRAG_WEG` in `actions.py`** wird geprueft, **bevor** nach dem
+  Kommentarfeld gesucht wird. Die Reihenfolge ist der Punkt: „kein Feld
+  gefunden" ist sonst eine Aussage ueber unsere Suche statt ueber die Adresse
+  — dieselbe Ueberlegung wie beim Gruppenlimit.
+- **`Kommentarausgang.beitrag_weg` ist ein eigener Ausgang**, weder Erfolg
+  noch Moderation noch Technik. Er sagt nichts ueber die Gruppe, nichts ueber
+  unseren Text und nichts ueber das Konto — nur, dass diese eine Adresse ins
+  Leere zeigt.
+- **Der Schritt geht sofort zum naechsten Beitrag** (`continue`), wie bei
+  einem technischen Ausgang — aber ohne dessen Folgen: Er zaehlt **nicht**
+  gegen den `_Technikwaechter` und macht aus der Gruppe kein Urteil.
+- **Kein Ausschluss.** `_fuehre_schritt_aus` prueft `not ergebnis.beitrag_weg`,
+  bevor es `schliesse_gruppe_aus` ruft. Die Gruppe kann voellig in Ordnung
+  sein; ihre Beitragsliste ist bloss aelter als unser Bestand. Sie dafuer
+  auszuschliessen hiesse, die falsche Stelle zu bestrafen — dieselbe
+  Verwechslung wie „Technik ist kein Urteil", nur eine Ebene tiefer.
+- **Sind alle versuchten Adressen tot**, wird die Gruppe fuer diesen Lauf
+  beiseitegelegt (damit der naechste Schritt zur naechsten Gruppe geht) und
+  ausdruecklich **nicht** ausgeschlossen.
+
 ### Ein technischer Fehlschlag schliesst die Gruppe aus (20.09.2026)
 
 ```

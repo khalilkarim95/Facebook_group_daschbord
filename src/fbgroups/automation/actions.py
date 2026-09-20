@@ -417,6 +417,25 @@ AUSSTEHEND = (
 )
 
 
+#: Woran ein Beitrag zu erkennen ist, den es nicht mehr gibt - geloescht,
+#: nur noch fuer wenige sichtbar oder von der Gruppe entfernt.
+#:
+#: **Der Unterschied zu allem anderen hier ist der Gegenstand.** Diese Meldung
+#: sagt nichts ueber die Gruppe, nichts ueber unseren Text und nichts ueber
+#: das Konto - sie sagt, dass diese eine Adresse ins Leere zeigt. Ohne die
+#: Erkennung endete das als "Kommentarfeld nicht gefunden", also als Aussage
+#: ueber die Gruppe; im Betrieb hat der Lauf dieselbe tote Adresse Dutzende
+#: Male angesteuert und am Ende die Gruppe dafuer bezahlt.
+BEITRAG_WEG = (
+    "هذا المحتوى غير متوفر", "المحتوى غير متوفر", "هذا المحتوى غير متاح",
+    "content isn't available", "content is no longer available",
+    "this content isn't available right now",
+    "inhalt ist derzeit nicht verfuegbar", "inhalt ist derzeit nicht verfügbar",
+    "dieser inhalt ist nicht verfuegbar", "dieser inhalt ist nicht verfügbar",
+    "seite nicht gefunden", "page not found",
+)
+
+
 @dataclass(frozen=True)
 class Kommentarausgang:
     """Was aus einem abgeschickten Kommentar geworden ist.
@@ -441,6 +460,10 @@ class Kommentarausgang:
     hinweis: str = ""
     wartet_auf_freigabe: bool = False
     gruppenlimit: bool = False
+    #: Den Beitrag gibt es nicht mehr. Kein Urteil ueber die Gruppe und kein
+    #: technischer Fehlschlag - die Adresse zeigt ins Leere, der naechste
+    #: Beitrag derselben Gruppe kann gehen.
+    beitrag_weg: bool = False
 
 
 def _seitenhinweis(page, muster: tuple[str, ...]) -> str:
@@ -500,6 +523,13 @@ def comment_on_post(context: BrowserContext, post_url: str, text: str) -> Kommen
         # Scroll down a bit more to ensure comment box is loaded
         page.evaluate("window.scrollBy(0, 500)")
         page.wait_for_timeout(random.randint(1000, 2000))
+
+        # **Zuerst: Gibt es den Beitrag ueberhaupt noch?** Sonst endet ein
+        # geloeschter Beitrag als "Kommentarfeld nicht gefunden" - eine
+        # Aussage ueber die Gruppe, wo eine ueber die Adresse hingehoert.
+        if hinweis := _seitenhinweis(page, BEITRAG_WEG):
+            console.print(f"[yellow]Diesen Beitrag gibt es nicht mehr: {hinweis}[/yellow]")
+            return Kommentarausgang(False, hinweis=hinweis, beitrag_weg=True)
 
         console.print("Looking for the comment box...")
         # Dieselbe Falle wie beim Beitrag, nur umgekehrt herum: ``.last`` nahm
