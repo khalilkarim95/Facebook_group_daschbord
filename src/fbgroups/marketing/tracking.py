@@ -4,15 +4,18 @@ Aufbau eines Codes: ``FB-SYR-BER-001``
 
 ===========  ==================================================
 ``FB``       Kanal - hier immer Facebook
-``SYR``      Zielgruppe der Gruppe (aus ``config/audiences.yaml``)
-``BER``      Stadt der Gruppe (aus ``config/cities.yaml``)
+``SYR``      Zielgruppe der Gruppe (``audience_tags`` im Bestand)
+``BER``      Stadt der Gruppe (``city`` im Bestand)
 ``001``      laufende Nummer innerhalb der Kampagne je Kuerzel-Paar
 ===========  ==================================================
 
-Die Kuerzel stehen nicht im Code: Sie kommen aus dem optionalen Feld ``code``
-der Konfiguration, sonst aus den ersten drei Buchstaben der Kennung. Eine neue
-Stadt bringt damit ihr Kuerzel selbst mit - so wie eine neue Stadt auch sonst
-ohne Codeaenderung dazukommt.
+Die Kuerzel stehen nicht im Code: Sie entstehen aus den ersten drei Buchstaben
+dessen, was an der Gruppe steht. Bis zum 20.09.2026 kam zuerst ein optionales
+Feld ``code`` aus ``audiences.yaml``/``cities.yaml`` zum Zug; beide Dateien
+sind mit der Entdeckungsschicht entfernt, und damit ist die Angabe an der
+Gruppe die einzige Quelle. Wer ein bestimmtes Kuerzel will, schreibt den Tag
+bzw. den Stadtnamen entsprechend - eine zweite Tabelle dafuer waere eine
+zweite Wahrheit ueber dieselbe Gruppe.
 
 Der fertige Code ist unveraenderlich. Er steht in veroeffentlichten Beitraegen;
 eine spaetere Neuberechnung wuerde alte Links auf eine andere Gruppe zeigen
@@ -46,30 +49,24 @@ def _kuerzel(rohwert: str, laenge: int = 3) -> str:
     return sauber[:laenge].upper()
 
 
-def audience_code(group: Group, config: AppConfig) -> str:
+def audience_code(group: Group) -> str:
     """Kuerzel der Zielgruppe einer Gruppe."""
     if not group.audience_tags:
         return FALLBACK_AUDIENCE
-    tag = group.audience_tags[0]
-    audience = config.audiences.get(tag)
-    eigenes = getattr(audience, "code", "") if audience else ""
-    return _kuerzel(eigenes or tag)
+    return _kuerzel(group.audience_tags[0])
 
 
-def city_code(group: Group, config: AppConfig) -> str:
+def city_code(group: Group) -> str:
     """Kuerzel der Stadt einer Gruppe."""
     if not group.city:
         return FALLBACK_CITY
-    for city in config.cities.values():
-        if city.name_de == group.city:
-            return _kuerzel(getattr(city, "code", "") or city.id)
     return _kuerzel(group.city)
 
 
 def code_prefix(group: Group, config: AppConfig) -> str:
     """Der Teil des Codes ohne laufende Nummer, z. B. ``FB-SYR-BER``."""
     kanal = str(config.get("marketing", "tracking", "prefix", default=DEFAULT_PREFIX))
-    return "-".join([_kuerzel(kanal, 4), audience_code(group, config), city_code(group, config)])
+    return "-".join([_kuerzel(kanal, 4), audience_code(group), city_code(group)])
 
 
 def next_tracking_code(

@@ -1,29 +1,40 @@
 # Facebook Groups Finder – Germany
 
-Findet öffentlich auffindbare Facebook-Gruppen, die für Marketing-Kooperationen
-in Deutschland relevant sind. Erster Zielmarkt: syrische und arabische
-Communities.
+Verwaltet Facebook-Gruppen für Marketing-Kooperationen in Deutschland.
+Zielmarkt: syrische und arabische Communities.
 
-**Phase 1 (umgesetzt):** Import manuell gesammelter Gruppen-URLs, Normalisierung,
-Deduplizierung, Klassifikation nach Zielgruppe/Stadt/Kategorie, Priorisierung,
-SQLite-Bestand und Excel-/CSV-Export.
+Der Bestand wird **gepflegt**, nicht mehr gesucht: Gruppe, Stadt, Kategorie und
+Zielgruppe stehen in der Datenbank und werden von Hand oder über die Übersicht
+gesetzt. Darauf setzt die Marketing-Erweiterung auf — Kampagnen, Tracking-Codes,
+Textvorlagen, Arbeitsseite und Kommentarautomatik.
+
+> **Entfernt am 20.09.2026 — die Entdeckungsschicht.** Suche, Suchanbieter,
+> Anfragepläne, Klassifikation aus Begriffslisten, Seed-Import, Gruppenseiten-
+> Abruf, Bericht und Export sind aus dem Projekt genommen, ebenso die fünf
+> Konfigurationsdateien, an denen sie hingen (`audiences.yaml`, `cities.yaml`,
+> `categories.yaml`, `queries.yaml`, `providers.yaml`). Was davon noch gebraucht
+> wurde, ist in `settings.yaml` bzw. in den Bestand gezogen — nichts wurde
+> nachgebaut.
 
 ## Projektgrenzen
 
 Diese Grenzen sind bewusst gesetzt und im Code verankert:
 
 - Erfasst werden ausschließlich **öffentliche Angaben zur Gruppe selbst**
-  (Name, URL, Beschreibungsausschnitt, ungefähre Mitgliederzahl).
-- **Keine** Mitglieder- oder Admindaten, keine Profil-URLs, keine Beitragsinhalte,
-  keine Kontaktdaten. Das Datenmodell hat dafür keine Felder.
-- **NEU:** Automatisches Posten und Kommentieren wird über Playwright-Browser-Automatisierung unterstützt (Kommando `fbgroups campaign auto`).
-- Beitragsinhalte, Mitglieder- oder Admindaten werden beim regulären Import *nicht* erfasst.
+  (Name, URL, Beschreibungsausschnitt, ungefähre Mitgliederzahl, Sichtbarkeit).
+- **Keine** Mitglieder- oder Admindaten, keine Profil-URLs, keine
+  Beitragsinhalte, keine Kontaktdaten. Das Datenmodell hat dafür keine Felder;
+  `GroupPost` hat kein Textfeld, und `upsert_group_posts` könnte einen Text gar
+  nicht speichern.
+- Automatisches Posten und Kommentieren wird über Playwright unterstützt und
+  läuft **sichtbar** (`headless=False`). Kein stiller Login, keine Umgehung von
+  Sperren.
 
 ## Installation
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,web]"
 .\.venv\Scripts\playwright install chromium
 ```
 
@@ -34,40 +45,18 @@ $env:PYTHONIOENCODING="utf-8"          # nötig für arabische Ausgabe im Termin
 $py = ".\.venv\Scripts\python.exe"
 
 & $py -m fbgroups.cli config-check                 # Konfiguration prüfen
-& $py -m fbgroups.cli import-seeds                 # alle Dateien aus data/seeds/
-& $py -m fbgroups.cli import-seeds meine.csv       # gezielt eine Datei
-& $py -m fbgroups.cli import-seeds --dry-run       # nur anzeigen, nichts speichern
-& $py -m fbgroups.cli report --top 20              # Bestand auswerten
-& $py -m fbgroups.cli export --format both         # Excel + CSV
-& $py -m fbgroups.cli queries --all                # geplante Suchanfragen ansehen
-& $py -m fbgroups.cli auth login                   # Browser-Session fuer Automatisierung starten
-& $py -m fbgroups.cli campaign auto <id> <group>   # Automatisiert (mit Tracking!) posten
+& $py -m fbgroups.cli auth login                   # Browser-Sitzung anlegen
+& $py -m fbgroups.cli serve --port 3000            # Übersicht und Tracking-Links
+& $py -m fbgroups.cli campaign --help              # Kampagnen
+& $py -m fbgroups.cli marketing --help             # Arbeitsstand, Auswertung
 ```
 
-Nach `pip install -e .` steht zusätzlich der Befehl `fbgroups` direkt zur Verfügung.
-
-## Seed-Dateien
-
-Ablage in `data/seeds/`. Zwei Formate:
-
-**CSV** – Pflichtspalte `url`, optional `name`, `member_count`, `description`,
-`privacy`, `notes`. Deutsche Spaltennamen (`Link`, `Gruppenname`, `Mitglieder`, …)
-werden ebenfalls erkannt, Trennzeichen `;` `,` und Tab automatisch.
-
-```csv
-url;name;member_count;privacy
-https://www.facebook.com/groups/123456789;Syrer in Berlin;12.400;public
-```
-
-**TXT** – eine URL pro Zeile, `#` leitet einen Kommentar ein.
-
-Mitgliederzahlen werden in vielen Schreibweisen verstanden: `12500`, `12.500`,
-`12,5k`, `3 Mio`, `ca. 4.200 Mitglieder`.
+Nach `pip install -e .` steht zusätzlich der Befehl `fbgroups` direkt zur
+Verfügung. Die Kampagnenbefehle sind in `CLAUDE.md` vollständig beschrieben.
 
 ## Validierung, Status und Score
 
-Jede importierte Zeile durchläuft eine Prüfung. Es wird nichts geraten und
-nichts ergänzt — fehlende Angaben bleiben `unknown`.
+Es wird nichts geraten und nichts ergänzt — fehlende Angaben bleiben `unknown`.
 
 **Validation Status** (Prüfung der URL):
 
@@ -76,40 +65,50 @@ nichts ergänzt — fehlende Angaben bleiben `unknown`.
 | `valid` | Kennung wirkt wie eine echte Gruppen-ID |
 | `test_data` | offensichtlicher Platzhalter (`123456789…`, `testgruppe`, `example…`) |
 | `invalid` | keine verwertbare Kennung |
+| `unreachable` | ein Mensch hat die Gruppe im Browser als tot befunden |
 
 Die Prüfung ist rein strukturell — es wird **nicht** bei Facebook nachgefragt,
 ob die Gruppe existiert. `test_data` ist ein begründeter Verdacht, keine
 Existenzaussage. Solche Zeilen werden markiert, nicht gelöscht.
 
-**Status** (Gesamteinordnung, erster zutreffender Fall gewinnt):
-`invalid` → `insufficient_data` → `duplicate` → `validated`.
-
 **Data Quality**: `none` (nur URL), `minimal` (1–2 Felder), `partial` (3–4),
-`complete` (ab 5).
+`complete` (ab 5). Gezählt werden nur **erhobene** Felder.
 
 **Score**: eine Zahl von 0–100 — oder **leer**, wenn die Datenlage nicht reicht.
-Einen Ersatzwert gibt es bewusst nicht; die Spalte *Score Reason* nennt für jede
-Zeile den Grund. Voraussetzung für eine Bewertung sind ein Gruppenname **und**
-mindestens ein weiteres Signal (Zielgruppe, Stadt oder Mitgliederzahl).
+Einen Ersatzwert gibt es bewusst nicht; `score_reason` nennt für jede Zeile den
+Grund, und `score_max` das bei dieser Datenlage Erreichbare. Fehlende
+Bestandteile senken `score_max`, statt mit Null bewertet zu werden — und es
+wird **nicht** hochgerechnet.
 
-Fehlende Bestandteile werden aus der Rechnung ausgeklammert, nicht mit Null
-bewertet: Ist die Mitgliederzahl unbekannt, wird über die verbleibenden
-Gewichte normiert. Eine fehlende Angabe ist damit weder Bonus noch Strafe.
+| Bestandteil | Punkte | Grundlage |
+|---|---:|---|
+| `members` | 25 | Mitgliederzahl, logarithmisch gestuft |
+| `activity` | 25 | erhobene Zahl, sonst gemessene Resonanz |
+| `category` | 20 | Haupt- und Nebenkategorien aus dem Bestand |
+| `location` | 15 | Stadt, sonst Bundesland, sonst Land |
+| `target_audience` | 15 | Zielgruppen-Tags aus dem Bestand |
+
+Neu bewertet wird beim Kampagnenlauf (`rescoring.bewerte_neu`); einen eigenen
+`rescore`-Befehl gibt es nicht mehr.
 
 ## Konfiguration
 
 Alles Fachliche liegt in `config/` – Codeänderungen sind dafür nicht nötig:
 
-| Datei | Inhalt |
-|---|---|
-| `settings.yaml` | Scoring-Gewichte, Dedupe-Schwellen, Pfade |
-| `audiences.yaml` | Zielgruppen mit Begriffen in de / ar / translit |
-| `cities.yaml` | Städte mit arabischem Namen, Bundesland, Einwohnerzahl |
-| `categories.yaml` | Themenkategorien (Jobs, Wohnen, Community …) |
-| `queries.yaml` | Suchanfragen für Phase 2 |
+| Datei | Inhalt | Pflicht |
+|---|---|---|
+| `settings.yaml` | Scoring-Gewichte, Pfade, Grenzen je Aktion, Zielpriorität | ja |
+| `textvorlagen.yaml` | Beitrags- und Kommentarvorlagen, Anlasstexte | nein |
+| `rewards.yaml` | Prämienregeln (liest `marketing/rewards.py` selbst) | nein |
 
-**Ausweitung** erfolgt über das Feld `phase`: `phase: 2` → `phase: 1` schaltet
-weitere Zielgruppen oder Städte frei.
+Zielgruppen, Städte und Kategorien stehen **nicht mehr** in der Konfiguration,
+sondern am Datensatz der Gruppe (`audience_tags`, `city`, `category`). Wer eine
+lesbare Beschriftung will, schreibt sie dorthin — eine Tabelle daneben wäre
+eine zweite Wahrheit über dieselbe Gruppe.
+
+Schlüssel (`APP_BASE_URL`, `EVENTS_TOKEN`, `UEBERSICHT_TOKEN`) stehen
+**ausschließlich** in `.env`, nie in einer Konfigurationsdatei. Vorlage:
+`.env.example`.
 
 ## Tests
 
@@ -120,96 +119,3 @@ weitere Zielgruppen oder Städte frei.
 ```
 
 Alle Tests laufen offline, ohne Netzwerk und ohne Zugangsdaten.
-
-## Automatische Suche (Phase 2)
-
-```powershell
-fbgroups providers                    # Verfügbarkeit prüfen, verbraucht nichts
-fbgroups search --dry-run             # Plan und Verbrauch, fragt nichts ab
-fbgroups search --limit 5             # höchstens 5 NEUE Anfragen
-fbgroups search --provider serper --limit 5
-fbgroups search --alle                # bis zur Obergrenze aus providers.yaml
-fbgroups search-log                   # Protokoll der bisherigen Anfragen
-```
-
-`fbgroups search` **ohne** `--limit` oder `--alle` startet nichts: ein
-vollständiger Deutschland-Scan soll nie beiläufig ausgelöst werden.
-
-**Portionsweise arbeiten** — `suche.ps1` fasst einen Durchgang zusammen
-(suchen → exportieren → Restanzeige):
-
-```powershell
-.\suche.ps1                 # ein Durchgang: höchstens 10 neue Anfragen
-.\suche.ps1 -Plan           # zeigt nur, was der nächste Durchgang täte
-.\suche.ps1 -Anfragen 5     # kleinere Portion
-.\suche.ps1 -Oeffnen        # Excel-Datei danach öffnen
-```
-
-Wiederholtes Aufrufen arbeitet die 43 geplanten Anfragen Stück für Stück ab;
-bereits beantwortete kosten nie wieder etwas. Das Skript bricht ab, wenn kein
-`SERPER_API_KEY` in `.env` steht, und gibt den Schlüssel nie aus.
-
-**Schlüssel einrichten:** `.env.example` nach `.env` kopieren und den Schlüssel
-eintragen. Danach in `config/providers.yaml` `active: serper` setzen. Ohne
-Schlüssel bleibt `active: fixture` — dann läuft die komplette Pipeline offline
-mit gespeicherten Antworten. Schlüssel stehen **ausschließlich** in `.env`,
-nie in einer Konfigurationsdatei.
-
-**Schutz vor unbeabsichtigtem Verbrauch** — mehrfach abgesichert:
-
-- Jede erfolgreiche Antwort steht dauerhaft in `data/query_cache.sqlite`.
-  Dieselbe Anfrage geht **nie zweimal** an den Dienst — auch nicht nach einem
-  Neustart. Ein zweiter Lauf verbraucht nichts.
-- `--limit N` begrenzt die **neuen** Anfragen. Bereits gespeicherte Anfragen
-  zählen nicht mit, weil sie kein Guthaben kosten.
-- `max_queries_per_run` in `config/providers.yaml` ist eine harte Obergrenze;
-  der kleinere Wert von beiden gewinnt.
-- `--dry-run` beziffert den Verbrauch **vorab** und ruft nichts ab — auch ohne
-  hinterlegten Schlüssel.
-- `fallback_chain` ist leer: kein automatischer Wechsel auf einen anderen
-  Dienst und damit auf ein anderes Guthaben.
-- Eine Taktbremse hält den Mindestabstand ein, statt in ein 429 zu laufen.
-- Ist das Guthaben aufgebraucht, endet der Lauf **geordnet** mit Protokoll,
-  statt abzustürzen.
-
-**Was protokolliert wird** (`data/query_cache.sqlite`, Tabelle `query_log`):
-Anfragetext, Zeitpunkt, Provider, Rohantwort, Erfolg oder Fehler und die
-Trefferzahl — je Ausführung, auch für Fehlschläge und Speichertreffer.
-Fehlschläge werden protokolliert, aber **nicht** zwischengespeichert: sonst
-wäre ein einzelner Netzwerkfehler tagelang bindend.
-
-Der Lauf misst zugleich die Qualität der Suchstrategie: Treffsicherheit
-(Anteil echter Gruppen-URLs), Ausbeute je Anfrage und eine Aufschlüsselung
-nach Sprache — damit ist belegbar, ob Deutsch, Arabisch oder Transliteration
-mehr bringt.
-
-## Stand der Search-Provider
-
-Stand August 2026, vor der Anbindung geprüft:
-
-| Dienst | Status | Kostenloses Kontingent |
-|---|---|---|
-| `serper` | verfügbar | 2.500 Credits einmalig, 6 Monate gültig |
-| `brave` | verfügbar | 5 $/Monat, erneuert sich (~1.000 Anfragen) |
-| `fixture` | offline | unbegrenzt, keine Anmeldung |
-| ~~Google CSE~~ | **für Neukunden geschlossen**, Abschaltung 01.01.2027 | – |
-| ~~Bing Web Search~~ | **abgeschaltet** am 11.08.2025 | – |
-
-Bei 43 Anfragen je vollständigem Lauf reichen die Gratis-Kontingente für ~58
-Läufe (Serper, einmalig) bzw. ~23 Läufe pro Monat (Brave, wiederkehrend). In
-der Praxis liegt der Verbrauch deutlich darunter: ein wiederholter Lauf fragt
-nur noch das ab, was neu hinzugekommen ist.
-
-Kein Anbieter ist tragende Säule: `ProviderCapabilities` trägt die Felder
-`state` (u. a. `closed_to_new`, `deprecated`) und `sunset_date`, damit ein
-Dienst seinen eigenen Lebenszyklus meldet und `fbgroups providers` davor warnt.
-
-Ein neuer Provider erfordert vier Schritte und keine Änderung am übrigen Code:
-Klasse implementieren, mit `@register_provider("name")` anmelden, Block in der
-Konfiguration ergänzen, gemeinsame Contract-Tests bestehen. Ein Test verhindert
-zusätzlich, dass irgendein Modul außerhalb von `providers/` anbieterspezifischen
-Code importiert.
-
-**Nicht gebaut und bewusst ausgeschlossen:** Umwege über DuckDuckGo-Bibliotheken
-oder SearxNG-Instanzen. Sie sind zwar „kostenlos", funktionieren aber durch
-Scraping fremder Suchmaschinen und verstoßen gegen deren Nutzungsbedingungen.

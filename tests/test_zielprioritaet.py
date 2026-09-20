@@ -22,11 +22,9 @@ from fbgroups.marketing.zielgruppe import Merkmale, Zielprioritaet
 # Konfiguration pruefbar.
 REGELN = zielgruppe.Regeln(
     kategorien=frozenset({"reise", "versand"}),
-    kategoriebegriffe=("Reise", "Reisen", "Flug", "Versand", "Paket", "سفر", "شحن"),
     ziele=("Syrien", "Damaskus", "سوريا", "الشام"),
     herkunft=("Deutschland", "Berlin", "المانيا"),
     audiences=frozenset({"syrians", "arabs"}),
-    audiencebegriffe=("Syrer", "Araber", "سوريين"),
 )
 
 
@@ -38,10 +36,17 @@ REGELN = zielgruppe.Regeln(
         ("Reisen Deutschland Syrien", "reise", (), None, Zielprioritaet.A),
         ("Versand nach Syrien", "versand", (), None, Zielprioritaet.A),
         ("شحن من ألمانيا إلى سوريا", "versand", (), None, Zielprioritaet.A),
-        # Auch dann A, wenn die Kategorieerkennung die Gemeinschaft gekuert
-        # hat: Der Name traegt das Thema, und "community" gewinnt nur, weil
-        # es in categories.yaml irgendwo steht.
+        # Seit dem 20.09.2026 **B** und nicht mehr A: Das Thema stand im
+        # Namen ("Reisen"), und der wurde gegen die Begriffe aus
+        # categories.yaml geprueft. Die Datei ist mit der Entdeckungsschicht
+        # entfernt; maszgeblich ist jetzt allein die Kategorie **im Bestand**,
+        # und die lautet hier "community". Wer diese Gruppe als Reisegruppe
+        # behandelt haben will, traegt "reise" am Datensatz ein - eine
+        # Angabe, die bleibt, statt bei jedem Lauf neu geraten zu werden.
         ("Syrer in Berlin - Reisen nach Damaskus", "community", ("syrians",), "Berlin",
+         Zielprioritaet.B),
+        # Mit gepflegter Kategorie ist sie weiterhin A.
+        ("Syrer in Berlin - Reisen nach Damaskus", "reise", ("syrians",), "Berlin",
          Zielprioritaet.A),
         # B: Gemeinschaft in Deutschland.
         ("Syrer in Berlin", "community", ("syrians",), "Berlin", Zielprioritaet.B),
@@ -82,11 +87,15 @@ def test_das_thema_muss_im_namen_stehen_nicht_im_beschreibungstext() -> None:
 
 
 def test_eine_nebenkategorie_zaehlt_wie_die_hauptkategorie() -> None:
-    """``classify_category`` kuert einen Sieger - das darf nicht entscheiden.
+    """Die Hauptkategorie darf nicht allein entscheiden.
 
-    Bei zwei gleich starken Treffern gewinnt der, der in ``categories.yaml``
-    weiter oben steht. Welches von beiden das ist, ist eine Eigenschaft der
-    Datei und keine der Gruppe.
+    Eine Gruppe kann als ``community`` im Bestand stehen und daneben ``reise``
+    als Nebenkategorie tragen - dann gehoert sie in den Zielmarkt. Bis zum
+    20.09.2026 kuerte ``classify_category`` die Hauptkategorie, und bei zwei
+    gleich starken Treffern gewann der Eintrag, der in ``categories.yaml``
+    weiter oben stand: eine Eigenschaft der Datei und keine der Gruppe. Die
+    Kuerung gibt es nicht mehr, die Regel bleibt - jetzt fuer von Hand
+    gepflegte Kategorien.
     """
     befund = zielgruppe.einstufe(
         Merkmale(
@@ -498,19 +507,20 @@ def test_der_link_wird_angehaengt_nicht_erfunden(config) -> None:
 
 
 # --- Die Konfiguration haelt, was sie verspricht ---------------------------
-def test_die_kategorien_der_klasse_a_gibt_es_wirklich(config) -> None:
-    """Ein Kategoriename, den es nicht gibt, ist ein Tippfehler und keine Erweiterung.
+def test_die_regel_der_klasse_a_ist_vollstaendig(config) -> None:
+    """Eine leere Liste laesst die Klasse A still verschwinden.
 
-    Dieselbe Regel wie bei einem Score-Gewicht fuer einen Bestandteil, den es
-    nicht gibt - nur faellt es hier schwerer auf: Die Klasse A verschwaende
-    still, und die Kampagne arbeitete wieder in den Gemeinschaftsgruppen.
+    Bis zum 20.09.2026 wurden Kategorien und Zielgruppen hier gegen
+    ``categories.yaml``/``audiences.yaml`` gegengeprueft. Beide Dateien sind
+    entfernt, und welche Kategorien vorkommen, weiss seither allein der
+    Bestand - der bei einem frischen Projekt leer ist. Geprueft wird deshalb,
+    was ohne Bestand pruefbar bleibt: dass ueberhaupt etwas dasteht. Den
+    Abgleich gegen den Bestand macht ``config-check``.
     """
     regeln = zielgruppe.regeln_aus_config(config)
-    vorhanden = {k.id for k in config.categories}
 
     assert regeln.kategorien, "marketing.zielprioritaet.kategorien ist leer"
-    assert regeln.kategorien <= vorhanden
-    assert regeln.audiences <= set(config.audiences)
+    assert regeln.audiences, "marketing.zielprioritaet.audiences ist leer"
     assert regeln.ziele and regeln.herkunft
 
 

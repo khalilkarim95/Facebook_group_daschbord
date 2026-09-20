@@ -175,27 +175,6 @@ class SammelZuordnenMeldung(BaseModel):
     group_ids: list[str]
 
 
-class AnreicherungErgebnis(BaseModel):
-    """Was ein Abruf **einer** Gruppenseite ergeben hat.
-
-    Ausschliesslich Zahlen und Zeitpunkte. Kein Beitragstext, kein Name eines
-    Menschen - die harte Projektgrenze gilt fuer diesen Weg wie fuer jeden
-    anderen, und ein Feld, das es nicht gibt, kann auch nicht gefuellt werden.
-
-    Jedes Feld darf fehlen, und das ist keine Nachlaessigkeit: Eine nicht
-    gefundene Zahl **loescht keine vorhandene**. Ein Anmeldefenster ist kein
-    Beleg dafuer, dass eine Gruppe geschrumpft ist.
-    """
-
-    group_id: str
-    erreichbar: bool = False
-    member_count: int | None = None
-    privacy_hint: str = ""
-    posts_per_day: float | None = None
-    activity_factor: float | None = None
-    last_post_at: str = ""
-
-
 class AutomatikStart(BaseModel):
     """Womit ein **neuer** Lauf beginnen soll.
 
@@ -1957,92 +1936,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 )
             return JSONResponse({"ok": True, "vermerkt": False})
 
-    @app.post("/automatik/anreichern/naechste")
-    def anreichern_naechste(request: Request):  # noqa: ANN202
-        """Welche Gruppen als naechste eine Mitgliederzahl brauchen - beste zuerst.
-
-        Der Server bestimmt die Reihenfolge, nicht der Arbeitsrechner: Sie
-        folgt ``sort_by_rank``, also derselben Rangfolge wie die Arbeitsliste.
-        Wird der Lauf nie zu Ende gefahren, sollen es die richtigen Gruppen
-        gewesen sein.
-        """
-        _nur_lokal(request)
-        from fbgroups.scoring import sort_by_rank
-
-        with SqliteStore(pfad) as gruppen_store:
-            groups = gruppen_store.load_groups()
-
-        # Ohne Mitgliederzahl **und** ohne Aktivitaet: Wo eines von beidem
-        # dasteht, war der Abruf schon erfolgreich.
-        offen = [
-            g
-            for g in sort_by_rank(groups)
-            if g.url_canonical and g.member_count is None and g.activity_factor is None
-        ]
-        return JSONResponse(
-            {
-                "gruppen": [
-                    {"group_id": g.group_id, "name": g.name or g.group_id, "url": g.url_canonical}
-                    for g in offen
-                ],
-                "gesamt": len(groups),
-                "offen": len(offen),
-            }
-        )
-
-    @app.post("/automatik/anreichern/ergebnis")
-    def anreichern_ergebnis(meldung: AnreicherungErgebnis, request: Request):  # noqa: ANN202
-        """Traegt Mitgliederzahl und Aktivitaet **einer** Gruppe ein.
-
-        Der Weg, der die zweite Datenbank vermeidet: Der Browser laeuft auf
-        dem Arbeitsrechner, gebucht wird dort, wo auch die Klicks gezaehlt
-        werden. Ohne ihn stuenden die Zahlen nur oertlich, und das Dashboard
-        zeigte weiter "unknown".
-
-        **Eine nicht gefundene Zahl loescht keine vorhandene.** Nur was
-        tatsaechlich dastand, wird uebernommen; der Zeitpunkt der Pruefung
-        dagegen immer - sonst liefe derselbe erfolglose Abruf bei jedem Lauf
-        erneut.
-        """
-        _nur_lokal(request)
-        from fbgroups.models import ActivitySource, MemberCountSource, PrivacyHint
-
-        jetzt = datetime.now(UTC)
-        with SqliteStore(pfad) as gruppen_store:
-            gruppe = next(
-                (g for g in gruppen_store.load_groups() if g.group_id == meldung.group_id), None
-            )
-            if gruppe is None:
-                raise HTTPException(status_code=404, detail="Gruppe unbekannt")
-
-            gruppe.member_count_checked_at = jetzt
-            gruppe.activity_checked_at = jetzt
-            gruppe.last_checked_at = jetzt
-
-            if meldung.member_count is not None:
-                gruppe.member_count = meldung.member_count
-                gruppe.member_count_source = MemberCountSource.FACEBOOK
-            if meldung.privacy_hint:
-                gruppe.privacy_hint = PrivacyHint(meldung.privacy_hint)
-            if meldung.posts_per_day is not None:
-                gruppe.posts_per_day = meldung.posts_per_day
-            if meldung.activity_factor is not None:
-                gruppe.activity_factor = meldung.activity_factor
-                gruppe.activity_confidence = 1.0
-                gruppe.activity_source = ActivitySource.FACEBOOK
-            if meldung.last_post_at:
-                gruppe.last_post_at = datetime.fromisoformat(meldung.last_post_at)
-
-            gruppen_store.upsert_groups([gruppe])
-
-        return JSONResponse(
-            {
-                "ok": True,
-                "member_count": gruppe.member_count,
-                "activity_factor": gruppe.activity_factor,
-            }
-        )
-
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
@@ -2664,14 +2557,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 ),
             )
 
-        unbekannt = [a for a in meldung.audiences if a not in cfg.audiences]
-        unbekannt += [c for c in meldung.cities if c not in cfg.cities]
-        if unbekannt:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unbekannt in der Konfiguration: {', '.join(unbekannt)}",
-            )
-
         with _store() as store:
             if store.load_campaign(kennung) is not None:
                 raise HTTPException(
@@ -2998,20 +2883,35 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         """
         _nur_lokal(request)
 
-        kategorien = {k.id for k in cfg.categories}
+        with SqliteStore(pfad) as gruppen_store:
+            groups = gruppen_store.load_groups()
+
+        # Geprueft wird gegen den **Bestand**, nicht mehr gegen
+        # ``audiences.yaml``/``cities.yaml``/``categories.yaml``: Die drei
+        # Dateien sind mit der Entdeckungsschicht entfernt. Eine
+        # Einschraenkung auf etwas, das an keiner Gruppe steht, traefe
+        # ohnehin keine - und meldete sich sonst erst als leerer Plan.
+        # Der Status bleibt eine Aufzaehlung im Code und wird weiter geprueft.
         zustaende = {s.value for s in RecordStatus}
-        unbekannt = [a for a in (meldung.audiences or []) if a not in cfg.audiences]
-        unbekannt += [c for c in (meldung.cities or []) if c not in cfg.cities]
-        unbekannt += [k for k in (meldung.categories or []) if k not in kategorien]
+        bekannte_tags = {t.lower() for g in groups for t in (g.audience_tags or [])}
+        bekannte_staedte = {(g.city or "").strip().lower() for g in groups if g.city}
+        bekannte_kategorien = {(g.category or "").strip().lower() for g in groups if g.category}
+
+        unbekannt = [
+            a for a in (meldung.audiences or []) if a.strip().lower() not in bekannte_tags
+        ]
+        unbekannt += [
+            c for c in (meldung.cities or []) if c.strip().lower() not in bekannte_staedte
+        ]
+        unbekannt += [
+            k for k in (meldung.categories or []) if k.strip().lower() not in bekannte_kategorien
+        ]
         unbekannt += [s for s in (meldung.statuses or []) if s not in zustaende]
         if unbekannt:
             raise HTTPException(
                 status_code=422,
-                detail=f"Unbekannt in der Konfiguration: {', '.join(unbekannt)}",
+                detail=f"Im Bestand nicht vorhanden: {', '.join(unbekannt)}",
             )
-
-        with SqliteStore(pfad) as gruppen_store:
-            groups = gruppen_store.load_groups()
 
         with _store() as store:
             campaign = store.load_campaign(campaign_id)
@@ -3038,7 +2938,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             campaign.updated_at = datetime.now(UTC)
             store.save_campaign(campaign)
 
-            regel = auswahl_der_kampagne(campaign, cfg)
+            regel = auswahl_der_kampagne(campaign)
             store.audit("kampagne_auswahl", campaign_id, regel.beschreibung())
 
             plan = baue_plan(

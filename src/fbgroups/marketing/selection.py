@@ -84,28 +84,20 @@ class Auswahl:
         return " · ".join(teile)
 
 
-def auswahl_der_kampagne(campaign: Campaign, config: AppConfig) -> Auswahl:
+def auswahl_der_kampagne(campaign: Campaign) -> Auswahl:
     """Liest die Regel einer Kampagne.
 
-    Die Staedte stehen in der Kampagne als Kennung (``berlin``), im Bestand
-    aber als Name (``Berlin``) - uebersetzt wird ueber ``config/cities.yaml``,
-    damit es keine zweite Liste von Stadtnamen gibt. Eine Kennung ohne Eintrag
-    in der Konfiguration wird unveraendert uebernommen, sonst verschwaende ein
-    Tippfehler die Einschraenkung stillschweigend.
+    Die Staedte werden unveraendert uebernommen. Bis zum 20.09.2026 standen
+    sie in der Kampagne als Kennung (``berlin``) und im Bestand als Name
+    (``Berlin``); uebersetzt wurde ueber ``cities.yaml``. Die Datei ist mit
+    der Entdeckungsschicht entfernt, und damit gibt es nur noch **einen**
+    Stadtnamen - den aus dem Bestand. Verglichen wird ohne Ruecksicht auf
+    Gross- und Kleinschreibung, eine Kennung aus alter Zeit (``berlin``)
+    trifft also weiterhin ``Berlin``.
     """
-    kennungen = {c.lower() for c in campaign.target_cities}
-    namen = {
-        stadt.name_de.lower()
-        for kennung, stadt in config.cities.items()
-        if kennung.lower() in kennungen
-    }
-    ohne_treffer = kennungen - {
-        kennung.lower() for kennung in config.cities if kennung.lower() in kennungen
-    }
-
     return Auswahl(
         audiences=frozenset(a.lower() for a in campaign.target_audiences),
-        cities=frozenset(namen | ohne_treffer),
+        cities=frozenset(c.strip().lower() for c in campaign.target_cities if c.strip()),
         categories=frozenset(k.lower() for k in campaign.target_categories),
         statuses=frozenset(s.lower() for s in campaign.target_statuses),
         min_score=campaign.target_min_score,
@@ -187,7 +179,7 @@ def baue_plan(
     derselben Grenze kaeme sonst nie ueber die bereits zugeordneten hinaus -
     dieselbe Ueberlegung wie bei ``--limit`` im Suchlauf.
     """
-    regel = auswahl if auswahl is not None else auswahl_der_kampagne(campaign, config)
+    regel = auswahl if auswahl is not None else auswahl_der_kampagne(campaign)
     passende = waehle_gruppen(groups, regel)
     passende_ids = {g.group_id for g in passende}
 

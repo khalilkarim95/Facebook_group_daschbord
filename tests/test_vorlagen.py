@@ -65,30 +65,47 @@ def kampagne(sprache: str = "ar", audiences: list[str] | None = None) -> Campaig
 # -- Was in den Text kommt --------------------------------------------------
 
 
-def test_stadt_und_zielgruppe_stehen_arabisch_im_text(config: AppConfig) -> None:
-    """Im Beitrag stehen die arabischen Namen, nie die deutschen aus dem Bestand.
+def test_stadt_und_anrede_kommen_aus_bestand_und_vorlagen(config: AppConfig) -> None:
+    """Woher die beiden Angaben stammen - seit dem 20.09.2026 verschoben.
 
-    Die Anrede wird an der ``Personalisierung`` geprueft und nicht am fertigen
-    Text: Seit dem 28.08.2026 sprechen die arabischen Beitragsvorlagen die
-    Zielgruppe nicht mehr an, sondern nennen ihr Reiseziel ({ziel}). Am
-    fertigen Text gemessen pruefte dieser Test damit die Vorlage und nicht die
-    Ableitung.
+    Vorher kam die Stadt als ``name_ar`` aus ``cities.yaml`` und die Anrede
+    als ``label_ar`` aus ``audiences.yaml``. Beide Dateien sind mit der
+    Entdeckungsschicht entfernt:
+
+    * Die **Stadt** steht so im Beitrag, wie sie im Bestand steht. Einen
+      arabischen Namen dafuer zu erfinden waere schlimmer als ein deutscher -
+      ein falscher Ortsname faellt erst in der fremden Gruppe auf.
+    * Die **Anrede** kommt aus ``anrede_allgemein`` in ``textvorlagen.yaml``.
+      Der blosse Tag ("syrians") taugt nicht in einem arabischen Satz.
+
+    Wer den arabischen Stadtnamen will, traegt ihn in den Bestand ein.
     """
     daten = personalisierung(gruppe(), kampagne("ar"), config)
-    assert daten.stadt == "بون"
-    assert daten.zielgruppe == "السوريين"
+    assert daten.stadt == "Bonn"
+    assert daten.zielgruppe == "الأصدقاء"
 
     _, text = erzeuge(gruppe(), kampagne("ar"), config)
-    assert "بون" in text
-    assert "Bonn" not in text
+    assert "Bonn" in text
+
+    _, text_ar = erzeuge(gruppe(city="بون"), kampagne("ar"), config)
+    assert "بون" in text_ar
+    assert "Bonn" not in text_ar
 
 
-def test_deutsche_kampagne_bekommt_das_kurze_label(config: AppConfig) -> None:
+def test_deutsche_kampagne_bekommt_die_allgemeine_anrede(config: AppConfig) -> None:
+    """Drei Beschriftungen je Zielgruppe gab es bis zum 20.09.2026.
+
+    ``label_de``, ``label_kurz_de`` und ``label_ar`` standen in
+    ``audiences.yaml``; das kurze war dafuer da, dass in einer Stadtvorlage
+    nicht "Syrer in Deutschland in Bonn" stand. Mit der Datei ist die Frage
+    weg - es gibt nur noch ``anrede_allgemein``, und die passt in beide Saetze.
+    """
+    daten = personalisierung(gruppe(), kampagne("de"), config)
+    assert daten.zielgruppe == "Freunde"
+
     _, text = erzeuge(gruppe(), kampagne("de"), config)
     assert "Bonn" in text
-    # Nicht "Syrer in Deutschland in Bonn": dafuer gibt es label_kurz_de.
     assert "Syrer in Deutschland" not in text
-    assert "Syrer" in text
 
 
 def test_der_tracking_platzhalter_bleibt_unersetzt(config: AppConfig) -> None:
@@ -126,30 +143,34 @@ def test_ein_erfundener_platzhalter_wird_abgewiesen() -> None:
 # -- Ziel, Gegenstand, Datum ------------------------------------------------
 
 
-def test_das_ziel_kommt_von_der_zielgruppe(config: AppConfig) -> None:
-    """``{ziel}`` ist ein Land, keine Anrede.
+def test_das_ziel_steht_in_den_textvorlagen(config: AppConfig) -> None:
+    """``{ziel}`` ist ein Land, keine Anrede - und kommt aus einer Quelle.
 
-    "من بون إلى السوريين" waere kein Reiseziel, sondern ein Satzfehler - die
-    Anrede steht im Genitiv Plural. Deshalb ein eigenes Feld an der
-    Zielgruppe und nicht der Rueckfall auf ``label_ar``.
+    Bis zum 20.09.2026 stand das Land je Zielgruppe in ``audiences.yaml``
+    (``ziel_ar``); seither steht es einmal in ``textvorlagen.yaml`` unter
+    ``ziel_allgemein`` und lautet dort "سوريا" - der Bestand dieses
+    Projekts sind Syrien-Strecken.
     """
     daten = personalisierung(gruppe(), kampagne("ar"), config)
     assert daten.ziel == "سوريا"
     assert daten.ziel != daten.zielgruppe
 
 
-def test_eine_zielgruppe_ohne_land_faellt_auf_den_allgemeinen_wert(
-    config: AppConfig,
-) -> None:
-    """"arabs" ist kein Reiseziel - hier greift ``ziel_allgemein``.
+def test_das_ziel_haengt_nicht_mehr_an_der_zielgruppe(config: AppConfig) -> None:
+    """Jede Gruppe bekommt dasselbe Ziel - egal, welchen Tag sie traegt.
 
-    Ein erfundenes Land waere schlimmer als ein allgemeines Wort: Es stuende
-    als Behauptung ueber die Gruppe in einem Beitrag, den 300 Menschen lesen.
+    Vorher trug "syrians" das Land "سوريا" und "arabs" gar keines. Diese
+    Unterscheidung ist mit ``audiences.yaml`` entfallen. Der Preis ist
+    benannt: Wer einen Bestand mit zwei Zielen bewirbt, braucht zwei
+    Kampagnen mit eigenen Vorlagen - nicht eine Tabelle neben dem Text.
     """
-    daten = personalisierung(
+    syrisch = personalisierung(
+        gruppe(tags=["syrians"]), kampagne("ar", audiences=["syrians"]), config
+    )
+    arabisch = personalisierung(
         gruppe(tags=["arabs"]), kampagne("ar", audiences=["arabs"]), config
     )
-    assert daten.ziel == "الوطن"
+    assert syrisch.ziel == arabisch.ziel == "سوريا"
 
 
 def test_das_datum_bleibt_beim_fuellen_stehen(config: AppConfig) -> None:
@@ -188,11 +209,20 @@ def test_gruppe_mit_stadt_bekommt_die_vorlage_mit_stadt(config: AppConfig) -> No
     assert f"/{MIT_STADT}/" in schluessel
 
 
-def test_unbekannte_stadt_gilt_als_ohne_stadt(config: AppConfig) -> None:
-    """Lieber die allgemeine Vorlage als eine erfundene Stadt im Beitrag."""
+def test_jede_eingetragene_stadt_zaehlt(config: AppConfig) -> None:
+    """Es gibt keine Liste mehr, gegen die eine Stadt geprueft werden koennte.
+
+    Bis zum 20.09.2026 musste ``Group.city`` in ``cities.yaml`` vorkommen,
+    sonst galt die Gruppe als ohne Stadt - lieber die allgemeine Vorlage als
+    ein erfundener Ortsname. Mit der Datei ist die Pruefung entfallen: Das
+    Feld wird von Hand gepflegt, und was dort steht, gilt. Leer bleibt leer.
+    """
     schluessel, text = erzeuge(gruppe(city="Atlantis"), kampagne("ar"), config)
-    assert f"/{OHNE_STADT}/" in schluessel
-    assert "Atlantis" not in text
+    assert f"/{MIT_STADT}/" in schluessel
+    assert "Atlantis" in text
+
+    ohne, _ = erzeuge(gruppe(city="   "), kampagne("ar"), config)
+    assert f"/{OHNE_STADT}/" in ohne
 
 
 # -- Beitrag und Kommentar --------------------------------------------------
@@ -264,31 +294,30 @@ def test_beide_zwecke_kennen_die_beiden_toepfe(config: AppConfig) -> None:
 # -- Die Zielgruppe ---------------------------------------------------------
 
 
-def test_die_zielgruppe_der_kampagne_gewinnt_bei_mehreren_tags(config: AppConfig) -> None:
-    """Eine Gruppe unter 'syrians' und 'arabs' in einer Syrer-Kampagne.
+def test_die_anrede_haengt_nicht_mehr_an_den_tags(config: AppConfig) -> None:
+    """Drei Faelle, eine Antwort - seit dem 20.09.2026.
 
-    Beide Tags sind richtig; die Kampagne entscheidet, welcher angesprochen
-    wird - sonst haengt die Anrede an der Reihenfolge der Klassifikation.
+    Vorher entschied eine dreistufige Ableitung, welcher Tag angesprochen
+    wird: erst ein Tag, den auch die Kampagne bewirbt, sonst der erste Tag der
+    Gruppe, sonst die erste Zielgruppe der Kampagne. Daraus wurde ueber
+    ``audiences.yaml`` eine Anrede. Ohne die Datei gibt es nichts mehr
+    abzuleiten - und einen Tag als Anrede einzusetzen ("syrians" mitten in
+    einem arabischen Satz) waere schlechter als ein allgemeines Wort.
     """
-    daten = personalisierung(
-        gruppe(tags=["arabs", "syrians"]), kampagne("ar", audiences=["syrians"]), config
-    )
-    assert daten.zielgruppe == "السوريين"
-    assert daten.ziel == "سوريا"
+    faelle = [
+        gruppe(tags=["arabs", "syrians"]),
+        gruppe(tags=["syrians"]),
+        gruppe(tags=[]),
+    ]
+    for g in faelle:
+        daten = personalisierung(g, kampagne("ar", audiences=["syrians"]), config)
+        assert daten.zielgruppe == "الأصدقاء"
 
 
-def test_gruppe_ohne_tag_erbt_die_zielgruppe_der_kampagne(config: AppConfig) -> None:
-    daten = personalisierung(gruppe(tags=[]), kampagne("ar", audiences=["syrians"]), config)
-    assert daten.zielgruppe == "السوريين"
-
-
-def test_ohne_jede_zielgruppe_die_allgemeine_anrede(config: AppConfig) -> None:
-    daten = personalisierung(gruppe(tags=[]), kampagne("ar", audiences=[]), config)
-    assert daten.zielgruppe == "الأصدقاء"
-
-    # Und im fertigen Text bleibt kein offener Platzhalter stehen.
+def test_im_fertigen_text_bleibt_kein_platzhalter_stehen(config: AppConfig) -> None:
     _, text = erzeuge(gruppe(tags=[]), kampagne("ar", audiences=[]), config)
     assert "{zielgruppe}" not in text
+    assert "{ziel}" not in text
 
 
 # -- Die Wahl der Vorlage ---------------------------------------------------

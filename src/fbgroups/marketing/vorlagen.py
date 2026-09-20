@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from fbgroups.config import AppConfig, Audience, City
+from fbgroups.config import AppConfig
 from fbgroups.marketing.models import Campaign, Texttyp
 from fbgroups.models import Group
 
@@ -255,47 +255,21 @@ def sprache_der_kampagne(campaign: Campaign, config: AppConfig) -> str:
     return _SPRACHEN.get(aus_settings.strip().lower(), VORGABE_SPRACHE)
 
 
-def _stadt_der_gruppe(group: Group, config: AppConfig) -> City | None:
-    """Findet den Stadt-Datensatz zu ``Group.city``.
+def _stadt_der_gruppe(group: Group) -> str:
+    """Der Stadtname dieser Gruppe - oder leer.
 
     ``Group.city`` haelt den **deutschen Anzeigenamen** ("Duesseldorf"), nicht
-    die Kennung - der Bestand ist so gewachsen. Fuer ``name_ar`` braucht es
-    aber den Datensatz, also wird ueber alle Namen der Stadt gesucht
-    (deutsch, arabisch, Aliasse). Findet sich nichts, gilt die Gruppe als ohne
-    Stadt: lieber die allgemeine Vorlage als ein Beitrag, der eine Stadt nennt,
-    die es in der Konfiguration nicht gibt.
+    eine Kennung; der Bestand ist so gewachsen. Bis zum 20.09.2026 wurde damit
+    der Datensatz aus ``cities.yaml`` gesucht, um fuer eine arabische Vorlage
+    ``name_ar`` einsetzen zu koennen. Die Datei ist mit der Entdeckungsschicht
+    entfernt - eingesetzt wird jetzt, was an der Gruppe steht.
+
+    Das ist zugleich die Stelle, an der ein arabischer Beitrag einen deutschen
+    Stadtnamen tragen kann ("من Bonn"). Wer den arabischen Namen will,
+    schreibt ihn in den Bestand; ihn zu erfinden waere schlimmer, denn ein
+    falscher Ortsname faellt erst in der fremden Gruppe auf.
     """
-    roh = (group.city or "").strip()
-    if not roh:
-        return None
-    for city in config.cities.values():
-        if roh == city.name_de or roh == city.name_ar or roh in city.aliases:
-            return city
-    return None
-
-
-def _zielgruppe_der_gruppe(
-    group: Group, campaign: Campaign, config: AppConfig
-) -> Audience | None:
-    """Welche Zielgruppe angesprochen wird.
-
-    Drei Stufen, und die Reihenfolge ist der Punkt:
-
-    1. Ein Tag der Gruppe, den **auch die Kampagne** bewirbt. Steht eine
-       Gruppe unter ``syrians`` und ``arabs`` und die Kampagne wirbt fuer
-       Syrer, ist "السوريين" die richtige Anrede und nicht "العرب".
-    2. Sonst der erste Tag der Gruppe.
-    3. Sonst die erste Zielgruppe der **Kampagne**. Das ist kein Erfinden:
-       115 von 313 Gruppen tragen keinen Tag, und die Kampagne sagt selbst,
-       wen sie bewirbt.
-    """
-    tags = list(group.audience_tags or [])
-    gemeinsam = [t for t in tags if t in campaign.audiences]
-    for kandidat in (*gemeinsam, *tags, *campaign.audiences):
-        treffer = config.audiences.get(kandidat)
-        if treffer is not None:
-            return treffer
-    return None
+    return (group.city or "").strip()
 
 
 def _allgemeine_anrede(config: AppConfig, sprache: str) -> str:
@@ -343,23 +317,20 @@ def personalisierung(group: Group, campaign: Campaign, config: AppConfig) -> Per
     """Sammelt die Angaben fuer *diese* Gruppe."""
     sprache = sprache_der_kampagne(campaign, config)
 
-    city = _stadt_der_gruppe(group, config)
-    audience = _zielgruppe_der_gruppe(group, campaign, config)
-
     return Personalisierung(
-        zielgruppe=(
-            audience.anrede(sprache) if audience else _allgemeine_anrede(config, sprache)
-        ),
-        stadt=city.anzeige(sprache) if city else "",
+        # Die Anrede kommt seit dem 20.09.2026 aus ``textvorlagen.yaml`` und
+        # nicht mehr je Zielgruppe aus ``audiences.yaml``: Der blosse Tag
+        # ("syrians") ist keine Anrede, und ein Wort zu erfinden ist das
+        # Gegenteil dessen, was dieses Projekt unter Vorlagen versteht.
+        zielgruppe=_allgemeine_anrede(config, sprache),
+        stadt=_stadt_der_gruppe(group),
         gruppe=group.name or "",
-        # Das Ziel kommt von der Zielgruppe, nicht von der Gruppe: Wer syrische
-        # Gruppen bewirbt, meint Syrien - auch wenn die Gruppe selbst in Bonn
-        # sitzt. Ohne hinterlegtes Land ("arabs") faellt es auf "الوطن"
-        # zurueck, statt eines zu erfinden.
-        ziel=(
-            (audience.ziel(sprache) if audience else "")
-            or _aus_textvorlagen(config, "ziel_allgemein", sprache)
-        ),
+        # Das Ziel steht ebenfalls in ``textvorlagen.yaml``. Vorher stand es
+        # je Zielgruppe in ``audiences.yaml`` ("سوريا" fuer syrische Gruppen,
+        # leer fuer "arabs"); mit der Datei ist die Unterscheidung entfallen.
+        # Wer zwei Ziele in einem Bestand bewirbt, braucht zwei Kampagnen mit
+        # eigenen Vorlagen - nicht eine Tabelle neben dem Text.
+        ziel=_aus_textvorlagen(config, "ziel_allgemein", sprache),
         gegenstand=_aus_textvorlagen(config, "gegenstand_allgemein", sprache),
     )
 
@@ -896,15 +867,6 @@ def pruefe(config: AppConfig) -> list[str]:
                 f"monate['{sprache}'] hat {len(monate)} Eintraege statt 12 - "
                 f"{{datum}} bliebe leer."
             )
-
-        # Die Anrede ist eine Angabe ueber die Zielgruppe, kein Suchbegriff.
-        # Fehlt sie, faellt in der Vorlage entweder das deutsche Label in
-        # einen arabischen Satz oder "Syrer in Deutschland" in "... in Bonn".
-        for kennung, audience in config.audiences.items():
-            if not audience.anrede(str(sprache)).strip():
-                fehler.append(
-                    f"audiences.yaml: '{kennung}' hat keine Anrede fuer '{sprache}'."
-                )
 
     fehler.extend(pruefe_anlaesse(config))
     return fehler

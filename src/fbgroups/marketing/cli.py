@@ -157,16 +157,6 @@ def campaign_new(
         # utf-8-sig: Vorlagen entstehen oft in Notepad, das ein BOM schreibt.
         template = template_file.read_text(encoding="utf-8-sig")
 
-    unbekannte_zielgruppen = [a for a in (audience or []) if a not in config.audiences]
-    unbekannte_staedte = [c for c in (city or []) if c not in config.cities]
-    if unbekannte_zielgruppen or unbekannte_staedte:
-        console.print(
-            f"[red]Unbekannt in der Konfiguration:[/red] "
-            f"{', '.join(unbekannte_zielgruppen + unbekannte_staedte)}"
-        )
-        console.print("[dim]Gueltige Werte stehen in config/audiences.yaml und cities.yaml[/dim]")
-        raise typer.Exit(code=1)
-
     with MarketingStore(config.path("sqlite_path")) as store:
         if store.load_campaign(kennung) is not None:
             console.print(f"[red]Es gibt bereits eine Kampagne '{kennung}'.[/red]")
@@ -418,7 +408,7 @@ def _liste_setzen(vorhanden: list[str], neu: list[str] | None) -> list[str] | No
 
 
 def _regel_anzeigen(campaign: Campaign, config: AppConfig, treffer: int, gesamt: int) -> None:
-    auswahl = auswahl_der_kampagne(campaign, config)
+    auswahl = auswahl_der_kampagne(campaign)
     console.print(
         Panel(
             f"{auswahl.beschreibung()}\n\n"
@@ -531,7 +521,7 @@ def campaign_target(
             campaign.updated_at = datetime.now(UTC)
             store.save_campaign(campaign)
 
-        auswahl = auswahl_der_kampagne(campaign, config)
+        auswahl = auswahl_der_kampagne(campaign)
         treffer = sum(1 for g in groups if passt(g, auswahl))
         _regel_anzeigen(campaign, config, treffer, len(groups))
 
@@ -652,15 +642,14 @@ def campaign_add_groups(
         campaign = _kampagne_oder_ende(store, campaign_id)
         groups = gruppen_store.load_groups()
 
-        gespeichert = auswahl_der_kampagne(campaign, config)
-        stadt_namen = {
-            c.name_de.lower()
-            for cid, c in config.cities.items()
-            if cid.lower() in {s.lower() for s in (city or [])}
-        }
+        gespeichert = auswahl_der_kampagne(campaign)
         auswahl = Auswahl(
             audiences=frozenset(a.lower() for a in audience) if audience else gespeichert.audiences,
-            cities=frozenset(stadt_namen) if city else gespeichert.cities,
+            cities=(
+                frozenset(c.strip().lower() for c in city if c.strip())
+                if city
+                else gespeichert.cities
+            ),
             categories=gespeichert.categories,
             statuses=gespeichert.statuses,
             min_score=min_score if min_score > 0 else gespeichert.min_score,

@@ -1,14 +1,21 @@
 """Den gespeicherten Bestand neu bewerten - an einer Stelle, fuer beide Wege.
 
-``fbgroups rescore`` ruft das hier auf, und seit dem 12.09.2026 auch der
-Kampagnenlauf: Bevor eine Kampagne bearbeitet wird, werden ihre Gruppen mit
-dem bewertet, was inzwischen ueber sie bekannt ist - Mitgliederzahl aus
-``enrich``, Resonanz aus den Klicks, Aktivitaet aus der Beitragsliste. Erst
+Der Kampagnenlauf ruft das hier auf (seit 12.09.2026): Bevor eine Kampagne
+bearbeitet wird, werden ihre Gruppen mit dem bewertet, was inzwischen ueber sie
+bekannt ist - Mitgliederzahl, Aktivitaet und Resonanz aus den Klicks. Erst
 danach steht die Rangfolge fest, nach der gearbeitet wird.
 
 Zwei Fassungen dieser Rechnung waeren zwei Ranglisten. Die eine entschiede,
-was ``fbgroups report`` zeigt, die andere, wo die naechsten dreihundert
-Beitraege hingehen - und niemand koennte sagen, welche gilt.
+was die Uebersicht zeigt, die andere, wo die naechsten dreihundert Beitraege
+hingehen - und niemand koennte sagen, welche gilt.
+
+**Neu bewertet wird, nicht neu klassifiziert** (seit 20.09.2026). Bis dahin
+lief hier ``pipeline.classify_group`` mit und leitete Zielgruppe, Stadt und
+Kategorie aus Begriffslisten ab. Die Listen (``audiences.yaml``,
+``cities.yaml``, ``categories.yaml``) sind mit der Entdeckungsschicht
+entfernt; die drei Felder stehen seither im Bestand und werden von Hand
+gepflegt. Eine Neubewertung, die sie ueberschriebe, machte aus jedem Lauf ein
+stilles Zuruecksetzen dieser Handarbeit.
 
 Kein Netz, keine Suchanfrage, kein Guthaben: Es wird gelesen, gerechnet und
 zurueckgeschrieben. Geschrieben wird ueber ``update_scores`` und damit nur in
@@ -22,7 +29,6 @@ from dataclasses import dataclass, field
 
 from fbgroups.config import AppConfig
 from fbgroups.models import Group
-from fbgroups.pipeline import classify_group
 from fbgroups.scoring import score_all
 from fbgroups.storage import SqliteStore
 
@@ -64,11 +70,10 @@ def _resonanz(config: AppConfig) -> tuple[dict, str]:
 def bewerte_neu(
     config: AppConfig,
     *,
-    phase: int = 1,
     nur: set[str] | None = None,
     dry_run: bool = False,
 ) -> Bewertung:
-    """Klassifiziert und bewertet den Bestand neu; schreibt die Scores zurueck.
+    """Bewertet den Bestand neu und schreibt die Scores zurueck.
 
     ``nur`` schraenkt auf bestimmte Gruppen ein - der Kampagnenlauf bewertet
     die Gruppen **seiner** Kampagne und nicht dreihundert fremde. Gerechnet
@@ -85,9 +90,6 @@ def bewerte_neu(
         alle = store.load_groups()
         gruppen = [g for g in alle if nur is None or g.group_id in nur]
         vorher = {g.group_id: g.score for g in gruppen}
-
-        for gruppe in gruppen:
-            classify_group(gruppe, config, phase)
 
         bewertet = score_all(gruppen, config, gemessen)
         geaendert = sum(1 for g in bewertet if g.score != vorher.get(g.group_id))

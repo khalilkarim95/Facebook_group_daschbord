@@ -4,13 +4,83 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Projekt
 
-Findet öffentlich auffindbare Facebook-Gruppen für Marketing-Kooperationen in
-Deutschland (Zielmarkt: syrische und arabische Communities). Phase 1 ist
-umgesetzt: manuelle Seed-URLs → Normalisierung → Dedupe → Klassifikation →
-Scoring → SQLite → Excel/CSV.
+Verwaltet Facebook-Gruppen für Marketing-Kooperationen in Deutschland
+(Zielmarkt: syrische und arabische Communities). Der Bestand wird **gepflegt**,
+nicht gesucht: Gruppe, Stadt, Kategorie und Zielgruppe stehen in der Datenbank.
+Darauf setzt die Marketing-Erweiterung auf — Kampagnen, Tracking-Codes,
+Textvorlagen, Arbeitsseite und Kommentarautomatik.
 
 Die Projektsprache ist **Deutsch** – Kommentare, Docstrings, CLI-Ausgaben und
 Testnamen. Bitte beibehalten.
+
+## Die Entdeckungsschicht ist entfernt (20.09.2026)
+
+Das war die größte Entfernung des Projekts, und sie ist der Grund, warum viele
+ältere Notizen weiter unten von Dateien sprechen, die es nicht mehr gibt.
+
+**Weg sind:** `providers/` (Serper, Brave, fixture), `query/` (Anfrageplan),
+`search.py`, `classify/` (Zielgruppe, Stadt, Kategorie aus Begriffslisten),
+`importers/` (Seed-Import), `extract/` (Gruppenseiten-Abruf, Aktivität aus
+Treffern), `pipeline.py`, `dedupe.py`, `report.py`, `export/` und
+`storage/query_cache.py`. Dazu die CLI-Befehle `import-seeds`, `pruefliste`,
+`rescore`, `enrich`, `report`, `export`, `queries`, `providers`, `search` und
+`search-log`, das Skript `suche.ps1` sowie `SERPER_API_KEY`/`BRAVE_API_KEY`.
+
+**Aus `config/` weg:** `audiences.yaml`, `cities.yaml`, `categories.yaml`,
+`queries.yaml`, `providers.yaml`. Übrig bleiben `settings.yaml` (Pflicht),
+`textvorlagen.yaml` (optional) und `rewards.yaml` (liest `marketing/rewards.py`
+selbst). `config.py` kennt nur noch die ersten beiden — `AppConfig` hat die
+Felder `audiences`, `cities`, `categories` und `queries` nicht mehr, und die
+Klassen `Audience`, `City` und `Category` gibt es nicht mehr.
+
+**Was das im Betrieb ändert** — vier Stellen, und jede ist bewusst so:
+
+- **`{zielgruppe}` ist immer `anrede_allgemein`** („الأصدقاء"). Die drei
+  Beschriftungen je Zielgruppe (`label_de`, `label_kurz_de`, `label_ar`) sind
+  mit `audiences.yaml` weg. Der blosse Tag („syrians") taugt nicht als Anrede
+  in einem arabischen Satz, und ein Wort zu erfinden ist das Gegenteil dessen,
+  was dieses Projekt unter Vorlagen versteht.
+- **`{ziel}` ist immer `ziel_allgemein`**, und das steht seit dem 20.09.2026
+  auf **„سوريا"** statt „الوطن". Der Platzhalter kommt in 24 Vorlagen vor;
+  „الوطن" wäre an jeder dieser Stellen eine Abschwächung des Satzes, den der
+  Nutzer geschrieben hat. Wer einen Bestand mit zwei Zielen bewirbt, braucht
+  zwei Kampagnen mit eigenen Vorlagen — nicht eine Tabelle neben dem Text.
+- **Tracking-Codes entstehen aus dem Bestand.** `FB-SYR-BER-001` setzt sich aus
+  den ersten drei Buchstaben von `audience_tags[0]` und `city` zusammen; das
+  optionale Feld `code:` aus den beiden gelöschten Dateien gibt es nicht mehr.
+  Ohne Tag bzw. ohne Stadt bleibt es bei `GEN` und `DE`. **Vergebene Codes
+  ändern sich dadurch nicht** — sie stehen in veröffentlichten Beiträgen.
+- **Die Zielpriorität beurteilt den Namen nicht mehr.** `Regeln` hat die
+  Felder `kategoriebegriffe`, `audiencebegriffe` und `staedte` nicht mehr;
+  maßgeblich sind `kategorie`, `nebenkategorien`, `audiences` und `stadt` **im
+  Bestand**. Eine Gruppe „Syrer in Berlin – Reisen nach Damaskus", die als
+  `community` im Bestand steht, ist damit **B** und nicht mehr A. Wer sie als
+  Reisegruppe behandelt haben will, trägt `reise` am Datensatz ein — eine
+  Angabe, die bleibt, statt bei jedem Lauf neu geraten zu werden.
+
+**Was nicht verschwunden ist, sondern umgezogen:**
+
+- Die **deutschen Städtenamen** aus `cities.yaml` stehen jetzt in
+  `settings.yaml` unter `marketing.zielprioritaet.herkunft`. Ohne sie wäre
+  „مشاوير برلين - بيروت - دمشق" eine Gruppe mit „Land unbekannt" und stünde
+  hinter einer libanesischen. Gemeint ist nur der Deutschlandbeleg — welche
+  Stadt es ist, entscheidet dort nichts.
+- `parse_member_count` steht in `automation/actions.py` (einziger Aufrufer).
+- `rescoring.bewerte_neu` **klassifiziert nicht mehr**, es bewertet nur. Die
+  drei Felder werden gepflegt; eine Neubewertung, die sie überschriebe, wäre
+  ein stilles Zurücksetzen dieser Handarbeit.
+- `scoring.py` ist **unverändert**: Seine Bestandteile lasen nie eine der
+  gelöschten Dateien, sondern die gespeicherten Felder der Gruppe plus Zahlen
+  aus `settings.yaml`. Entfallen ist allein die dritte Aktivitätsquelle
+  (`ActivitySource.SEARCH_DATES`) — sie las `last_post_at`, und das schreibt
+  seither nichts mehr. Der Enum-Wert bleibt: Bestandsdaten können ihn tragen.
+
+**Was damit fehlt und bewusst nicht ersetzt wurde:** Es gibt **keinen Weg
+mehr, Gruppen in die Datenbank zu bekommen.** `import-seeds` war der einzige,
+und er ist entfernt. Wer den Bestand füllen will, braucht einen neuen
+Importweg — `data/from_lokal/fbgroups_de_eu_members.csv` hat ein anderes
+Format als die alten Seed-Dateien (`url,name,category,activity,rating,city,
+country,status,notes,last_updated,joined_at`).
 
 ## Harte Projektgrenzen
 
@@ -18,12 +88,11 @@ Diese Grenzen sind mit dem Nutzer vereinbart und dürfen nicht ohne
 ausdrückliche Aufforderung aufgeweicht werden:
 
 - **NEU (geändert am 27.08.2026 / 29.08.2026):** Automatisches Posten und
-  Kommentieren wird nun ausdrücklich unterstützt (`fbgroups campaign auto`), um
+  Kommentieren wird ausdrücklich unterstützt (`fbgroups campaign auto`), um
   das Tracking und die Metriken in einer geschlossenen Kette zu sichern.
-  Erlaubt ist auch `extract/gruppenseite.py` und `fbgroups enrich`.
   Unverändert verboten bleiben: **kein stiller/headless Login und keine
   Umgehung von Sperren** (kein Proxywechsel, keine wechselnden Kennungen,
-  kein nachgeahmter Browser). Die Automatisierung muss sichtbar für den 
+  kein nachgeahmter Browser). Die Automatisierung muss sichtbar für den
   Nutzer ablaufen (Headless=False). Die Tests
   `test_es_wird_kein_browser_nachgeahmt` und `test_es_gibt_keinen_login_weg`
   halten die verbliebenen Grenzen fest.
@@ -34,13 +103,12 @@ ausdrückliche Aufforderung aufgeweicht werden:
   Sichtbarkeit, Name und Beitrags*zeitpunkte* — nie ein Beitragstext, nie ein
   Mensch.
   **NEU (Entscheidung für automatisiertes Kommentieren):** Um den besten Beitrag
-  für einen Kommentar zu finden, dürfen Beitrags-Metriken (URL, Zeitstempel, 
-  Anzahl der Reaktionen/Kommentare) gelesen und gespeichert werden. 
-  **Streng verboten bleibt weiterhin das Lesen oder Speichern von Beitragsinhalten 
+  für einen Kommentar zu finden, dürfen Beitrags-Metriken (URL, Zeitstempel,
+  Anzahl der Reaktionen/Kommentare) gelesen und gespeichert werden.
+  **Streng verboten bleibt weiterhin das Lesen oder Speichern von Beitragsinhalten
   (Text) oder Autorennamen.**
-- Kein Suchdienst fest verdrahten. Vor Anbindung eines Providers dessen
-  Verfügbarkeit für Neukunden prüfen (Google CSE: für Neukunden geschlossen,
-  Einstellung 01.01.2027).
+- Kein Suchdienst fest verdrahten. Seit dem 20.09.2026 ist das gegenstandslos:
+  Es gibt keine Suchschicht mehr. Wer eine zurückholt, holt die Regel mit.
 
 ## Befehle
 
@@ -48,7 +116,7 @@ ausdrückliche Aufforderung aufgeweicht werden:
 $py = ".\.venv\Scripts\python.exe"
 $env:PYTHONIOENCODING="utf-8"        # sonst bricht arabische Terminalausgabe
 
-& $py -m pip install -e ".[dev]"
+& $py -m pip install -e ".[dev,web]"
 & $py -m pytest                      # alle Tests, offline
 & $py -m pytest tests\test_urls.py::test_parse_valid_urls -v   # einzelner Test
 & $py -m pytest -k arabisch
@@ -56,106 +124,43 @@ $env:PYTHONIOENCODING="utf-8"        # sonst bricht arabische Terminalausgabe
 & $py -m mypy
 
 & $py -m fbgroups.cli config-check   # Konfiguration validieren
-& $py -m fbgroups.cli import-seeds --dry-run
-& $py -m fbgroups.cli pruefliste --top 40 # Liste zum Ausfuellen von Hand
-& $py -m fbgroups.cli import-seeds data\seeds\pruefliste.csv   # ausgefuellt zurueck
-& $py -m fbgroups.cli rescore --dry-run   # Wirkung geaenderter Gewichte zeigen
-& $py -m fbgroups.cli enrich --dry-run    # wer waere an der Reihe? ruft nichts ab
-& $py -m fbgroups.cli enrich --limit 5    # 5 oeffentliche Gruppenseiten lesen
-& $py -m fbgroups.cli enrich --alle       # bis enrich.max_pro_lauf
-& $py -m fbgroups.cli rescore        # Bestand neu bewerten, ohne Suchanfrage
-                                     # holt dabei die gemessene Resonanz mit
-& $py -m fbgroups.cli report
-& $py -m fbgroups.cli export --format both
-& $py -m fbgroups.cli queries --all
-& $py -m fbgroups.cli providers      # Verfuegbarkeit, verbraucht nichts
-& $py -m fbgroups.cli search --dry-run --show-all   # Plan + Verbrauch, ohne Abruf
-& $py -m fbgroups.cli search --limit 5              # hoechstens 5 NEUE Anfragen
-& $py -m fbgroups.cli search-log     # dauerhaftes Anfrageprotokoll
+& $py -m fbgroups.cli auth login     # Browser-Sitzung anlegen
+& $py -m fbgroups.cli serve --port 3000
 ```
 
+Alles Weitere sind Unterbefehle von `campaign` und `marketing` — siehe unten.
+
 `mypy` meldet vorbestehend „missing py.typed marker"; setzt man den Marker,
-erscheinen acht ältere Fehler in `report.py` und `importers/manual_seed.py`.
-Beides ist unabhängig von der Suchschicht und noch offen.
+erscheinen ältere Fehler in Modulen, die davon unberührt sind. Das ist offen
+und war es schon vor dem Ausbau der Entdeckungsschicht.
 
 ## Architektur
 
-Datenfluss (`pipeline.py` verkettet die Schritte, bleibt selbst frei von I/O):
-
 ```
-importers/manual_seed  →  urls  →  dedupe  →  classify/*  →  scoring
-                                                              ↓
-                              storage/sqlite_store  +  storage/jsonl_store
-                                                              ↓
-                                                  export/{csv,excel}, report
+config/{settings,textvorlagen}.yaml
+        │
+        ▼
+   config.AppConfig ──► scoring ──► storage/sqlite_store (groups)
+                                            │
+                                            ▼
+                          marketing/  ──► store (Kampagnen, Codes, Ereignisse)
+                                      ──► vorlagen, beitrag, kurzcode
+                                      ──► lauf, automatik, arbeit, grenzen
+                                      ──► web, dashboard, arbeitsseite
+                                            │
+                                      automation/ (Playwright, sichtbar)
 ```
 
 Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
 
-- **`config/*.yaml` ist die fachliche Wahrheit.** Zielgruppen, Städte,
-  Kategorien, Scoring-Gewichte und Suchanfragen stehen nirgends im Code. Neue
-  Städte/Zielgruppen werden über das Feld `phase` freigeschaltet
-  (`phase: 2` → `phase: 1`), nicht durch Codeänderung.
+- **`config/settings.yaml` ist die fachliche Wahrheit.** Scoring-Gewichte,
+  Grenzen je Aktion, Zielpriorität und Pfade stehen nirgends im Code.
+  Zielgruppen, Städte und Kategorien stehen **nicht** dort, sondern am
+  Datensatz der Gruppe.
 - **Zwei Vergleichsstrategien in `textnorm.py`.** Lateinische Begriffe werden
   mit Wortgrenze verglichen, arabische als Teilstring – im Arabischen hängen
   Artikel und Präpositionen am Wort (`سوريين` steckt in `السوريين`). Wer das
   vereinheitlicht, zerstört die arabische Erkennung.
-- **Dedupe hat zwei Verbindlichkeitsstufen.** Exakt über `group_id` wird
-  automatisch zusammengeführt; Namensähnlichkeit wird nur als Verdacht
-  gemeldet ("Syrer Berlin" vs. "Syrer Berlin 2" sind verschiedene Gruppen).
-- **`providers/base.py` enthält nur den Vertrag.** Kein Modul außerhalb von
-  `providers/` darf anbieterspezifischen Code importieren — abgesichert durch
-  `test_kein_modul_ausserhalb_providers_kennt_einen_anbieter`. Neuer Provider =
-  Klasse + `@register_provider(...)` + Config-Block + Contract-Tests.
-  Implementiert: `fixture` (offline), `serper`, `brave`. Google CSE ist für
-  Neukunden geschlossen (Abschaltung 01.01.2027), Bing seit 11.08.2025 tot.
-- **Guthaben ist die knappe Ressource.** `storage/query_cache.py` hält jede
-  erfolgreiche Antwort dauerhaft in einer eigenen SQLite-Datei
-  (`data/query_cache.sqlite`), sodass dieselbe Anfrage nie zweimal an den
-  Dienst geht — auch nicht nach einem Neustart. `max_queries_per_run` ist eine
-  harte Obergrenze; `utils/rate_limit.py` hält den Mindestabstand ein, statt in
-  ein 429 zu laufen; `QuotaExhaustedError` beendet den Lauf geordnet. Wer hier
-  etwas ändert, ändert direkt die Kosten für den Nutzer.
-- **`--limit N` begrenzt neue Anfragen, nicht geplante.** Eine gespeicherte
-  Anfrage kostet nichts und darf deshalb kein Kontingent des Laufs belegen —
-  sonst käme ein zweiter Lauf nie über die bereits bezahlten Anfragen hinaus.
-  Fehlschläge landen im Protokoll, aber nicht im Speicher: ein einzelner
-  Netzwerkfehler wäre sonst tagelang bindend.
-- **`search.build_plan` ist die einzige Quelle für den Verbrauch.** `--dry-run`
-  und der echte Lauf lesen denselben Plan; eine zweite Zählung könnte von der
-  Ausführung abweichen und würde damit falsche Kosten versprechen.
-- **Ein Suchlauf startet nie beiläufig.** Ohne `--limit` oder `--alle` bricht
-  `fbgroups search` mit Exit-Code 2 ab, ohne etwas abzufragen. `fallback_chain`
-  ist bewusst leer — ein Providerwechsel verbraucht fremdes Guthaben und ist
-  eine Entscheidung, keine Ausweichreaktion.
-- **Suche und Import münden in denselben Weg.** `pipeline.prepare_groups` wird
-  von beiden genutzt — ein Suchtreffer wird exakt wie eine manuelle Zeile
-  behandelt (Dedupe, Klassifikation, Validierung, Scoring).
-- **Der Anfragetext entsteht in `search.build_query_text`.** `site:`-Operator
-  nur bei `supports_site_operator`, Suchbegriff in Anführungszeichen
-  (`quote_phrase` in `queries.yaml`). Ohne die Anführungszeichen liefert die
-  Suche auch Treffer mit verstreuten Einzelwörtern — jeder davon kostet ein
-  Credit, ohne etwas beizutragen.
-- **`extract/enrich.py` erfindet nichts.** Mitgliederzahl und Sichtbarkeit
-  werden nur übernommen, wenn sie im Treffertext ausdrücklich benannt sind
-  („12.400 Mitglieder", „Öffentliche Gruppe"). Eine bloße Zahl im Titel gilt
-  nicht als Beleg.
-- **`drop_shared_snippets` verwirft geteilte Beschreibungstexte.** Google
-  liefert für Facebook-Gruppen oft denselben Text zu mehreren Ergebnissen
-  (erster Livelauf: 5 von 10 Treffern trugen den Text einer sechsten Gruppe).
-  Ungefiltert wandern Mitgliederzahl, Sichtbarkeit und Stadt in fremde
-  Datensätze. Maßgeblich ist die Zahl **verschiedener URLs**, nicht die Zahl
-  der Treffer — dieselbe Gruppe bringt aus mehreren Anfragen zu Recht denselben
-  eigenen Text mit. Deshalb wertet `search._auswerten` erst nach der letzten
-  Anfrage aus: der Fremdtext verteilt sich über Anfragen hinweg. Verworfen wird
-  bei der Auswertung, nie im Anfragespeicher — die Rohantwort bleibt vollständig.
-  Ein Fremdtext, der nur **einmal** vorkommt, ist damit nicht erkennbar; das
-  
-- **`credits` von Serper ist Verbrauch, nicht Restguthaben.** Der Wert steht
-  für die Kosten *dieser* Anfrage (meist 1). Als `quota_remaining` gelesen
-  ergab er die grob falsche Anzeige „Restguthaben 1". Deshalb trennt
-  `SearchResponse` beides: `credits_used` und `quota_remaining`. Den Kontostand
-  meldet Serper nicht — er steht allein im Konto unter serper.dev/dashboard.
 - **Kein Score ohne Grundlage.** `Group.score` ist `float | None`; `None`
   bedeutet nicht bewertbar, der Grund steht in `score_reason`. Es gibt keinen
   Ersatzwert für fehlende Daten — eine frühere Fassung vergab bei unbekannter
@@ -166,7 +171,7 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
   | Bestandteil       | Punkte | Grundlage                                |
   |-------------------|-------:|------------------------------------------|
   | `members`         |     25 | Mitgliederzahl, logarithmisch gestuft    |
-  | `activity`        |     25 | Betrieb in der Gruppe (drei Quellen)     |
+  | `activity`        |     25 | Betrieb in der Gruppe (zwei Quellen)     |
   | `category`        |     20 | Haupt- und Nebenkategorien               |
   | `location`        |     15 | Stadt, sonst Bundesland, sonst Land      |
   | `target_audience` |     15 | erkannte Zielgruppen                     |
@@ -195,24 +200,19 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
 - **Die Mitgliederzahl wächst logarithmisch** (`member_count_buckets`, neun
   Stufen). Eine Gruppe mit 100.000 Mitgliedern ist nicht zehnmal so wertvoll
   wie eine mit 10.000: Oberhalb einiger tausend entscheidet nicht mehr die
-  Größe, sondern ob dort etwas geschieht. Sie war bis zum 27.08.2026 mit 45
-  von 100 das schwerste Kriterium und dann abgeschaltet (`member_count: 0`),
-  weil sie ohne facebook.com in **273 von 273** Suchtreffern fehlte. Mit dem
-  geöffneten Abruf ist sie wieder eingeschaltet — mit 25 statt 45 Punkten.
-- **Die Aktivität hat drei Quellen, und ihre Reihenfolge ist begründet**
+  Größe, sondern ob dort etwas geschieht.
+- **Die Aktivität hat zwei Quellen, und ihre Reihenfolge ist begründet**
   (`activity_source`):
-  1. `facebook` — die Beitragsliste der Gruppenseite. Sie misst **die Gruppe**
-     und ist damit die Antwort auf die gestellte Frage. Konfidenz 1,0.
+  1. `facebook` — die erhobene Zahl. Sie misst **die Gruppe** und ist damit
+     die Antwort auf die gestellte Frage. Konfidenz 1,0.
   2. `resonanz` — Klick auf den Tracking-Link, Registrierung in der App. Sie
      misst, was von dort zu **uns** kommt; in mancher Hinsicht die bessere
      Frage (eine Gruppe mit 500 Mitgliedern und 40 Registrierungen ist mehr
      wert als eine mit 5.000 und zwei), aber eine andere. Konfidenz 0,8.
-  3. `search_dates` — das `date` eines indexierten Suchtreffers. Es belegt,
-     **dass** die Gruppe lebt, und sonst nichts; eine Beitragszahl je Tag ist
-     daraus nicht abzuleiten. Konfidenz 0,35. Bewertet wird allein die Frische
-     des jüngsten Fundes, **nicht die Anzahl** der datierten Treffer: Die
-     hängt daran, wie oft eine Gruppe in unseren Anfragen auftauchte, und das
-     ist eine Eigenschaft unserer Anfragen.
+
+  Eine dritte gab es bis zum 20.09.2026: `search_dates`, die Frische des
+  jüngsten indexierten Suchtreffers. Sie ist mit der Suchschicht entfallen —
+  `last_post_at` schreibt nichts mehr.
 - **Die Aktivität ist bewusst unabhängig von der Mitgliederzahl.** Sonst ließe
   sich der Fall nicht abbilden, für den es sie gibt: 100.000 Mitglieder und
   kaum neue Beiträge schlagen 20.000 mit täglichem Betrieb **nicht**. Test:
@@ -220,35 +220,31 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
 - **`scoring.Resonanz` beschreibt die Zahlen, `marketing/resonanz.py` beschafft
   sie.** Die Richtung ist Absicht: `scoring.py` kennt weder `MarketingStore`
   noch die Ereignistabelle, so wie die Marketing-Erweiterung den Bestand nicht
-  veraendert. Der Aufrufer (`rescore`, die Uebersicht) reicht die Zahlen herein.
-  Ein Import in die andere Richtung machte den Kern von einem Aufsatz abhaengig.
-  Die Resonanz ist seit dem 27.08.2026 **kein eigener Block mehr**, sondern
-  eine Quelle von `activity` — zwei Blöcke wären zweimal dieselbe Frage.
-- **"Nicht gemessen" ist etwas anderes als "wirkungslos".** Ohne
-  veroeffentlichten Beitrag liefert `_resonanz_faktor` `None`, `activity`
-  erscheint als "unbekannt" und `score_max` sinkt um 25. Null Klicks ohne
-  Beitrag sind eine Aussage ueber **uns**, nicht ueber die Gruppe. Dasselbe
-  gilt fuer die Schonfrist (`schonfrist_tage: 3`): Wer vor zwei Stunden
-  gepostet hat, hat noch keine Klicks — eine Null waere hier eine Behauptung
-  ueber die Zukunft. Ein Beitrag **mit** null Klicks ist dagegen ein Ergebnis
+  verändert. Der Aufrufer reicht die Zahlen herein. Ein Import in die andere
+  Richtung machte den Kern von einem Aufsatz abhängig.
+- **„Nicht gemessen" ist etwas anderes als „wirkungslos".** Ohne
+  veröffentlichten Beitrag liefert `_resonanz_faktor` `None`, `activity`
+  erscheint als „unbekannt" und `score_max` sinkt um 25. Null Klicks ohne
+  Beitrag sind eine Aussage über **uns**, nicht über die Gruppe. Dasselbe
+  gilt für die Schonfrist (`schonfrist_tage: 3`): Wer vor zwei Stunden
+  gepostet hat, hat noch keine Klicks — eine Null wäre hier eine Behauptung
+  über die Zukunft. Ein Beitrag **mit** null Klicks ist dagegen ein Ergebnis
   und wird als solches bewertet (`score_max` voll, `activity` 0).
 - **Die Zielquote ist 15 %, nicht 100 %** (`resonanz.ziel_quote`). Wer die
   Registrierungsquote auf 1,0 normiert, gibt selbst der besten Gruppe ein
   Sechstel der Punkte und macht den Bestandteil wirkungslos. Daneben steht die
   Belastbarkeit (`mindest_klicks: 20`): 1 Klick mit 1 Registrierung sind 100 %
-  und beweisen nichts — ohne diese Schranke stuende jede zufaellige Gruppe an
-  der Spitze. Die drei Teilmaße werden über `resonanz.anteile` zu **einem**
-  Faktor verrechnet (Engagement 0,60 · Reichweite 0,25 · Aktualität 0,15) und
-  auf ihre Summe normiert, damit ein Tippfehler die Obergrenze nicht sprengt.
-- **Reichweite zaehlt je Beitrag, nicht absolut.** Sonst gewaenne die Gruppe, in
-  der wir am oeftesten gepostet haben, statt der, die am besten wirkt.
+  und beweisen nichts. Die drei Teilmaße werden über `resonanz.anteile` zu
+  **einem** Faktor verrechnet (Engagement 0,60 · Reichweite 0,25 · Aktualität
+  0,15) und auf ihre Summe normiert, damit ein Tippfehler die Obergrenze nicht
+  sprengt.
+- **Reichweite zählt je Beitrag, nicht absolut.** Sonst gewänne die Gruppe, in
+  der wir am öftesten gepostet haben, statt der, die am besten wirkt.
 - **`data_confidence` steht neben dem Score, nie darin.** Ein mäßiger Score
   aus belegten Zahlen und ein guter aus dünnen Hinweisen sind zwei Aussagen;
   verrechnet wären beide unlesbar. Zwei Dinge fließen ein: **wie sicher** die
   Angaben sind (die Konfidenzen der Befunde) und **wie viel** überhaupt vorlag
-  (der Anteil des beurteilten am möglichen Gewicht). Ohne das zweite bekäme
-  eine Gruppe, von der nur die Stadt bekannt ist, aber zweifelsfrei, die volle
-  Confidence — die Zahl sagte dann das Gegenteil dessen aus, wozu sie da ist.
+  (der Anteil des beurteilten am möglichen Gewicht).
 - **Der Ort kennt vier Stufen, und die unterste ist nicht null**
   (`location_stufen`): Stadt (voll, mal Konfidenz) → Bundesland (0,45) → Land
   (0,20) → nichts erkannt (`None`, unbekannt). „Deutschland allgemein" ist
@@ -259,57 +255,34 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
   ohne Deckel gewänne aber die Gruppe mit dem längsten Namen.
 - **Gewicht `0` schaltet einen Bestandteil ganz ab, `None` heißt unbekannt.**
   Ein abgeschalteter Bestandteil senkt `score_max` nicht und erscheint nicht
-  als „unbekannt" in `score_reason` — er wird gar nicht erst erwartet. So
-  steht `name_quality` auf 0: Die Form des Namens sagt etwas über **unsere
-  Daten** und nichts über die Gruppe, sie gehört in `data_confidence`. Die
-  Regel dahinter (`_namensform`) bleibt vollständig erhalten, damit das
-  Wiedereinschalten eine Zahlenänderung ist und keine Codeänderung.
-- **`fbgroups enrich` startet nie beiläufig.** Ohne `--limit` oder `--alle`
-  bricht der Befehl mit Exit-Code 2 ab, ohne etwas abzurufen — dieselbe
-  Vorsicht wie bei `fbgroups search`, aber aus einem anderen Grund: Dort geht
-  es um Guthaben, hier um das Konto des Nutzers. Die Befunde liegen in
-  `data/gruppenseiten.sqlite` (eigene Datei wie der Anfragespeicher), damit
-  ein zweiter Lauf keinen zweiten Abruf kostet; `enrich.hoechstalter_tage`
-  entscheidet, wann ein Befund als veraltet gilt. `mindestabstand_sekunden: 6`
-  ist bewusst groß — bei 313 Gruppen gut eine halbe Stunde. Das ist der Preis
-  dafür, dass niemand den Abruf für einen Angriff hält.
-- **Ein Anmeldefenster ist ein gültiger Befund, kein Fehler.** Facebook
-  liefert einem nicht angemeldeten Abruf häufig eine Anmeldeseite;
-  `Seitenbefund.erreichbar` bleibt dann `False`, alle Zahlen bleiben `None`,
-  und `checked_at` wird **trotzdem** gesetzt — sonst liefe derselbe erfolglose
-  Abruf bei jedem Lauf erneut. Eine nicht gefundene Zahl **löscht keine
-  vorhandene**: Ein Anmeldefenster ist kein Beleg dafür, dass die Gruppe
-  geschrumpft ist.
-- **`upsert_groups` schützt erhobene Zahlen mit `COALESCE`.** Ein Suchlauf
-  schreibt jeden gefundenen Datensatz neu und bringt weder Mitgliederzahl noch
-  Aktivität mit. Ohne diesen Schutz löschte jeder `fbgroups search`, was
-  `fbgroups enrich` in einer halben Stunde erhoben hat — und niemand merkte
-  es, weil der Score einfach wieder sank. Test:
-  `test_ein_suchlauf_loescht_erhobene_zahlen_nicht`.
+  als „unbekannt" in `score_reason`. So steht `name_quality` auf 0: Die Form
+  des Namens sagt etwas über **unsere Daten** und nichts über die Gruppe, sie
+  gehört in `data_confidence`. Die Regel dahinter (`_namensform`) bleibt
+  vollständig erhalten, damit das Wiedereinschalten eine Zahlenänderung ist
+  und keine Codeänderung.
+- **`upsert_groups` schützt erhobene Zahlen mit `COALESCE`.** Ein Schreiblauf,
+  der weder Mitgliederzahl noch Aktivität mitbringt, darf nicht löschen, was
+  mühsam erhoben wurde — und niemand merkte es, weil der Score einfach wieder
+  sänke. Test: `test_ein_suchlauf_loescht_erhobene_zahlen_nicht`.
 - **Migrationsschritt 15 rechnet keine alten Scores um.** Ein Score aus den
   alten Gewichten (45/25/15/8/7 plus 75 Resonanzpunkte) lässt sich nicht in
   die neuen übersetzen; ein geratener Umrechnungsfaktor stünde hinterher in
   der Rangliste, nach der entschieden wird, wo die nächsten dreihundert
-  Beiträge hingehen. Neu bewertet wird mit `fbgroups rescore` — das ist ein
-  Befehl und damit eine Entscheidung. Ebenso wird `member_count_source` für
-  Bestandszahlen **nicht** auf `search` gesetzt: Die Migration liest eine
-  Spalte, in der auch eine von Hand gepflegte Zahl stehen könnte, und eine
-  Migration, die Herkunft behauptet, erfindet Daten.
+  Beiträge hingehen. Neu bewertet wird beim Kampagnenlauf.
 - **Die Spalte heißt `member_count_hint`, das Feld `member_count`.** Migrationen
   sind hier ausschließlich additiv, und ein `RENAME COLUMN` ist keine additive
   Änderung; `_row_to_group` bildet den Namen ab. Ein zweites Feld für dieselbe
   Zahl anzulegen wäre die schlechtere Lösung — zwei Wahrheiten über eine Zahl.
 - **`ValidationStatus.UNREACHABLE` ist ein Menschenurteil.** Nur wer die
   Gruppe im Browser geöffnet hat, kann sie für tot erklären. `upsert_groups`
-  nimmt dieses Urteil deshalb nie zurück — ein späterer Suchtreffer belegt
-  bloß, dass die URL einmal indexiert wurde.
-- **Sortiert wird über `scoring.sort_by_rank`,** auch im Export. Erst die
-  Punkte, bei Gleichstand der **Anteil** an den erreichbaren Punkten: 55 von
-  55 steht vor 55 von 100. Die beste Gruppe steht damit in Zeile 2 der Datei.
+  nimmt dieses Urteil deshalb nie zurück.
+- **Sortiert wird über `scoring.sort_by_rank`.** Erst die Punkte, bei
+  Gleichstand der **Anteil** an den erreichbaren Punkten: 55 von 55 steht vor
+  55 von 100.
 - **Der Score wird nicht hochgerechnet.** Er ist die Summe der belegten
   Punkte; `score_max` nennt das bei dieser Datenlage Erreichbare. Das gilt
   unverändert für jeden **eingeschalteten** Bestandteil, der fehlt — nicht für
-  einen mit Gewicht 0. Die zweite Fassung normierte stattdessen über die
+  einen mit Gewicht 0. Eine frühere Fassung normierte stattdessen über die
   vorhandenen Bestandteile auf 100 — bei 134 von 138 Gruppen ohne
   Mitgliederzahl bekam damit eine Gruppe, von der nur der Name bekannt war,
   denselben Höchstwert wie eine belegte Großgruppe. 27 Gruppen standen auf
@@ -318,68 +291,25 @@ Zentrale Entwurfsentscheidungen, die man mehreren Dateien nicht ansieht:
   *Form* des Namens (vollständig, kurz, keine Satzform). Vergab es zusätzlich
   Punkte für Zielgruppe und Stadt, erreichten beide Bestandteile stets
   gemeinsam ihr Maximum — die zweite Ursache der Häufung.
-- **Ein Stadtname zählt nicht zusätzlich als Kategoriebegriff.**
-  `classify_category` bekommt die erkannte `city_id` und übergeht Begriffe, die
-  ein Name **dieser** Stadt sind. „Essen" ist eine Stadt mit 600.000 Einwohnern
-  *und* der deutsche Kategoriebegriff für Speisen: Jede Gruppe „Syrer in Essen"
-  bekam neben den Stadtpunkten die vollen 16 Kategoriepunkte und stand in der
-  Übersicht als Essensgruppe — 8 von 16 Treffern der Kategorie. Nach der
-  Korrektur stehen sie bei 84 statt 100, also hinter den wirklich besseren
-  Gruppen. Ausgeschlossen wird nur die **erkannte** Stadt: „Arabisches Essen in
-  Berlin" behält seine Kategorie. Ein systematischer Abgleich aller Stadtnamen
-  gegen alle Kategoriebegriffe fand genau diese eine Kollision.
-- **Jede Konfidenz unterscheidet Name und Beschreibungstext.** Zielgruppe,
-  Stadt *und* Kategorie liefern 1,0 bei einem Treffer im Namen und 0,5 bei
-  einem Treffer im Beschreibungstext. Die Kategorie war binär und vergab für
-  ein beliebiges Stichwort irgendwo im Text die volle Punktzahl.
-- **`fbgroups rescore` nach jeder Änderung an Gewichten oder Klassifikation.**
-  Ein Suchlauf bewertet nur die Gruppen neu, die er gerade findet; der übrige
-  Bestand behielte alte Werte, und im Export stünden zwei Bewertungen
-  nebeneinander. `rescore` schreibt über `SqliteStore.update_scores` nur
-  abgeleitete Felder — nicht über `upsert_groups`, das `times_seen` hochzählen
-  würde: eine Neubewertung ist kein Fund.
 - **`data_quality` zählt nur erhobene Felder** (Name, Beschreibung,
-  Mitgliederzahl, Sichtbarkeit). Zielgruppe, Stadt und Kategorie sind aus dem
-  Namen abgeleitet und keine zusätzliche Information; mitgezählt meldeten sie
+  Mitgliederzahl, Sichtbarkeit). Zielgruppe, Stadt und Kategorie sind
+  abgeleitet und keine zusätzliche Information; mitgezählt meldeten sie
   „complete" für Datensätze, die nichts als Name und Beschreibungstext hatten.
-- **Ein Treffer auf einen Beitrag ist kein Gruppenprofil.** Zeigt die URL auf
-  `/posts/`, `/permalink/`, `/photos/` …, gehören Titel und Text dem Beitrag.
-  `enrich.hit_to_group` übernimmt sie deshalb nicht als Name und Beschreibung —
-  der Titel landet als ausdrücklich benannter Hinweis in `notes`. Ungefiltert
-  stand „Deutschland geht erst unter seit Mutter Merkel den Syrern ..." als
-  Gruppenname im Export, wurde klassifiziert und bewertet. 44 von 129
-  Suchtreffern waren solche Fundstellen.
 - **Statusmodell mit drei Achsen**: `validation_status` (valid/invalid/test_data)
   bewertet die URL, `data_quality` (none/minimal/partial/complete) die
   Metadatenlage, `status` (new/validated/invalid/insufficient_data)
   fasst zusammen. Rangfolge in `validation.determine_status`:
   invalid > insufficient_data > validated.
 - **`duplicate` wird nicht mehr abgeleitet.** Die Regel war `times_seen > 1` –
-  aber `times_seen` zählt jeden **Fund**, nicht jeden Datensatz; `sqlite_store.
-  count_distinct_sources` hält das selbst fest. Echte Dubletten sind zu diesem
-  Zeitpunkt längst zusammengeführt (`deduplicate_exact` läuft vor der
-  Bewertung), ein überlebender Datensatz ist also nie eine offene Dublette.
-  Was `times_seen > 1` anzeigt, ist das Gegenteil eines Mangels: Die Gruppe
-  wurde von mehreren Anfragen gefunden. Nach der Ausweitung der Suchmuster
-  trugen 146 von 273 bewerteten Gruppen den Stempel, darunter zwei der drei
-  bestbewerteten – wer auf `validated` filterte, verlor die Hälfte seines
-  Bestands. Der Enum-Wert bleibt (Bestandsdaten, Handurteil), abgeleitet wird
-  er nicht mehr.
+  aber `times_seen` zählt jeden **Fund**, nicht jeden Datensatz. Der Enum-Wert
+  bleibt (Bestandsdaten, Handurteil), abgeleitet wird er nicht mehr.
 - **Platzhalter werden markiert, nicht gelöscht.** `validation.py` prüft rein
   strukturell (Ziffernfolgen, Wiederholungen, Test-Tokens) und fragt nie bei
   Facebook nach. `test_data` ist ein begründeter Verdacht, keine Existenzaussage.
-- **Metadaten werden nie erfunden.** Was nicht in der Seed-Datei stand, bleibt
-  leer bzw. `None`; der Export zeigt dafür `unknown`.
-- **Keine Beispieldaten im Bestand.** `example_seeds.csv` enthielt erfundene
-  Gruppen mit realistisch aussehenden Kennungen (`482910573829104`,
-  `arab.stuttgart`, `syrer.hamburg`). Die Platzhaltererkennung greift bei ihnen
-  bewusst nicht, und sie führten mit erfundenen Mitgliederzahlen die Rangliste
-  an. Beispieldateien gehören nicht nach `data/seeds/`; wer eine braucht, legt
-  sie außerhalb ab und importiert sie mit ausdrücklichem Pfad.
+- **Metadaten werden nie erfunden.** Was nicht erhoben wurde, bleibt leer bzw.
+  `None`; die Übersicht zeigt dafür `unknown`.
 - **`SqliteStore.upsert_groups`** überschreibt `review_status` und `notes` eines
   bestehenden Datensatzes nie – manuelle Bewertungen überleben jeden Reimport.
-  Der Rückgabewert (neu, bekannt) ist die Kennzahl für die Qualität einer
-  Suchstrategie.
 
 ## Marketing-Erweiterung (`marketing/`)
 
@@ -480,7 +410,7 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
   ihrer Beschreibung, nicht leer — leer hieße „keine Einschränkung", also der
   ganze Bestand.
 - **`auto_assign` greift nur bei `status: active`.** Sonst wäre „pausiert" eine
-  Beschriftung ohne Wirkung, und ein Suchlauf vergäbe Monate später noch Codes
+  Beschriftung ohne Wirkung, und ein Zuordnungslauf vergäbe Monate später Codes
   für eine Kampagne, die niemand mehr betreibt. Von Hand bleibt jede Kampagne
   zuordnbar — `campaign sync` fragt nicht nach dem Status, denn dort steht ein
   Mensch davor.
@@ -488,8 +418,8 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
   `add-groups` lief genau einmal und schrieb, was es in dem Moment fand – so
   kamen 8 Zuordnungen zustande, während der Bestand auf 310 wuchs. `sync`
   wendet die gespeicherte Regel an, ist wiederholbar und läuft deshalb auch am
-  Ende von `import-seeds` und `search` (nur für Kampagnen mit `auto_assign`,
-  Vorgabe aus). Beide lesen denselben Plan aus `marketing/selection.py` –
+  Ende jedes Laufs, der neue Gruppen bringt (nur für Kampagnen mit
+  `auto_assign`, Vorgabe aus). Beide lesen denselben Plan aus `marketing/selection.py` –
   `--dry-run` und Ernstfall können nicht auseinanderlaufen.
 - **Drei Wege zur Zuordnung, und der dritte schließt eine Lücke.** `campaign
   sync` beschreibt die Auswahl als **Regel**, das Feld in der Kampagnenspalte
@@ -541,8 +471,8 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
   NOTHING` schützt jede von Hand gepflegte Zeile — eine Migration überstimmt
   kein Menschenurteil).
 - **Der Arbeitsstand steht in `group_marketing`, nicht in `groups`.** Ein
-  Suchlauf schreibt jeden gefundenen Datensatz neu; von Hand gepflegte Angaben
-  hätten dort keinen sicheren Platz.
+  Schreiblauf über `upsert_groups` schreibt den ganzen Datensatz neu; von Hand
+  gepflegte Angaben hätten dort keinen sicheren Platz.
 - **, also
   kann keiner erkennen, dass eine Anfrage gestellt wurde. `marketing set` und
   `marketing beitritt` schreiben mit, was ein Mensch im Browser getan hat.
@@ -569,9 +499,12 @@ eigene Vorbereitung** — es wird nichts veröffentlicht und nichts verschickt;
   unangetastet, `refresh-urls` erneuert nur den Vorspann der Links. Der Code
   ist über **alle** Kampagnen eindeutig — sonst wäre ein eingehender Klick
   nicht zuzuordnen.
-- **Die Kürzel im Code kommen aus der Konfiguration** (`code:` in
-  `cities.yaml`/`audiences.yaml`, sonst die ersten drei Buchstaben der
-  Kennung). Eine neue Stadt bringt ihr Kürzel selbst mit.
+- **Die Kürzel im Code kommen aus dem Bestand** — die ersten drei Buchstaben
+  von `audience_tags[0]` und `city`. Bis zum 20.09.2026 ging ein optionales
+  Feld `code:` aus `cities.yaml`/`audiences.yaml` vor; beide Dateien sind mit
+  der Entdeckungsschicht entfernt. Wer ein bestimmtes Kürzel will, schreibt
+  den Tag bzw. den Stadtnamen entsprechend — eine zweite Tabelle dafür wäre
+  eine zweite Wahrheit über dieselbe Gruppe.
 - **`APP_BASE_URL` (Umgebung) schlägt `marketing.app_base_url`.** Der Wechsel
   von localhost auf die echte Domain berührt die Codes nicht.
 - **Dieselbe Datenbank, dasselbe Migrationsverfahren** (`user_version`,
@@ -673,16 +606,18 @@ dazu `*_generated`, `*_vorlage_key`, `*_quelle`, `*_generiert_am`).
 - **Zwei Töpfe statt eines Platzhalters, der leer bleiben darf.** 152 von 313
   Gruppen haben keine erkannte Stadt, 115 keine Zielgruppe. Eine Vorlage mit
   „in {stadt}" zerbricht damit bei der Hälfte des Bestands, deshalb `mit_stadt`
-  und `ohne_stadt`. Eine Stadt, die in `cities.yaml` nicht vorkommt, gilt als
-  keine Stadt — lieber die allgemeine Vorlage als ein erfundener Ortsname.
-- **Drei Beschriftungen je Zielgruppe, und sie sind nicht austauschbar.**
-  `label_de` („Syrer in Deutschland") ist fürs Auswahlfeld; in einer
-  Stadtvorlage ergäbe es „Syrer in Deutschland in Bonn". Dafür gibt es
-  `label_kurz_de`, und für arabische Vorlagen `label_ar` — aus `terms.ar` nicht
-  ableitbar, das sind Suchbegriffe für den Abgleich und keine Anrede.
+  und `ohne_stadt`. Seit dem 20.09.2026 gilt jede **eingetragene** Stadt:
+  Es gibt keine Liste mehr, gegen die geprüft werden könnte, und `Group.city`
+  wird von Hand gepflegt. Leer bleibt leer, und dann greift `ohne_stadt`.
+- **Drei Beschriftungen je Zielgruppe gab es bis zum 20.09.2026.** `label_de`
+  („Syrer in Deutschland") war fürs Auswahlfeld; in einer Stadtvorlage ergäbe
+  es „Syrer in Deutschland in Bonn", dafür gab es `label_kurz_de`, und für
+  arabische Vorlagen `label_ar`. Alle drei standen in `audiences.yaml` und
+  sind mit ihr entfallen. `{zielgruppe}` kommt jetzt aus `anrede_allgemein`
+  in `textvorlagen.yaml` und lautet für **jede** Gruppe gleich.
 - **Arabisch hat nur eine Form, also folgt daraus eine Regel für jede Vorlage.**
-  `label_ar` trägt den bestimmten Artikel und steht im Genitiv/Akkusativ
-  („السوريين"). Vor `{zielgruppe}` gehört deshalb ein eigenes Wort (مِن، إلى،
+  Die Anrede trägt den bestimmten Artikel und steht im Genitiv/Akkusativ
+  („الأصدقاء"; bis zum 20.09.2026 je Zielgruppe „السوريين"). Vor `{zielgruppe}` gehört deshalb ein eigenes Wort (مِن، إلى،
   أهلنا، مجتمع) — nie ein angehängtes Präfix und nie „يا": „لـ" verschmilzt mit
   dem Artikel („لـالسوريين" gibt es nicht), und „يا" verträgt keinen Artikel.
   Beides stand im ersten Wurf drin und fiel erst in der Rauchprobe auf.
@@ -766,14 +701,16 @@ dazu `*_generated`, `*_vorlage_key`, `*_quelle`, `*_generiert_am`).
   Vorlage, die niemand hingeschrieben hat. Damit tragen die 152 Gruppen ohne
   erkannte Stadt weiterhin den früheren Tonfall — sichtbar in der
   Arbeitsseite, und eine bewusste Entscheidung des Nutzers, keine Lücke.
-- **`{ziel}` steht an der Zielgruppe, nicht an der Kampagne**
-  (`ziel_ar`/`ziel_de` in `audiences.yaml`). Wer syrische Gruppen bewirbt,
-  meint Syrien; wer irakische bewirbt, den Irak — auch wenn beide Kampagnen
-  „Batreeq Germany" heißen. `label_ar` taugt dafür nicht: Es steht im
-  Genitiv Plural, und „من بون إلى السوريين" wäre kein Ziel, sondern ein
-  Satzfehler. Zielgruppen ohne einzelnes Land (`arabs`) lassen das Feld leer
-  und bekommen `ziel_allgemein` („الوطن") — ein erfundenes Land stünde als
-  Behauptung in dreihundert Beiträgen.
+- **`{ziel}` steht seit dem 20.09.2026 in `textvorlagen.yaml`**, unter
+  `ziel_allgemein`, und lautet dort **„سوريا"**. Vorher stand es je Zielgruppe
+  in `audiences.yaml` (`ziel_ar`/`ziel_de`): Wer syrische Gruppen bewarb,
+  meinte Syrien; wer irakische bewarb, den Irak. Mit der Datei ist die
+  Unterscheidung entfallen — der Bestand dieses Projekts sind Syrien-Strecken,
+  und „الوطن" wäre an 24 Vorlagenstellen eine Abschwächung des Satzes, den der
+  Nutzer geschrieben hat. Wer einen Bestand mit zwei Zielen bewirbt, braucht
+  zwei Kampagnen mit eigenen Vorlagen — nicht eine Tabelle neben dem Text.
+  Eine Anrede taugt dafür nach wie vor nicht: „من بون إلى الأصدقاء" wäre kein
+  Ziel, sondern ein Satzfehler.
 - **`{gegenstand}` ist ein Wort und kein zweiter Vorrat.** In den Vorlagen
   steht „`{gegenstand}` صغير"; jede Fassung müsste dieselbe Genus- und
   Numerusform haben („أمانة صغير" gibt es nicht). Fünf Wörter für einen
@@ -1186,12 +1123,13 @@ mit 900, und die 900 sind genau die Menschen, die einen Mitnehmer suchen.
   (`name_confidence` 1,0 gegen `snippet_confidence` 0,5).
 - **Die Nebenkategorien zählen wie die Hauptkategorie.** `classify_category`
   kürt **einen** Sieger, und bei zwei gleich starken Treffern gewinnt der, der
-  in `categories.yaml` weiter oben steht. Welches von beiden das ist, ist eine
-  Eigenschaft der Datei und keine der Gruppe.
+  bei der Klassifikation weiter oben stand. Welches von beiden das ist, war
+  eine Eigenschaft der Datei und keine der Gruppe. Seit dem 20.09.2026 steht
+  die Kategorie im Bestand und wird gepflegt statt gekürt.
 - **Der Unterschied zwischen `B` und `C` ist der Deutschlandbezug.** Eine
   Gruppe über Syrien, die Deutschland nie erwähnt, ist keine Gemeinschaft
-  *hier*. Erkannt wird er an einer Stadt aus `cities.yaml` oder an einem
-  Herkunftswort — eine Gemeinschaftsgruppe nennt beides fast immer, denn sie
+  *hier*. Erkannt wird er an `Merkmale.stadt` (aus dem Bestand) oder an einem
+  Herkunftswort aus `settings.yaml` — eine Gemeinschaftsgruppe nennt beides fast immer, denn sie
   heißt danach.
 - **Die Vorgabe ohne Angabe ist `B`, nicht `D`.** Wer einen `Gruppenfortschritt`
   ohne Einstufung baut — ein Test, ein älterer Aufrufer —, hat nichts über die
@@ -1201,31 +1139,29 @@ mit 900, und die 900 sind genau die Menschen, die einen Mitnehmer suchen.
 - **`D` heißt übersprungen, nicht gelöscht.** Die Gruppe bleibt im Bestand,
   behält ihren Tracking-Code und wird im nächsten Lauf neu beurteilt — dieselbe
   Behandlung wie bei einer gesperrten Gruppe.
-- **Die Begriffe stehen in drei Konfigurationsdateien**, und jede ist dort die
-  fachliche Wahrheit: Kategoriebegriffe in `categories.yaml`,
-  Zielgruppenbegriffe in `audiences.yaml`, Ziele und Herkunft in
-  `settings.yaml` unter `marketing.zielprioritaet`. `regeln_aus_config` ist die
+- **Die Begriffe stehen seit dem 20.09.2026 in einer Datei**: `settings.yaml`
+  unter `marketing.zielprioritaet`. Kategorie- und Zielgruppenbegriffe gab es
+  daneben in `categories.yaml`/`audiences.yaml`; mit ihnen ist der Abgleich
+  gegen den **Namen** einer Gruppe entfallen — maßgeblich sind jetzt
+  `kategorie`, `nebenkategorien` und `audiences` aus dem Bestand. `regeln_aus_config` ist die
   **einzige** Stelle des Moduls, die Konfiguration liest; alles darunter ist
-  ohne sie prüfbar (wie `grenzen.einstellungen`). Eine Kategorie, die es nicht
-  gibt, meldet `config-check` — sonst verschwände die Klasse A still, und die
-  Kampagne arbeitete wieder in den Gemeinschaftsgruppen.
-- **`categories.yaml` hat dafür zwei neue Kategorien**, `versand` und `reise`,
-  und sie stehen **ganz oben**. Die Reihenfolge entscheidet bei Gleichstand,
-  und genau der ist der Regelfall: „Syrer in Berlin – Reisen nach Damaskus"
-  trifft `community` und `reise` mit je einem Namenstreffer. Standen sie
-  hinten, gewänne die Gemeinschaft, und die Gruppe wäre im Bestand keine
-  Reisegruppe mehr. Zwei getrennte Kategorien, weil wer **schickt** einen
-  Reisenden sucht und wer **reist** etwas mitnehmen kann — die beiden Hälften
-  desselben Marktplatzes.
-- **`queries.yaml` hat einen eigenen Block `reise_versand`** (46 bundesweite
-  Anfragen) und vier zusätzliche Stadtmuster. Er steht im Builder **vor**
-  `nationwide`: Wer mit `--limit 20` sucht, soll die zwanzig bekommen, die den
-  Zielmarkt treffen, und nicht zwanzig weitere Gemeinschaftsgruppen, von denen
-  schon dreihundert im Bestand stehen. Der Plan wächst damit von 274 auf 364
-  Anfragen — `fbgroups search --dry-run --show-all` zeigt ihn, bevor ein Credit
-  ausgegeben wird. Die Städte des Nutzers, die Phase 2 sind (Mannheim,
-  Karlsruhe, Freiburg, Ulm), werden **nicht** erfasst; freigeschaltet wird eine
-  Stadt über `phase: 1` in `cities.yaml`.
+  ohne sie prüfbar (wie `grenzen.einstellungen`). Eine Kategorie, die im
+  **Bestand** nicht vorkommt, meldet `config-check` — sonst verschwände die
+  Klasse A still, und die Kampagne arbeitete wieder in den
+  Gemeinschaftsgruppen. Bei leerem Bestand wird nicht gewarnt: Sonst meldete
+  ein frisches Projekt jeden richtigen Eintrag als Tippfehler.
+- **`versand` und `reise` sind die beiden Kategorien der Klasse A.** Zwei
+  getrennte, weil wer **schickt** einen Reisenden sucht und wer **reist** etwas
+  mitnehmen kann — die beiden Hälften desselben Marktplatzes. Sie standen bis
+  zum 20.09.2026 ganz oben in `categories.yaml`, weil die Reihenfolge dort bei
+  Gleichstand entschied: „Syrer in Berlin – Reisen nach Damaskus" traf
+  `community` und `reise` mit je einem Namenstreffer, und hinten stehend
+  gewänne die Gemeinschaft. Diese Kürung gibt es nicht mehr — die Kategorie
+  steht im Bestand und wird gepflegt. Die Gruppe aus dem Beispiel ist damit
+  das, was jemand eingetragen hat, und nicht das, was eine Dateireihenfolge
+  ergab. Genannt werden die beiden Kennungen in `settings.yaml` unter
+  `marketing.zielprioritaet.kategorien`; `config-check` gleicht sie gegen den
+  Bestand ab.
 
 ### Deutschland zuerst, dann Europa (`zielgruppe.Region`)
 
@@ -1273,11 +1209,13 @@ sortiert stand sie vor den deutschen Gruppen.
   بيروت - دمشق" ist eine Berliner Gruppe; sie wegen des Zwischenstopps
   herabzustufen hieße, eine richtige Gruppe an ein Detail zu verlieren. Nur
   wer **allein** die andere Seite nennt, meint die andere Strecke.
-- **Die Städte aus `cities.yaml` zählen als Deutschlandbeleg**, zusätzlich zu
+- **Die deutschen Städtenamen zählen als Deutschlandbeleg**, zusätzlich zu
   `Merkmale.stadt`. Jene ist die *erkannte* Stadt aus dem Bestand und der
-  bessere Beleg; diese fängt den Fall ab, in dem die Erkennung nie gelaufen
-  ist. Genommen werden **alle** Städte, auch die aus Phase 2: `phase`
-  entscheidet, wonach gesucht wird, nicht ob eine Stadt in Deutschland liegt.
+  bessere Beleg; diese fängt den Fall ab, in dem nie eine eingetragen wurde.
+  Sie standen bis zum 20.09.2026 in `cities.yaml` und stehen seither in
+  `settings.yaml` unter `marketing.zielprioritaet.herkunft` — mitgenommen
+  statt verloren: „مشاوير برلين - بيروت - دمشق" ist eine Berliner Gruppe, und
+  ohne „برلين" stünde sie als „Land unbekannt" hinter einer libanesischen.
 - **Syrien steht in `ziele` und in keiner Länderliste.** Stünde es in
   `ausserhalb`, fiele der ganze Zielmarkt aus Klasse A — jede Gruppe darin
   nennt ihr Ziel. `config-check` meldet die Kollision als Fehler, ebenso ein
@@ -1654,8 +1592,12 @@ die Zielprioritaet kamen am 13.09.2026 dazu.
   Der Vermerk wird **auch nach einem Fehlschlag** gesetzt: Eine Bewertung,
   die jedes Mal scheitert, hielte die Kampagne sonst für immer vor der Arbeit
   fest. Gerechnet wird in `rescoring.bewerte_neu` — derselbe Weg, den
-  `fbgroups rescore` geht. Zwei Fassungen wären zwei Ranglisten: eine für den
-  Bericht, eine für die Arbeit, und niemand könnte sagen, welche gilt.
+  auch die Übersicht liest. Zwei Fassungen wären zwei Ranglisten: eine für den
+  Bericht, eine für die Arbeit, und niemand könnte sagen, welche gilt. Einen
+  eigenen Befehl `fbgroups rescore` gibt es seit dem 20.09.2026 nicht mehr;
+  neu bewertet wird im Lauf. **Klassifiziert wird dabei nicht** — die drei
+  Felder werden gepflegt, und eine Neubewertung, die sie überschriebe, wäre
+  ein stilles Zurücksetzen dieser Handarbeit.
   `--limit N` zählt die Bewertung **nicht** mit; sie begrenzt, was nach außen
   geht.
 - **Die Rangfolge hat drei Stufen: erst wohin es gehört, dann was möglich
@@ -2444,9 +2386,11 @@ allein die Adresse im Text.
 
 - Dateien **immer** mit `encoding="utf-8"` öffnen; die Plattformvorgabe ist
   cp1252 und zerstört arabische Begriffe.
-- Seed-Dateien **immer** mit `utf-8-sig` lesen — CSV *und* TXT. Notepad und
-  `Out-File` schreiben ein BOM; ohne `utf-8-sig` wird es Teil der ersten Zeile
-  und die erste URL geht stillschweigend verloren (`tests/test_encoding.py`).
-- CSV-Export mit `utf-8-sig` und `;` schreiben, damit Excel Arabisch und
-  Spalten korrekt darstellt.
+- Von Hand erstellte CSV-/TXT-Dateien **immer** mit `utf-8-sig` lesen. Notepad
+  und `Out-File` schreiben ein BOM; ohne `utf-8-sig` wird es Teil der ersten
+  Zeile und der erste Datensatz geht stillschweigend verloren. Der Seed-Import
+  und `tests/test_encoding.py`, an denen diese Regel hing, sind am 20.09.2026
+  entfallen — die Regel gilt für den nächsten Importweg genauso.
+- CSV mit `utf-8-sig` und `;` schreiben, damit Excel Arabisch und Spalten
+  korrekt darstellt.
 - PowerShell 5.1 kennt kein `&&` und kein `||`; mit `;` und `if ($?) { }` ketten.

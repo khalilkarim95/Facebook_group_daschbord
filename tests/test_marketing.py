@@ -77,8 +77,17 @@ def test_code_folgt_dem_vereinbarten_muster(config) -> None:
     assert ist_gueltiger_code(code)
 
 
-def test_code_kuerzel_kommen_aus_der_konfiguration(config) -> None:
-    assert code_prefix(_group(city="München", audience_tags=["arabs"]), config) == "FB-ARA-MUE"
+def test_code_kuerzel_kommen_aus_dem_bestand(config) -> None:
+    """Die ersten drei Buchstaben dessen, was an der Gruppe steht.
+
+    Bis zum 20.09.2026 ging ein optionales Feld ``code:`` aus
+    ``cities.yaml``/``audiences.yaml`` vor - "München" ergab damit ``MUE``.
+    Beide Dateien sind mit der Entdeckungsschicht entfernt; gebildet wird das
+    Kuerzel jetzt aus dem Namen, und Umlaute fallen dabei weg ("Mnchen" ->
+    ``MNC``). Wer ``MUE`` will, schreibt "Muenchen" in den Bestand.
+    """
+    assert code_prefix(_group(city="München", audience_tags=["arabs"]), config) == "FB-ARA-MNC"
+    assert code_prefix(_group(city="Muenchen", audience_tags=["arabs"]), config) == "FB-ARA-MUE"
 
 
 def test_ohne_zielgruppe_oder_stadt_gibt_es_ersatzkuerzel(config) -> None:

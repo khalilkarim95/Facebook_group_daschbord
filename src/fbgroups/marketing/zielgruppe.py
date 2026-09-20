@@ -51,11 +51,20 @@ bekommt, und wie viel ein einzelner Beitrag hergeben muss.
 
 ## Die Begriffe stehen in der Konfiguration
 
-``config/settings.yaml`` unter ``marketing.zielprioritaet``, die
-Kategoriebegriffe in ``config/categories.yaml``, die Zielgruppenbegriffe in
-``config/audiences.yaml``. Hier steht die **Regel**, dort die Woerter - wie
-ueberall im Projekt. ``regeln_aus_config`` ist die einzige Stelle, die die
-Konfiguration kennt; alles darunter ist ohne sie pruefbar.
+``config/settings.yaml`` unter ``marketing.zielprioritaet``. Hier steht die
+**Regel**, dort die Woerter - wie ueberall im Projekt. ``regeln_aus_config``
+ist die einzige Stelle, die die Konfiguration kennt; alles darunter ist ohne
+sie pruefbar.
+
+Bis zum 20.09.2026 kamen drei weitere Wortlisten aus ``categories.yaml``,
+``audiences.yaml`` und ``cities.yaml``: Kategoriebegriffe, Zielgruppenbegriffe
+und deutsche Stadtnamen. Die Dateien sind mit der Entdeckungsschicht entfernt,
+und damit beurteilt dieses Modul den **Namen** einer Gruppe nicht mehr auf
+Thema und Zielgruppe hin. Was bleibt, ist das, was im Bestand steht -
+``kategorie``, ``nebenkategorien``, ``audiences``, ``stadt`` - plus ``ziele``,
+``herkunft``, ``europa`` und ``ausserhalb`` aus ``settings.yaml``. Eine Gruppe
+ohne gepflegte Kategorie faellt damit aus Klasse A; das ist der Preis dafuer,
+dass die Einstufung keine geratenen Begriffe mehr benutzt.
 """
 
 from __future__ import annotations
@@ -163,20 +172,14 @@ class Regeln:
     """Die Woerter, an denen die Klassen haengen - aus der Konfiguration.
 
     Getrennt von der Regel selbst, damit ``einstufe`` ohne Konfiguration
-    pruefbar bleibt: Ein Test baut sich die drei Listen in vier Zeilen
-    zusammen und muss dafuer keine YAML-Datei anlegen. Dieselbe Aufteilung
-    wie ``grenzen.Grenzen`` / ``grenzen.einstellungen``.
+    pruefbar bleibt: Ein Test baut sich die Listen in wenigen Zeilen zusammen
+    und muss dafuer keine YAML-Datei anlegen. Dieselbe Aufteilung wie
+    ``grenzen.Grenzen`` / ``grenzen.einstellungen``.
     """
 
     #: Die Kennungen der A-Kategorien (``versand``, ``reise``) - fuer den
     #: Abgleich mit ``Group.category``.
     kategorien: frozenset[str] = frozenset()
-
-    #: Alle Begriffe dieser Kategorien. Sie werden **zusaetzlich** gegen den
-    #: Namen geprueft, denn ``classify_category`` kuert nur einen Sieger: Eine
-    #: Gruppe "Syrer in Berlin - Reisen nach Damaskus" kann als ``community``
-    #: im Bestand stehen und trotzdem eine Reisegruppe sein.
-    kategoriebegriffe: tuple[str, ...] = ()
 
     #: Wohin der Weg geht. Ohne eines dieser Worte ist eine Reisegruppe keine
     #: Gruppe fuer uns - "Reisen nach Thailand" traegt dieselbe Kategorie.
@@ -186,18 +189,6 @@ class Regeln:
     #: Das sind die **deutschen** Woerter; sie belegen zugleich
     #: ``Region.DE``.
     herkunft: tuple[str, ...] = ()
-
-    #: Die Namen der deutschen Staedte aus ``cities.yaml`` - alle, auch die
-    #: aus Phase 2. ``phase`` entscheidet, wonach **gesucht** wird; ob eine
-    #: Stadt in Deutschland liegt, entscheidet sie nicht.
-    #:
-    #: Sie stehen neben ``Merkmale.stadt`` und nicht statt ihrer: Jenes ist
-    #: die **erkannte** Stadt aus dem Bestand und damit der bessere Beleg,
-    #: dieses faengt den Fall ab, in dem die Erkennung nie gelaufen ist. Ohne
-    #: sie galt "مشاوير برلين - بيروت - دمشق" als aussereuropaeisch, weil nur
-    #: Beirut in einer Laenderliste stand - eine Berliner Gruppe, verloren an
-    #: einen Zwischenstopp.
-    staedte: tuple[str, ...] = ()
 
     #: Die uebrigen europaeischen Laender (Oesterreich, Schweden, ...).
     #: Zweite Wahl und nicht dritte: Ein Mitnehmer von Wien nach Damaskus
@@ -215,9 +206,6 @@ class Regeln:
     #: ``arabs``) - fuer den Abgleich mit ``Group.audience_tags``.
     audiences: frozenset[str] = frozenset()
 
-    #: Ihre Begriffe, aus demselben Grund wie ``kategoriebegriffe``: Eine
-    #: Gruppe kann arabisch heissen, ohne dass die Erkennung gelaufen ist.
-    audiencebegriffe: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -329,10 +317,11 @@ def bestimme_region(merkmale: Merkmale, regeln: Regeln) -> tuple[Region, tuple[s
 
     Die Reihenfolge ist eine Rangfolge und keine Willkuer:
 
-    1. **Deutschland**, sobald eine Stadt aus ``cities.yaml`` erkannt ist,
-       eine im Text steht oder ein deutsches Herkunftswort faellt. Die
-       Staedteliste ist ausschliesslich deutsch (jede traegt ein
-       ``bundesland``), also ist eine Stadt bereits der Beleg.
+    1. **Deutschland**, sobald am Datensatz eine Stadt steht oder ein
+       deutsches Herkunftswort faellt. Die Woerter stehen in
+       ``marketing.zielprioritaet.herkunft`` und sind ausschliesslich
+       deutsch - Laendernamen und die Staedte, die bis zum 20.09.2026 in
+       ``cities.yaml`` standen. Eine Stadt ist damit bereits der Beleg.
     2. **Uebriges Europa**, wenn ein europaeisches Land genannt wird.
        Deutschland geht vor: "Versand Deutschland - Oesterreich - Syrien" ist
        eine deutsche Gruppe, die auch Wien bedient, und keine oesterreichische.
@@ -357,7 +346,7 @@ def bestimme_region(merkmale: Merkmale, regeln: Regeln) -> tuple[Region, tuple[s
 
     if merkmale.stadt:
         return Region.DE, (merkmale.stadt,)
-    if deutsch := _treffer(text, regeln.herkunft + regeln.staedte):
+    if deutsch := _treffer(text, regeln.herkunft):
         return Region.DE, tuple(deutsch[:2])
     if europa := _treffer(text, regeln.europa):
         return Region.EU, tuple(europa[:2])
@@ -379,9 +368,9 @@ def einstufe(merkmale: Merkmale, regeln: Regeln) -> Zielbefund:
     2. **B** - eine syrische oder arabische Gemeinschaft **in Deutschland**.
        Der Deutschlandbezug ist der Unterschied zu C: Eine Gruppe ueber
        Syrien, die Deutschland nie erwaehnt, ist keine Gemeinschaft hier.
-       Erkannt wird er an einer Stadt aus ``cities.yaml`` oder an einem
-       Herkunftswort - eine Gemeinschaftsgruppe nennt beides fast immer, denn
-       sie heisst danach.
+       Erkannt wird er an der Stadt am Datensatz oder an einem Herkunftswort
+       aus ``settings.yaml`` - eine Gemeinschaftsgruppe nennt beides fast
+       immer, denn sie heisst danach.
     3. **C** - irgendein Bezug, aber keiner der beiden. Kein Platz, an dem
        gearbeitet wird; hoechstens ein einzelner Beitrag, der ausdruecklich
        danach fragt.
@@ -394,18 +383,16 @@ def einstufe(merkmale: Merkmale, regeln: Regeln) -> Zielbefund:
     erkannt sein - ein Beitrag ueber ein Paket macht aus einer
     Wohnungsgruppe keine Versandgruppe.
     """
-    name = normalize(merkmale.name)
     text = normalize(f"{merkmale.name} {merkmale.beschreibung}")
     region, region_treffer = bestimme_region(merkmale, regeln)
 
     # --- A: das Thema, das Ziel und ein Weg, der durch Europa fuehrt ----
     kategorien = {merkmale.kategorie or "", *merkmale.nebenkategorien}
     kategorie_passt = bool(kategorien & regeln.kategorien)
-    thema_im_namen = _treffer(name, regeln.kategoriebegriffe)
     ziel = _treffer(text, regeln.ziele)
 
-    if (kategorie_passt or thema_im_namen) and ziel:
-        thema = thema_im_namen or [merkmale.kategorie or "kategorie"]
+    if kategorie_passt and ziel:
+        thema = [merkmale.kategorie or "kategorie"]
         teile = [", ".join(thema[:2]), ", ".join(ziel[:2])]
         if region_treffer:
             teile.append(", ".join(region_treffer[:1]))
@@ -445,12 +432,10 @@ def einstufe(merkmale: Merkmale, regeln: Regeln) -> Zielbefund:
 
     # --- B: Gemeinschaft in Deutschland --------------------------------
     zielgruppe = [tag for tag in merkmale.audiences if tag in regeln.audiences]
-    zielgruppe_im_text = _treffer(text, regeln.audiencebegriffe)
-    hat_zielgruppe = bool(zielgruppe or zielgruppe_im_text)
     deutschlandbezug = bool(merkmale.stadt) or bool(_treffer(text, regeln.herkunft))
 
-    if hat_zielgruppe and deutschlandbezug:
-        belege = zielgruppe or zielgruppe_im_text[:2]
+    if zielgruppe and deutschlandbezug:
+        belege = zielgruppe
         ort = merkmale.stadt or "Deutschland"
         return Zielbefund(
             prioritaet=Zielprioritaet.B,
@@ -470,11 +455,11 @@ def einstufe(merkmale: Merkmale, regeln: Regeln) -> Zielbefund:
     # einem Syrienwort im Text. Bearbeitet wird sie nicht - aber ein einzelner
     # Beitrag, der ausdruecklich nach einem Mitnehmer fragt, bleibt erreichbar.
     anzeichen = []
-    if hat_zielgruppe:
+    if zielgruppe:
         anzeichen.append("Zielgruppe")
     if ziel:
         anzeichen.append("Ziel")
-    if kategorie_passt or thema_im_namen:
+    if kategorie_passt:
         anzeichen.append("Reise/Versand")
     if anzeichen:
         return Zielbefund(
@@ -513,42 +498,27 @@ def aus_group(group, regeln: Regeln) -> Zielbefund:  # noqa: ANN001 - Group
 def regeln_aus_config(config) -> Regeln:  # noqa: ANN001 - AppConfig, ohne Import
     """Die einzige Stelle dieses Moduls, die die Konfiguration kennt.
 
-    Die Begriffe kommen aus drei Dateien, und jede ist dort die fachliche
-    Wahrheit: die Kategoriebegriffe aus ``categories.yaml``, die
-    Zielgruppenbegriffe aus ``audiences.yaml``, Ziele und Herkunft aus
-    ``settings.yaml``. Eine vierte Liste hier waere eine vierte Wahrheit.
+    Alle Woerter stehen unter ``marketing.zielprioritaet`` in
+    ``settings.yaml``. Bis zum 20.09.2026 kamen die Kategorie- und
+    Zielgruppenbegriffe aus ``categories.yaml``/``audiences.yaml`` und die
+    Stadtnamen aus ``cities.yaml``; mit der Entdeckungsschicht sind die drei
+    Dateien entfernt. Uebrig bleiben die **Kennungen** (``kategorien``,
+    ``audiences``), und die gleichen sich gegen das ab, was im Bestand steht -
+    nicht mehr gegen den Namen einer Gruppe.
 
-    Eine Kategorie- oder Zielgruppenkennung, die es nicht gibt, wird
-    **uebergangen** und von ``config-check`` gemeldet - dieselbe Behandlung
-    wie bei einem Gewicht fuer einen Bestandteil, den es nicht gibt: Ein
-    Tippfehler ist keine Erweiterung.
+    Eine Kennung, die es im Bestand nie gibt, laeuft damit ins Leere. Das ist
+    kein Fehler, den dieses Modul melden kann: Welche Kategorien vorkommen,
+    weiss nur der Bestand, und der aendert sich mit jeder gepflegten Zeile.
     """
     block = config.get("marketing", "zielprioritaet", default={}) or {}
 
-    kategorien = {str(k) for k in (block.get("kategorien") or [])}
-    begriffe: list[str] = []
-    for kategorie in config.categories:
-        if kategorie.id in kategorien:
-            begriffe.extend(kategorie.all_terms())
-
-    audiences = {str(a) for a in (block.get("audiences") or [])}
-    audiencebegriffe: list[str] = []
-    for kennung, audience in config.audiences.items():
-        if kennung in audiences:
-            audiencebegriffe.extend(audience.all_terms())
-
     return Regeln(
-        kategorien=frozenset(kategorien),
-        kategoriebegriffe=tuple(begriffe),
+        kategorien=frozenset(str(k) for k in (block.get("kategorien") or [])),
         ziele=tuple(str(z) for z in (block.get("ziele") or [])),
         herkunft=tuple(str(h) for h in (block.get("herkunft") or [])),
-        staedte=tuple(
-            name for stadt in config.cities.values() for name in stadt.all_names() if name
-        ),
         europa=tuple(str(e) for e in (block.get("europa") or [])),
         ausserhalb=tuple(str(a) for a in (block.get("ausserhalb") or [])),
-        audiences=frozenset(audiences),
-        audiencebegriffe=tuple(audiencebegriffe),
+        audiences=frozenset(str(a) for a in (block.get("audiences") or [])),
     )
 
 

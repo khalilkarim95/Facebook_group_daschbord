@@ -33,8 +33,10 @@
 #
 # PLATZHALTER
 #
-#   {zielgruppe}  Anrede aus audiences.yaml - label_ar bzw. label_kurz_de
-#   {stadt}       Stadtname aus cities.yaml - name_ar bzw. name_de
+#   {zielgruppe}  Anrede aus anrede_allgemein (siehe unten). Bis zum
+#                 20.09.2026 stand sie je Zielgruppe in audiences.yaml.
+#   {stadt}       Stadtname aus dem Bestand (Group.city), so wie er dort
+#                 steht. Bis zum 20.09.2026 aus cities.yaml uebersetzt.
 #   {gruppe}      Der Name der Facebook-Gruppe. Sparsam verwenden: Er steht
 #                 ohnehin ueber dem Beitrag, und wer ihn nennt, klingt schnell
 #                 wie ein Serienbrief.
@@ -92,18 +94,28 @@
 # 300 Beitraege hinausgehen.
 
 # Die Anrede, wenn weder die Gruppe noch die Kampagne eine Zielgruppe nennt.
-# 115 von 313 Gruppen tragen keinen Zielgruppen-Tag. Ohne diesen Rueckfall
-# stuende mitten im Satz ein Loch.
+# Die Anrede fuer {zielgruppe}. Seit dem 20.09.2026 die **einzige**: Vorher
+# stand je Zielgruppe eine eigene in audiences.yaml ("السوريين"), und dieser
+# Wert war der Rueckfall fuer Gruppen ohne Tag. Mit der Entdeckungsschicht ist
+# die Datei entfernt; der blosse Tag ("syrians") taugt nicht als Anrede in
+# einem arabischen Satz, und ein Wort zu erfinden ist das Gegenteil dessen,
+# was dieses Projekt unter Vorlagen versteht.
 anrede_allgemein:
   ar: الأصدقاء
   de: Freunde
 
-# Das Reiseziel, wenn die Zielgruppe keines nennt ({ziel}). "arabs" ist kein
-# Land; "الوطن" ist die Antwort, die keine Behauptung ueber die Gruppe
-# aufstellt - und in jeden der Saetze passt, in denen {ziel} vorkommt.
+# Das Reiseziel fuer {ziel}. Ebenfalls seit dem 20.09.2026 die einzige
+# Quelle - vorher kam es aus ziel_ar/ziel_de der Zielgruppe, und dieser Wert
+# galt nur fuer Zielgruppen ohne einzelnes Land ("arabs" -> "الوطن").
+#
+# Es steht bewusst "سوريا" und nicht "الوطن": Der Bestand dieses Projekts sind
+# Syrien-Strecken, und {ziel} kommt in 24 Vorlagen vor. "الوطن" waere an jeder
+# dieser Stellen eine Abschwaechung des Satzes, den der Nutzer geschrieben hat.
+# Wer einen Bestand mit zwei Zielen bewirbt, braucht zwei Kampagnen mit
+# eigenen Vorlagen - nicht eine Tabelle neben dem Text.
 ziel_allgemein:
-  ar: الوطن
-  de: die Heimat
+  ar: سوريا
+  de: Syrien
 
 # Was verschickt wird ({gegenstand}). Ein Wort, nicht mehrere Fassungen: In
 # den Vorlagen steht "{gegenstand} صغير" - jede Fassung muesste dieselbe
@@ -137,8 +149,10 @@ vorlagen:
   #
   #   1. ``{ziel}`` statt des festen "سوريا". Die Vorlagen waren Beispiele
   #      fuer syrische Gruppen; eine irakische Kampagne meint den Irak. Das
-  #      Wort kommt aus ``audiences.yaml`` und setzt sich grammatisch genau
-  #      dort ein, wo vorher "سوريا" stand.
+  #      Wort kam aus ``audiences.yaml`` und setzt sich grammatisch genau
+  #      dort ein, wo vorher "سوريا" stand. Seit dem 20.09.2026 steht es in
+  #      ``ziel_allgemein`` weiter oben und lautet wieder "سوريا" - der
+  #      Platzhalter bleibt, damit ein Wechsel eine Zeile kostet.
   #   2. ``{link}`` auch in den Kommentaren. Die Vorlagen enthielten ihn
   #      nicht - ohne ihn bekaeme die Gruppe nie einen Klick gutgeschrieben,
   #      und ``pruefe_platzhalter`` wiese den Text ab.

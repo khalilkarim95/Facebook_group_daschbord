@@ -422,28 +422,20 @@ def merkmale(gruppe: Group | None, link: CampaignGroup, config: AppConfig | None
     geht - dabei steht alles davon ohnehin im Bestand.
 
     ``config`` nur fuer die Beschriftungen: ``audience_tags`` haelt Kennungen
-    ("syrians"), und "syrians" ist keine Auskunft. Fehlt die Konfiguration,
-    steht die Kennung da - schlechter lesbar, aber nicht falsch.
+    ("syrians"). Bis zum 20.09.2026 wurden sie hier ueber ``audiences.yaml``
+    und ``categories.yaml`` in Beschriftungen uebersetzt; beide Dateien sind
+    mit der Entdeckungsschicht entfernt, und damit steht die Kennung da -
+    schlechter lesbar, aber nicht falsch. Eine Beschriftung gehoert jetzt in
+    den Bestand, nicht in eine Tabelle daneben.
     """
     teile: list[tuple[str, str]] = []
     if gruppe is not None:
         if gruppe.city:
             teile.append(("Stadt", gruppe.city))
         if gruppe.audience_tags:
-            teile.append((
-                "Zielgruppe",
-                ", ".join(
-                    config.audiences[tag].label_de
-                    if config is not None and tag in config.audiences
-                    else tag
-                    for tag in gruppe.audience_tags
-                ),
-            ))
+            teile.append(("Zielgruppe", ", ".join(gruppe.audience_tags)))
         if gruppe.category:
-            beschriftungen = (
-                {k.id: k.label_de for k in config.categories} if config is not None else {}
-            )
-            teile.append(("Kategorie", beschriftungen.get(gruppe.category, gruppe.category)))
+            teile.append(("Kategorie", gruppe.category))
         if gruppe.score is not None:
             hoechst = f" von {gruppe.score_max:g}" if gruppe.score_max else ""
             teile.append(("Score", f"{gruppe.score:g}{hoechst}"))

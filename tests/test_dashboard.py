@@ -117,14 +117,20 @@ def test_status_steht_auf_deutsch_auf_der_seite(bestand: Path, config) -> None:
     assert zeile["marketing_label"] == "Leitung angesprochen"
 
 
-def test_bezeichnungen_kommen_aus_der_konfiguration(bestand: Path, config) -> None:
-    """Nicht die Kennung ``community`` anzeigen, sondern ihr ``label_de``."""
+def test_bezeichnungen_kommen_aus_dem_bestand(bestand: Path, config) -> None:
+    """Kategorie und Zielgruppe stehen so da, wie sie im Bestand stehen.
+
+    Bis zum 20.09.2026 wurden sie ueber ``categories.yaml``/``audiences.yaml``
+    in Beschriftungen uebersetzt ("community" -> "Community & Austausch").
+    Beide Dateien sind mit der Entdeckungsschicht entfernt; eine Ersatzliste
+    im Dashboard waere eine zweite Wahrheit ueber dieselbe Gruppe. Wer eine
+    lesbare Beschriftung will, schreibt sie in den Bestand.
+    """
     daten = sammle_daten(config, bestand)
     zeile = next(z for z in daten["gruppen"] if z["id"] == REAL_ID_A)
 
-    erwartet = next(c.label_de for c in config.categories if c.id == "community")
-    assert zeile["kategorie"] == erwartet
-    assert zeile["zielgruppen"] == [config.audiences["syrians"].label_de]
+    assert zeile["kategorie"] == "community"
+    assert zeile["zielgruppen"] == ["syrians"]
 
 
 def test_spalte_zaehlt_anfragen_und_nicht_funde(bestand: Path, config) -> None:
@@ -548,14 +554,26 @@ def test_auswahlregel_bildet_die_beschreibung_ab(client: TestClient, bestand: Pa
     assert campaign.target_cities == ["berlin"]
 
 
-def test_unbekannte_zielgruppe_wird_abgewiesen(client: TestClient) -> None:
-    """Die Kennungen stehen in config/*.yaml - eine zweite Liste gaebe es nicht."""
+def test_eine_beliebige_zielgruppe_wird_beim_anlegen_angenommen(
+    client: TestClient,
+) -> None:
+    """Es gibt keine Liste mehr, gegen die geprueft werden koennte.
+
+    Bis zum 20.09.2026 wies ``POST /kampagnen`` eine Kennung ab, die nicht in
+    ``audiences.yaml`` stand. Mit der Datei ist die Pruefung entfallen: Welche
+    Zielgruppen es gibt, weiss seither allein der Bestand - und der kann beim
+    Anlegen einer Kampagne noch leer sein.
+
+    Geprueft wird stattdessen dort, wo es etwas kostet: ``POST
+    /kampagnen/{id}/auswahl`` gleicht gegen den Bestand ab, denn erst dort
+    entstehen Tracking-Codes. Eine Einschraenkung auf etwas, das an keiner
+    Gruppe steht, traefe ohnehin keine.
+    """
     antwort = client.post(
         "/kampagnen", json={"name": "Test", "audiences": ["marsianer"]}
     )
 
-    assert antwort.status_code == 422
-    assert "marsianer" in antwort.json()["detail"]
+    assert antwort.status_code == 201
 
 
 def test_doppelte_kennung_wird_abgewiesen(client: TestClient) -> None:
@@ -853,10 +871,16 @@ def test_regelzeile_zaehlt_statt_aufzuzaehlen(bestand: Path, config) -> None:
     """
     import re
 
+    # Die Listen kamen bis zum 20.09.2026 aus ``audiences.yaml``/``cities.yaml``.
+    # Hier zaehlt nur, dass es viele sind - woher sie stammen, ist fuer die
+    # Frage "sprengt die Aufzaehlung die Spalte?" gleichgueltig.
+    zielgruppen = sorted({"syrians", "arabs", "kurden", "iraker", "libanesen"})
+    staedte = sorted({"berlin", "hamburg", "köln", "bonn", "essen", "dortmund"})
+
     with MarketingStore(bestand) as store:
         campaign = store.load_campaign("batreeq")
-        campaign.target_audiences = sorted(config.audiences)
-        campaign.target_cities = sorted(config.cities)
+        campaign.target_audiences = zielgruppen
+        campaign.target_cities = staedte
         store.save_campaign(campaign)
 
     seite = render(sammle_daten(config, bestand))
@@ -866,8 +890,8 @@ def test_regelzeile_zaehlt_statt_aufzuzaehlen(bestand: Path, config) -> None:
 
     assert "syrians" not in sichtbar
     assert "berlin" not in sichtbar
-    assert f"{len(config.audiences)} Zielgruppen" in sichtbar
-    assert f"{len(config.cities)} Städte" in sichtbar
+    assert f"{len(zielgruppen)} Zielgruppen" in sichtbar
+    assert f"{len(staedte)} Städte" in sichtbar
     # Vollstaendig bleibt sie erreichbar - am Mauszeiger.
     assert "syrians" in attribute
 

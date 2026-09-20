@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 
 from fbgroups.models import DataQuality, Group, PrivacyHint, RecordStatus, ValidationStatus
-from fbgroups.pipeline import run_seed_import
 from fbgroups.scoring import score_group
 from fbgroups.validation import (
     assess_data_quality,
@@ -53,34 +52,7 @@ def test_echte_kennungen_sind_keine_platzhalter(group_id: str) -> None:
     assert not is_placeholder_identifier(group_id)
 
 
-def test_gueltige_gruppe_mit_daten_wird_validated(config, tmp_path: Path) -> None:
-    path = _write(
-        tmp_path,
-        "url;name;member_count\n"
-        f"https://www.facebook.com/groups/{REAL_ID_A};Syrer in Berlin;12000\n",
-    )
-    groups, run = run_seed_import(config, paths=[path])
-
-    assert groups[0].validation_status is ValidationStatus.VALID
-    assert groups[0].status is RecordStatus.VALIDATED
-    assert groups[0].score is not None
-    assert run.groups_validated == 1
-
-
 # --- Fall 2: ungueltige URL -------------------------------------------
-
-def test_ungueltige_urls_werden_verworfen(config, tmp_path: Path) -> None:
-    path = _write(
-        tmp_path,
-        "url;name\n"
-        "https://example.com/groups/123;Falsche Domain\n"
-        "https://www.facebook.com/pages/abc;Keine Gruppe\n"
-        "kein text;Unsinn\n",
-    )
-    groups, run = run_seed_import(config, paths=[path])
-
-    assert groups == []
-    assert run.rows_rejected == 3
 
 
 def test_leere_kennung_ist_invalid() -> None:
@@ -113,23 +85,6 @@ def test_platzhalter_werden_erkannt(group_id: str) -> None:
     assert is_placeholder_identifier(group_id), group_id
 
 
-def test_platzhalter_wird_markiert_nicht_geloescht(config, tmp_path: Path) -> None:
-    """Platzhalter bleiben sichtbar im Bestand - markiert, nicht stillschweigend entfernt."""
-    path = _write(
-        tmp_path,
-        "url;name;member_count\n"
-        "https://www.facebook.com/groups/123456789012345;Syrer in Berlin;12000\n",
-    )
-    groups, run = run_seed_import(config, paths=[path])
-
-    assert len(groups) == 1
-    assert groups[0].validation_status is ValidationStatus.TEST_DATA
-    assert groups[0].status is RecordStatus.INVALID
-    assert groups[0].score is None
-    assert "test_data" in groups[0].score_reason
-    assert run.groups_test_data == 1
-
-
 def test_platzhalter_erhaelt_keinen_score(config) -> None:
     group = make_group(
         "111111111111",
@@ -149,64 +104,8 @@ def test_platzhalter_erhaelt_keinen_score(config) -> None:
 
 # --- Fall 4: Duplikat --------------------------------------------------
 
-def test_duplikat_wird_zusammengefuehrt(config, tmp_path: Path) -> None:
-    """Dieselbe Gruppe unter zwei URLs ergibt einen Datensatz.
-
-    Vermerkt wird der Zusammenschluss am **Lauf** (``run.groups_duplicate``),
-    nicht am Datensatz: Was uebrig bleibt, ist die Gruppe selbst, und die ist
-    ``validated``. Frueher trug sie ``duplicate``, abgeleitet aus
-    ``times_seen > 1`` - dieselbe Bedingung loest aber auch jeder erneute Fund
-    aus einer weiteren Suchanfrage aus. Beide Faelle sind hinterher nicht mehr
-    zu unterscheiden, und der zweite ist der weitaus haeufigere.
-    """
-    path = _write(
-        tmp_path,
-        "url;name;member_count\n"
-        f"https://www.facebook.com/groups/{REAL_ID_A};Syrer in Berlin;12000\n"
-        f"https://m.facebook.com/groups/{REAL_ID_A}/?ref=share;Syrer in Berlin;12000\n",
-    )
-    groups, run = run_seed_import(config, paths=[path])
-
-    assert len(groups) == 1
-    assert run.groups_duplicate == 1
-    assert groups[0].times_seen == 2
-    assert groups[0].status is RecordStatus.VALIDATED
-    assert groups[0].score is not None
-
 
 # --- Fall 5: fehlende Metadaten ---------------------------------------
-
-def test_nur_url_ergibt_insufficient_data(config, tmp_path: Path) -> None:
-    """Der Fall aus dem Excel-Export: reine URL-Liste ohne Metadaten."""
-    path = tmp_path / "seeds.txt"
-    path.write_text(
-        f"https://www.facebook.com/groups/{REAL_ID_A}\n"
-        f"https://www.facebook.com/groups/{REAL_ID_B}\n"
-        f"https://www.facebook.com/groups/{REAL_ID_C}\n",
-        encoding="utf-8",
-    )
-    groups, run = run_seed_import(config, paths=[path])
-
-    assert len(groups) == 3
-    for group in groups:
-        assert group.status is RecordStatus.INSUFFICIENT_DATA
-        assert group.score is None
-        assert group.data_quality is DataQuality.NONE
-        assert "insufficient_data" in group.score_reason
-
-    assert run.groups_insufficient_data == 3
-    assert run.groups_scored == 0
-
-
-def test_kein_kuenstlicher_einheitsscore(config, tmp_path: Path) -> None:
-    """Regressionstest: fruehere Fassung vergab jeder Gruppe denselben Score 8.75."""
-    path = tmp_path / "seeds.txt"
-    path.write_text(
-        "\n".join(f"https://www.facebook.com/groups/{i}" for i in (REAL_ID_A, REAL_ID_B)),
-        encoding="utf-8",
-    )
-    groups, _ = run_seed_import(config, paths=[path])
-    assert {g.score for g in groups} == {None}
 
 
 def test_name_allein_genuegt_nicht(config) -> None:
@@ -314,39 +213,6 @@ def test_abgeleitete_felder_erhoehen_die_datenqualitaet_nicht() -> None:
 
 # --- Fall 6: Urteil aus der Pruefliste ---------------------------------
 
-def test_nicht_erreichbar_aus_der_pruefliste(config, tmp_path: Path) -> None:
-    """Was der Mensch im Browser sieht, kann das Programm nicht wissen."""
-    path = _write(
-        tmp_path,
-        "url;name;mitglieder;erreichbar\n"
-        f"https://www.facebook.com/groups/{REAL_ID_A};Syrer in Berlin;12000;nein\n"
-        f"https://www.facebook.com/groups/{REAL_ID_B};Araber in Hamburg;9000;ja\n",
-    )
-    groups, _ = run_seed_import(config, paths=[path])
-    nach_id = {g.group_id: g for g in groups}
-
-    tot = nach_id[REAL_ID_A]
-    assert tot.validation_status is ValidationStatus.UNREACHABLE
-    assert tot.score is None
-    assert tot.status is RecordStatus.INVALID
-    assert "unreachable" in tot.score_reason
-
-    lebt = nach_id[REAL_ID_B]
-    assert lebt.validation_status is ValidationStatus.VALID
-    assert lebt.score is not None
-
-
-def test_leere_spalte_erreichbar_aendert_nichts(config, tmp_path: Path) -> None:
-    """Eine leere Zelle heisst 'nicht geprueft', nicht 'nicht erreichbar'."""
-    path = _write(
-        tmp_path,
-        "url;name;mitglieder;erreichbar\n"
-        f"https://www.facebook.com/groups/{REAL_ID_A};Syrer in Berlin;12000;\n",
-    )
-    groups, _ = run_seed_import(config, paths=[path])
-    assert groups[0].validation_status is ValidationStatus.VALID
-    assert groups[0].member_count == 12000
-
 
 def test_manuelles_urteil_ueberlebt_einen_suchtreffer(config, tmp_path: Path) -> None:
     """Ein Suchtreffer belegt nur, dass die URL indexiert wurde - mehr nicht."""
@@ -365,21 +231,6 @@ def test_manuelles_urteil_ueberlebt_einen_suchtreffer(config, tmp_path: Path) ->
         wieder = store.load_groups()[0]
 
     assert wieder.validation_status is ValidationStatus.UNREACHABLE
-
-
-def test_metadaten_werden_nie_erfunden(config, tmp_path: Path) -> None:
-    """Was nicht in der Datei stand, bleibt leer - kein Ratewert."""
-    path = _write(tmp_path, f"url\nhttps://www.facebook.com/groups/{REAL_ID_A}\n")
-    groups, _ = run_seed_import(config, paths=[path])
-
-    group = groups[0]
-    assert group.name == ""
-    assert group.city is None
-    assert group.bundesland is None
-    assert group.category is None
-    assert group.member_count is None
-    assert group.audience_tags == []
-    assert group.privacy_hint.value == "unknown"
 
 
 def test_mehrfach_gefundene_gruppe_ist_keine_dublette() -> None:

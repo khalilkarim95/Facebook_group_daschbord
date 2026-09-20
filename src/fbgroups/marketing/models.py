@@ -164,9 +164,11 @@ class GroupMarketing(BaseModel):
 class Campaign(BaseModel):
     """Eine Marketing-Kampagne.
 
-    ``audiences`` und ``cities`` verweisen auf die Kennungen aus
-    ``config/audiences.yaml`` und ``config/cities.yaml`` - dieselbe fachliche
-    Wahrheit wie im Rest des Projekts, keine zweite Liste.
+    ``audiences`` und ``cities`` sind die Kennungen bzw. Namen, wie sie am
+    Datensatz der Gruppe stehen (``audience_tags``, ``city``). Bis zum
+    20.09.2026 verwiesen sie auf ``config/audiences.yaml`` und
+    ``config/cities.yaml``; beide Dateien sind mit der Entdeckungsschicht
+    entfernt, und damit ist der Bestand die einzige Liste.
 
     **Beschreibung und Auswahlregel sind zwei verschiedene Dinge.** ``audiences``
     und ``cities`` sagen, *wen* die Kampagne bewirbt; die ``target_*``-Felder

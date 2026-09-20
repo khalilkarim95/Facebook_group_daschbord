@@ -183,9 +183,9 @@ marketing:
   # bei ``qualifikation.beurteile``.
   zielprioritaet:
     # A - der eigentliche Zielmarkt: Reise- und Versandgruppen mit einem
-    # genannten Ziel. Die Kategorien kommen aus categories.yaml; ein
-    # Kategoriename, den es dort nicht gibt, ist ein Tippfehler und wird von
-    # "config-check" gemeldet.
+    # genannten Ziel. Die Kategorien werden gegen den Bestand geprueft
+    # (categories.yaml gibt es seit dem 20.09.2026 nicht mehr); eine
+    # Kategorie, die an keiner Gruppe steht, meldet "config-check".
     kategorien: [versand, reise]
 
     # Wohin der Weg geht. Ohne eines dieser Worte ist "Reisegruppe" keine
@@ -201,7 +201,25 @@ marketing:
     #
     # Diese Liste belegt zugleich "Region.DE" - den ersten Platz der
     # geografischen Rangfolge.
-    herkunft: [Deutschland, Germany, Almanya, المانيا, ألمانيا, ألمانيه]
+    #
+    # Die Staedtenamen standen bis zum 20.09.2026 in cities.yaml und kamen
+    # von dort als eigene Liste dazu. Mit der Entdeckungsschicht ist die
+    # Datei entfernt, und die Namen sind hierher gezogen statt zu
+    # verschwinden: "مشاوير برلين - بيروت - دمشق" ist eine Berliner Gruppe,
+    # und ohne "برلين" stuende sie als "Land unbekannt" hinter einer
+    # libanesischen. Gemeint ist nur der Deutschlandbeleg - welche Stadt es
+    # ist, entscheidet hier nichts.
+    herkunft: [Deutschland, Germany, Almanya, المانيا, ألمانيا, ألمانيه,
+               Berlin, Hamburg, München, Muenchen, Munich, Stuttgart,
+               Köln, Koeln, Cologne, Frankfurt, Düsseldorf, Duesseldorf,
+               Dusseldorf, Dortmund, Bremen, Hannover, Hanover, Duisburg,
+               Bochum, Wuppertal, Bonn, Leipzig, Dresden, Nürnberg,
+               Nuernberg, Nuremberg, Mannheim, Karlsruhe, Freiburg, Mainz,
+               Saarbrücken, Saarbruecken,
+               برلين, هامبورغ, هامبورج, ميونخ, ميونيخ, شتوتغارت, شتوتجارت,
+               كولونيا, فرانكفورت, دوسلدورف, دورتموند, بريمن, هانوفر,
+               دويسبورغ, بوخوم, فوبرتال, بون, لايبزيغ, لايبزيج, دريسدن,
+               نورنبرغ, مانهايم, كارلسروه, فرايبورغ, ماينز, ساربروكن]
 
     # --- Der geografische Vorrang innerhalb von A (14.09.2026) ------------
     #
@@ -212,7 +230,7 @@ marketing:
     #
     # Gearbeitet wird deshalb in dieser Reihenfolge:
     #
-    #   1. A in Deutschland        (herkunft, oder eine Stadt aus cities.yaml)
+    #   1. A in Deutschland        (herkunft - Laender- und Staedtenamen)
     #   2. A im uebrigen Europa    (europa)
     #   3. A ohne genanntes Land   (der Regelfall - kein Mangel, siehe unten)
     #   ... und erst danach B.
@@ -615,7 +633,7 @@ limits:
     je_gruppe_taeglich: 10
 
   posts:
-    daily: 3
+    daily: 10
 
 # Mindestabstaende in Minuten, gestreut zwischen min und max. Der Beitrag ist
 # deutlich langsamer getaktet als der Kommentar: Er steht oben in der Gruppe

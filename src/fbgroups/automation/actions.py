@@ -56,6 +56,54 @@ _VORSCHAU_ZEICHEN = ", ".join(
 _ADRESSE = re.compile(r'https?://[^\s<>"\'\)]+')
 
 
+# Die Einheit darf kein Wortanfang sein: sonst liest "4.200 Mitglieder"
+# das M als Millionen-Marker.
+_MEMBER_COUNT_RE = re.compile(r"(\d[\d.,\s]*)\s*(k|tsd|mio|m)?(?![a-zA-Z])", re.IGNORECASE)
+
+
+def parse_member_count(raw: str | None) -> int | None:
+    """Wandelt Angaben wie ``12.500``, ``12,5k`` oder ``3 Mio`` in eine Zahl.
+
+    Stand bis zum 20.09.2026 im Seed-Importer und ist mit ihm hierher
+    gezogen: Seit die Entdeckungsschicht entfernt ist, liest allein
+    ``_artikel_auswerten`` solche Angaben - aus dem Kopf einer Gruppenseite,
+    nicht aus einer Datei. Ein eigenes Modul fuer eine Funktion mit einem
+    Aufrufer waere ein Modul zu viel.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+
+    match = _MEMBER_COUNT_RE.search(text)
+    if not match:
+        return None
+
+    number_part = match.group(1).strip()
+    suffix = (match.group(2) or "").lower()
+
+    # "12.500" ist deutsch fuer 12500, "12,5" ist ein Dezimalwert.
+    cleaned = number_part.replace(" ", "")
+    if "," in cleaned and "." in cleaned:
+        cleaned = cleaned.replace(".", "").replace(",", ".")
+    elif "," in cleaned:
+        cleaned = cleaned.replace(",", ".") if suffix else cleaned.replace(",", "")
+    elif "." in cleaned and suffix:
+        pass  # "1.5k"
+    elif "." in cleaned:
+        cleaned = cleaned.replace(".", "")
+
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
+
+    multiplier = {"k": 1_000, "tsd": 1_000, "mio": 1_000_000, "m": 1_000_000}.get(suffix, 1)
+    result = int(value * multiplier)
+    return result if result >= 0 else None
+
+
 def trenne_adresse(text: str) -> tuple[str, str]:
     """``(Text ohne die Adresse, die Adresse)`` - oder ``(text, "")``.
 
@@ -712,7 +760,6 @@ def _artikel_auswerten(article, group_id: str) -> dict | None:
     ueber Paketmitnahme unter einem Wohnungsgesuch ist Spam, gleich wie gut
     er formuliert ist.
     """
-    from fbgroups.importers.manual_seed import parse_member_count
     from fbgroups.urls import beitragslinks
 
     kandidaten = beitragslinks(

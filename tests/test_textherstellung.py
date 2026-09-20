@@ -101,20 +101,24 @@ def test_jede_gruppe_bekommt_ihren_eigenen_text(client: TestClient, bestand: Pat
             link.group_id: link.post_text for link in store.links_for_campaign(KAMPAGNE)
         }
 
-    assert "بون" in texte["100000000000001"]
-    assert "كولونيا" in texte["100000000000002"]
+    # Die Stadt steht so im Text, wie sie im Bestand steht - seit dem
+    # 20.09.2026 gibt es keine ``cities.yaml`` mehr, aus der ein arabischer
+    # Name ("بون") kaeme.
+    assert "Bonn" in texte["100000000000001"]
+    assert "Köln" in texte["100000000000002"]
     # Ohne Stadt darf kein Stadtname und kein offener Platzhalter im Text sein.
     assert "{stadt}" not in texte["100000000000003"]
-    assert "بون" not in texte["100000000000003"]
+    assert "Bonn" not in texte["100000000000003"]
 
 
-def test_die_zielgruppe_bestimmt_das_reiseziel(client: TestClient, bestand: Path) -> None:
+def test_jeder_beitrag_traegt_dasselbe_reiseziel(client: TestClient, bestand: Path) -> None:
     """Seit dem 28.08.2026 traegt der Beitrag das Ziel, nicht die Anrede.
 
-    Die arabischen Vorlagen sprechen die Zielgruppe nicht mehr an; sie fragen
-    nach Reisenden **dorthin**. Abgeleitet wird das weiterhin aus derselben
-    Zielgruppe - "syrians" ergibt Syrien, und "arabs" hat kein einzelnes Land
-    und faellt auf ``ziel_allgemein`` zurueck, statt eines zu erfinden.
+    Bis zum 20.09.2026 wurde es je Zielgruppe abgeleitet: "syrians" ergab
+    Syrien, "arabs" hatte kein einzelnes Land und fiel auf ``ziel_allgemein``
+    zurueck. Mit ``audiences.yaml`` ist die Unterscheidung entfallen - das
+    Ziel steht einmal in ``textvorlagen.yaml`` und lautet fuer jede Gruppe
+    "سوريا".
     """
     _fuelle(client)
     with MarketingStore(bestand) as store:
@@ -122,7 +126,8 @@ def test_die_zielgruppe_bestimmt_das_reiseziel(client: TestClient, bestand: Path
             link.group_id: link.post_text for link in store.links_for_campaign(KAMPAGNE)
         }
     assert "سوريا" in texte["100000000000001"]
-    assert "الوطن" in texte["100000000000002"]
+    assert "سوريا" in texte["100000000000002"]
+    assert "الوطن" not in texte["100000000000002"]
 
 
 def test_der_tracking_platzhalter_bleibt_im_gespeicherten_text(
@@ -159,7 +164,7 @@ def test_ein_vorhandener_text_wird_nicht_ueberschrieben(
         link = store.link_for(KAMPAGNE, "100000000000001")
     assert link.post_text == "Von Hand {link}"
     # Der erzeugte Text wird trotzdem aufgefrischt - er ist die Vergleichsgroesse.
-    assert "بون" in link.generated_text
+    assert "Bonn" in link.generated_text
 
 
 def test_text_neu_ueberschreibt_auch_vorhandene(client: TestClient, bestand: Path) -> None:
@@ -170,7 +175,7 @@ def test_text_neu_ueberschreibt_auch_vorhandene(client: TestClient, bestand: Pat
 
     with MarketingStore(bestand) as store:
         link = store.link_for(KAMPAGNE, "100000000000001")
-    assert "بون" in link.post_text
+    assert "Bonn" in link.post_text
 
 
 def test_veroeffentlichte_beitraege_bleiben_unangetastet(
@@ -205,7 +210,7 @@ def test_die_eigene_vorlage_der_kampagne_geht_vor(client: TestClient, bestand: P
 
     with MarketingStore(bestand) as store:
         link = store.link_for(KAMPAGNE, "100000000000001")
-    assert link.post_text == "Eigener Text fuer السوريين in بون: {link}"
+    assert link.post_text == "Eigener Text fuer الأصدقاء in Bonn: {link}"
     assert link.vorlage_key == "kampagne"
 
 

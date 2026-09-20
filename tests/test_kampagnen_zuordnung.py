@@ -129,7 +129,7 @@ def test_ohne_einschraenkung_sind_alle_gruppen_gemeint(bestand: Path, config) ->
     with MarketingStore(bestand) as store:
         campaign = _kampagne(store, target_include_unscored=True)
 
-    auswahl = auswahl_der_kampagne(campaign, config)
+    auswahl = auswahl_der_kampagne(campaign)
     assert auswahl.ohne_einschraenkung
     assert len(waehle_gruppen(groups, auswahl)) == len(groups) == 5
 
@@ -140,7 +140,7 @@ def test_ohne_unbewertete_faellt_die_gruppe_ohne_score_heraus(bestand: Path, con
     with MarketingStore(bestand) as store:
         campaign = _kampagne(store)          # target_include_unscored ist False
 
-    gewaehlt = waehle_gruppen(groups, auswahl_der_kampagne(campaign, config))
+    gewaehlt = waehle_gruppen(groups, auswahl_der_kampagne(campaign))
     assert {g.group_id for g in gewaehlt} == {
         "100000000000001",
         "100000000000002",
@@ -169,7 +169,7 @@ def test_jede_einschraenkung_wirkt_einzeln(
     with MarketingStore(bestand) as store:
         campaign = _kampagne(store, **felder)
 
-    gewaehlt = waehle_gruppen(groups, auswahl_der_kampagne(campaign, config))
+    gewaehlt = waehle_gruppen(groups, auswahl_der_kampagne(campaign))
     assert {g.group_id for g in gewaehlt} == erwartet
 
 
@@ -178,7 +178,7 @@ def test_stadtkennung_wird_ueber_die_konfiguration_uebersetzt(bestand: Path, con
     with MarketingStore(bestand) as store:
         campaign = _kampagne(store, target_cities=["berlin"])
 
-    auswahl = auswahl_der_kampagne(campaign, config)
+    auswahl = auswahl_der_kampagne(campaign)
     assert "berlin" in auswahl.cities
     assert passt(_group("1", city="Berlin"), auswahl)
     assert not passt(_group("2", city="Hamburg"), auswahl)
@@ -191,7 +191,7 @@ def test_unbekannte_stadtkennung_verschwindet_nicht_stillschweigend(
     with MarketingStore(bestand) as store:
         campaign = _kampagne(store, target_cities=["gibtsnicht"])
 
-    auswahl = auswahl_der_kampagne(campaign, config)
+    auswahl = auswahl_der_kampagne(campaign)
     assert not auswahl.ohne_einschraenkung
     assert not passt(_group("1", city="Berlin"), auswahl)
 

@@ -28,14 +28,13 @@ from fbgroups.marketing.zielgruppe import Merkmale, Region, Zielprioritaet
 #: steht ``Regeln`` neben ``einstufe``.
 REGELN = zielgruppe.Regeln(
     kategorien=frozenset({"reise", "versand"}),
-    kategoriebegriffe=("Reise", "Reisen", "Versand", "Paket", "سفر", "شحن", "نقل"),
     ziele=("Syrien", "Damaskus", "سوريا", "سورية", "الشام", "دمشق"),
-    herkunft=("Deutschland", "المانيا", "ألمانيا"),
-    staedte=("Berlin", "Hamburg", "برلين", "هامبورغ"),
+    # Die Staedtenamen stehen seit dem 20.09.2026 in ``herkunft`` - eigene
+    # Liste gab es, solange sie aus ``cities.yaml`` kamen.
+    herkunft=("Deutschland", "المانيا", "ألمانيا", "Berlin", "Hamburg", "برلين", "هامبورغ"),
     europa=("Österreich", "النمسا", "Schweden", "السويد", "Wien"),
     ausserhalb=("Libanon", "لبنان", "Türkei", "تركيا", "بيروت"),
     audiences=frozenset({"syrians", "arabs"}),
-    audiencebegriffe=("Syrer", "سوريين"),
 )
 
 
@@ -50,7 +49,7 @@ def _befund(name: str, kategorie: str = "versand", stadt: str | None = None):
 @pytest.mark.parametrize(
     ("name", "erwartet"),
     [
-        # Deutschland - am Land oder an einer Stadt aus cities.yaml.
+        # Deutschland - am Land oder an einem Staedtenamen aus ``herkunft``.
         ("شحن من ألمانيا إلى سوريا", Region.DE),
         ("Versand Hamburg nach Damaskus", Region.DE),
         ("مسافرين من برلين الى دمشق", Region.DE),

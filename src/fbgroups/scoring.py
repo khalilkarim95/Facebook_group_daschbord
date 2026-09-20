@@ -353,18 +353,24 @@ def _activity(lage: Lage) -> Befund | None:
     ein schlechterer Platz als eine mit 20.000 und taeglichem Betrieb. Wer
     beides aus derselben Zahl ableitete, koennte den Fall nicht abbilden.
 
-    Drei Quellen in absteigender Aussagekraft, die erste vorhandene gewinnt:
+    Zwei Quellen in absteigender Aussagekraft, die erste vorhandene gewinnt:
 
-    1. ``group.activity_factor`` - aus der Beitragsliste der Gruppenseite
-       (``fbgroups enrich``) oder aus den Datumsangaben der Suchtreffer. Was
-       davon, steht in ``activity_source``.
+    1. ``group.activity_factor`` - die erhobene Zahl. Woher sie stammt, steht
+       in ``activity_source``; gepflegt wird sie von Hand bzw. ueber die
+       Uebersicht.
     2. Die gemessene Resonanz: Klicks und Registrierungen aus unseren eigenen
        Beitraegen. Sie misst, was von dort zu **uns** kommt.
     3. Nichts davon - dann ``None``. Kein Ersatzwert, keine Null.
 
-    Die Reihenfolge ist nicht beliebig: Die Beitragsliste misst die Gruppe,
+    Die Reihenfolge ist nicht beliebig: Die erhobene Zahl misst die Gruppe,
     die Resonanz misst uns. Beides ist Aktivitaet, aber das erste ist die
     Antwort auf die gestellte Frage.
+
+    Eine dritte Quelle gab es bis zum 20.09.2026: die Frische des juengsten
+    indexierten Suchtreffers (``ActivitySource.SEARCH_DATES``). Mit der
+    Suchschicht ist sie entfallen - ``last_post_at`` wird von nichts mehr
+    geschrieben, und eine Quelle, die nie etwas liefert, ist keine. Der
+    Enum-Wert bleibt: Bestandsdaten koennen ihn tragen.
     """
     group = lage.group
 
@@ -385,19 +391,6 @@ def _activity(lage: Lage) -> Befund | None:
     if gemessen is not None:
         return gemessen
 
-    # 3. Der juengste indexierte Beitrag. Schwach, aber nicht nichts - und
-    #    ausdruecklich als schwach gekennzeichnet: Aus einer Datumsangabe eine
-    #    Beitragszahl je Tag abzuleiten waere geraten.
-    if group.last_post_at is not None:
-        from fbgroups.extract.aktivitaet import faktor_aus_treffer_daten
-
-        faktor = faktor_aus_treffer_daten([group.last_post_at], lage.config, lage.zeitpunkt)
-        if faktor is not None:
-            return Befund(
-                faktor=faktor,
-                konfidenz=_KONFIDENZ_AKTIVITAET[ActivitySource.SEARCH_DATES],
-                quelle=ActivitySource.SEARCH_DATES.value,
-            )
     return None
 
 

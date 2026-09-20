@@ -223,19 +223,15 @@ def _gruppe_als_zeile(
 ) -> dict[str, Any]:
     """Eine Tabellenzeile - bereits mit den Bezeichnungen der Konfiguration.
 
-    Die Uebersetzung passiert hier und nicht im Browser: Die Bezeichnungen
-    stehen in ``config/*.yaml`` und sind die fachliche Wahrheit des Projekts.
-    Eine zweite Liste im JavaScript wuerde beim naechsten neuen Stadtnamen
-    auseinanderlaufen.
+    Kategorie und Zielgruppe stehen seit dem 20.09.2026 so da, wie sie im
+    Bestand stehen. Vorher wurden sie hier ueber ``categories.yaml`` und
+    ``audiences.yaml`` in Beschriftungen uebersetzt ("syrians" ->
+    "Syrer in Deutschland"); beide Dateien sind mit der Entdeckungsschicht
+    entfernt. Eine Ersatzliste im JavaScript waere eine zweite Wahrheit ueber
+    dieselbe Gruppe - wer eine Beschriftung will, schreibt sie in den Bestand.
     """
-    kategorie = next(
-        (c.label_de for c in config.categories if c.id == group.category),
-        group.category or "",
-    )
-    zielgruppen = [
-        config.audiences[tag].label_de if tag in config.audiences else tag
-        for tag in group.audience_tags
-    ]
+    kategorie = group.category or ""
+    zielgruppen = list(group.audience_tags)
 
     return {
         "id": group.group_id,
@@ -447,7 +443,7 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             # Sie hier anzubieten hiesse, zu einer Zuordnung zu raten, die
             # `campaign sync` selbst nicht mehr vornaehme.
             continue
-        regel = auswahl_der_kampagne(c, config)
+        regel = auswahl_der_kampagne(c)
         schon_drin = {link.group_id for link in links.get(c.campaign_id, [])}
         for g in groups:
             if g.group_id in schon_drin or not passt(g, regel):
@@ -537,14 +533,22 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             schluessel = f"a_{befund.region.value}"
             ziel_zaehler[schluessel] = ziel_zaehler.get(schluessel, 0) + 1
 
-    # Auswahllisten fuer das Kampagnenformular. Aus der Konfiguration, nicht
-    # aus dem Bestand: Eine Kampagne darf eine Zielgruppe bewerben, zu der noch
-    # keine Gruppe gefunden wurde - das ist der Normalfall beim Anlegen.
+    # Auswahllisten fuer das Kampagnenformular - seit dem 20.09.2026 aus dem
+    # **Bestand**. Vorher standen sie in ``audiences.yaml``/``cities.yaml``,
+    # und das war das bessere Angebot: Eine Kampagne durfte eine Zielgruppe
+    # bewerben, zu der noch keine Gruppe gefunden war. Mit den Dateien ist
+    # diese Moeglichkeit entfallen; angeboten wird, was tatsaechlich an
+    # Gruppen steht. Eine Einschraenkung auf etwas, das im Bestand nicht
+    # vorkommt, traefe ohnehin keine Gruppe.
     auswahl = {
         "zielgruppen": [
-            {"id": a.id, "label": a.label_de} for a in config.audiences.values()
+            {"id": tag, "label": tag}
+            for tag in sorted({t for g in groups for t in (g.audience_tags or [])})
         ],
-        "staedte": [{"id": c.id, "label": c.name_de} for c in config.cities.values()],
+        "staedte": [
+            {"id": stadt, "label": stadt}
+            for stadt in sorted({(g.city or "").strip() for g in groups if (g.city or "").strip()})
+        ],
         "kampagnen_status": [s.value for s in CampaignStatus],
     }
 
@@ -560,7 +564,7 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
         # keine Einschraenkung" sieht man einem leeren Feld nicht an.
         # Gelesen wird sie ueber selection.auswahl_der_kampagne, damit Anzeige
         # und Ausfuehrung nicht auseinanderlaufen koennen.
-        regel = auswahl_der_kampagne(c, config)
+        regel = auswahl_der_kampagne(c)
         kampagnen.append(
             {
                 "id": c.campaign_id,

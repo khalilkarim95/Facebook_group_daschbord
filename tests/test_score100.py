@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from fbgroups.export.columns import COLUMNS, headers, row_values
 from fbgroups.models import (
     ActivitySource,
     Group,
@@ -173,37 +172,3 @@ def test_ein_suchlauf_loescht_erhobene_zahlen_nicht(bestand_leer: Path) -> None:
     assert zurueck.member_count == 42_300
     assert zurueck.posts_per_day == 18.0
     assert zurueck.activity_factor == 0.9
-
-
-# --- Export -----------------------------------------------------------------
-
-
-def test_der_export_zeigt_die_bestandteile_einzeln(config) -> None:
-    """Eine Zahl, die sich nicht nachrechnen laesst, ist keine Auskunft."""
-    zeile = dict(zip(headers(), row_values(score_group(_gruppe(), config)), strict=True))
-
-    assert zeile["Punkte Ort"] == 15.0
-    assert zeile["Punkte Kategorie"] == 20.0
-    assert zeile["Punkte Zielgruppe"] == 15.0
-    # Unbekannt heisst 0 Punkte - und die Begruendung nennt den Grund.
-    assert zeile["Punkte Mitglieder"] == 0.0
-    assert "Mitglieder unbekannt" in zeile["Score Reason"]
-
-
-def test_unbewertete_gruppen_bekommen_keine_nullen_im_export(config) -> None:
-    """Eine 0 neben einem leeren Score waere eine Aussage ueber eine Gruppe,
-    ueber die keine gemacht wurde."""
-    ohne = score_group(Group(group_id="1", url_canonical="u"), config)
-    zeile = dict(zip(headers(), row_values(ohne), strict=True))
-
-    assert ohne.score is None
-    assert zeile["Punkte Mitglieder"] == ""
-    assert zeile["Punkte Aktivitaet"] == ""
-
-
-def test_die_spaltennamen_sind_eindeutig() -> None:
-    namen = [name for name, _ in COLUMNS]
-    beschriftungen = [label for _, label in COLUMNS]
-
-    assert len(namen) == len(set(namen))
-    assert len(beschriftungen) == len(set(beschriftungen))

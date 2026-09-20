@@ -172,6 +172,7 @@ Zurueck geht es mit dem beiseitegelegten Stand:
      && sudo chown -R fbgroups:fbgroups /opt/fbgroups/app \
      && sudo systemctl restart fbgroups'
 
-Nach Aenderungen an Gewichten oder Klassifikation ausserdem:
-  sudo -u fbgroups /opt/fbgroups/venv/bin/python -m fbgroups.cli rescore
+Nach Aenderungen an den Score-Gewichten bewertet der naechste Kampagnenlauf
+den Bestand selbst neu (rescoring.bewerte_neu). Einen eigenen Befehl dafuer
+gibt es seit dem 20.09.2026 nicht mehr.
 ENDE
