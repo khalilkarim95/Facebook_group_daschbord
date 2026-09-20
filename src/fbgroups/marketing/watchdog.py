@@ -74,6 +74,48 @@ VORGABE_ABSTAND = 300
 
 
 @dataclass(frozen=True)
+class Tunnel:
+    """Der SSH-Tunnel, durch den der Fernbetrieb spricht.
+
+    **Warum der Waechter ihn kennt.** Bis zum 20.09.2026 stand in seinem
+    Protokoll nur *"Dienst antwortet nicht - Laeuft der SSH-Tunnel?"*, und
+    die Antwort darauf war jedes Mal ein Mensch, der ein zweites Fenster
+    oeffnete und denselben Befehl eintippte. Ein Waechter, der einen
+    abgestuerzten Lauf neu startet, aber vor einem geschlossenen Tunnel die
+    Haende hebt, loest genau die Haelfte des Problems - nachts die falsche.
+
+    Das ist **keine** Kampagnenlogik: Hier steht ein Port und ein Ziel, kein
+    Beitrag, keine Gruppe und keine Zaehlung. Der Waechter prueft den Port
+    ohnehin schon (``dienst_erreichbar``); neu ist allein, dass er ihn auch
+    aufmachen darf.
+
+    **Das Kennwort des Schluessels steht hier nicht** - weder hier noch in
+    ``settings.yaml``, noch in einer ``.env``. ``ssh`` nimmt es ohnehin nicht
+    auf der Kommandozeile entgegen, und ein Kennwort in einer Datei neben dem
+    Bestand waere ein Schluessel ohne Schloss. Zwei Wege bleiben, und beide
+    sind Sache des Rechners, nicht dieses Programms:
+
+    * ``ssh-add <schluessel>`` einmal ausfuehren (der Agent von Windows
+      behaelt ihn ueber den Neustart) - dann fragt niemand mehr.
+    * Sonst fragt ``ssh`` im Terminal, in dem der Waechter laeuft. Deshalb
+      bleiben seine Stroeme sichtbar (``starte_prozess``).
+    """
+
+    aktiv: bool = False
+    ziel: str = ""
+    schluessel: str = ""
+    port: int = 0
+    fernport: int = 0
+    fernziel: str = "127.0.0.1"
+    lebenszeichen: int = 30
+
+    @property
+    def nutzbar(self) -> bool:
+        """Ohne Ziel und ohne Port gibt es nichts aufzumachen."""
+        return bool(self.aktiv and self.ziel and self.port)
+
+
+@dataclass(frozen=True)
 class Einstellungen:
     """Was der Waechter aus ``settings.yaml`` liest - und sonst nichts.
 
@@ -85,6 +127,7 @@ class Einstellungen:
     aktiv: bool = True
     abstand_sekunden: int = VORGABE_ABSTAND
     server: str = ""
+    tunnel: Tunnel = Tunnel()
 
     @property
     def abstand(self) -> float:
@@ -102,10 +145,21 @@ class Einstellungen:
 def einstellungen(config) -> Einstellungen:  # noqa: ANN001 - AppConfig
     """Die einzige Stelle dieses Moduls, die die Konfiguration kennt."""
     block = config.get("watchdog", default={}) or {}
+    roh = block.get("tunnel", {}) or {}
+    port = int(roh.get("port", 0) or 0)
     return Einstellungen(
         aktiv=bool(block.get("enabled", True)),
         abstand_sekunden=int(block.get("check_interval_seconds", VORGABE_ABSTAND) or 0),
         server=str(block.get("server", "") or "").strip(),
+        tunnel=Tunnel(
+            aktiv=bool(roh.get("enabled", False)),
+            ziel=str(roh.get("ziel", "") or "").strip(),
+            schluessel=str(roh.get("schluessel", "") or "").strip(),
+            port=port,
+            fernport=int(roh.get("fernport", 0) or 0) or port,
+            fernziel=str(roh.get("fernziel", "") or "127.0.0.1").strip(),
+            lebenszeichen=int(roh.get("lebenszeichen", 30) or 30),
+        ),
     )
 
 
@@ -282,6 +336,116 @@ def baue_befehl(server: str = "") -> list[str]:
     return befehl
 
 
+def baue_tunnelbefehl(tunnel: Tunnel) -> list[str]:
+    """Der Aufruf, der den Tunnel aufmacht - und **nur** dieser.
+
+    Dieselbe Nachpruefbarkeit wie bei ``baue_befehl``: Was hier nicht
+    dransteht, kann nicht geschehen. Es ist der Befehl von Hand, mit drei
+    Zusaetzen:
+
+    * ``-N`` - **keine Sitzung auf dem Server.** Von Hand oeffnet man dabei
+      nebenbei eine Kommandozeile; ein Waechter braucht sie nicht, und eine
+      Kommandozeile, die tagelang offensteht und der niemand zusieht, ist der
+      Zugang, den man am ehesten vergisst.
+    * ``ExitOnForwardFailure`` - steht der Port schon, soll ``ssh``
+      **aufhoeren**, statt sich ohne Weiterleitung zu verbinden. Sonst haette
+      der Waechter einen Prozess, den er fuer den Tunnel haelt, waehrend
+      nichts weitergeleitet wird.
+    * ``ServerAliveCountMax`` - nach drei unbeantworteten Lebenszeichen ist
+      die Leitung tot und der Prozess endet. Erst dadurch merkt der Waechter
+      ueberhaupt, dass er neu aufmachen muss; ohne das haenge ``ssh`` ewig an
+      einer Verbindung, die es nicht mehr gibt.
+
+    **Kein Kennwort und keine Kennwortdatei** - siehe ``Tunnel``.
+    """
+    befehl = ["ssh"]
+    if tunnel.schluessel:
+        befehl += ["-i", os.path.expanduser(tunnel.schluessel)]
+    befehl += [
+        "-N",
+        "-L",
+        f"{tunnel.port}:{tunnel.fernziel}:{tunnel.fernport or tunnel.port}",
+        "-o",
+        f"ServerAliveInterval={tunnel.lebenszeichen}",
+        "-o",
+        "ServerAliveCountMax=3",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        tunnel.ziel,
+    ]
+    return befehl
+
+
+class Tunnelwart:
+    """Haelt den eigenen ``ssh``-Prozess - und nur den eigenen.
+
+    Dieselbe Trennung wie bei der Sperre: Gefragt wird zuerst der **Port**
+    (``dienst_erreichbar``), nicht dieses Objekt. Steht der Tunnel aus einem
+    anderen Fenster, ist alles gut, und hier wird nichts gestartet - ein
+    zweites ``ssh`` auf denselben Port scheiterte ohnehin
+    (``ExitOnForwardFailure``), haette aber einen Fehler ins Protokoll
+    geschrieben, an dem nichts liegt.
+    """
+
+    def __init__(
+        self,
+        tunnel: Tunnel,
+        *,
+        starte: Callable[[list[str]], object] | None = None,
+    ) -> None:
+        self.tunnel = tunnel
+        self._starte = starte or starte_prozess
+        self.prozess: object | None = None
+
+    @property
+    def nutzbar(self) -> bool:
+        """Ist ein Tunnel eingetragen, den dieser Waechter aufmachen darf?"""
+        return self.tunnel.nutzbar
+
+    def laeuft(self) -> bool:
+        """Laeuft **unser** ``ssh`` noch?"""
+        if self.prozess is None:
+            return False
+        poll = getattr(self.prozess, "poll", None)
+        return poll is not None and poll() is None
+
+    def oeffne(self) -> list[str]:
+        """Den Tunnel aufmachen. Returns: der gestartete Befehl."""
+        befehl = baue_tunnelbefehl(self.tunnel)
+        self.prozess = self._starte(befehl)
+        return befehl
+
+
+#: Wie lange nach dem Oeffnen des Tunnels auf den Port gewartet wird.
+TUNNEL_FRIST = 10.0
+
+
+def warte_auf_dienst(
+    server: str,
+    *,
+    frist: float,
+    schlafe: Callable[[float], None] = time.sleep,
+    takt: float = 1.0,
+) -> bool:
+    """Kurz warten, bis der Port antwortet. Returns: ob er es tut.
+
+    Ein frisch gestartetes ``ssh`` braucht einen Moment, und ohne dieses
+    Warten verstriche bis zum Start des Laufs ein ganzer Blickabstand - bei
+    fuenf Minuten Vorgabe also fuenf Minuten fuer nichts. Gewartet wird
+    **kurz**: Fragt ``ssh`` nach dem Kennwort des Schluessels, antwortet der
+    Port erst, wenn ein Mensch es eingegeben hat, und dann findet ihn der
+    naechste Blick offen.
+    """
+    verbraucht = 0.0
+    while True:
+        if dienst_erreichbar(server, frist=takt):
+            return True
+        if verbraucht >= frist:
+            return False
+        schlafe(takt)
+        verbraucht += takt
+
+
 # --- Die Schleife ---------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -302,6 +466,8 @@ def blicke(
     einst: Einstellungen,
     *,
     starte: Callable[[list[str]], object],
+    tunnel: Tunnelwart | None = None,
+    schlafe: Callable[[float], None] = time.sleep,
 ) -> Blick:
     """Ein einziger Blick: nachsehen, und wenn noetig starten.
 
@@ -313,10 +479,12 @@ def blicke(
 
     1. **Laeuft schon einer?** Dann ist alles gut, und es wird **nichts**
        gestartet - auch dann nicht, wenn der Dienst gerade nicht antwortet.
-    2. **Steht der Dienst?** Wenn nicht, wird gewartet statt gestartet. Ein
-       Lauf ohne Tunnel scheitert an der ersten Anfrage, meldet nichts und
-       buchte nichts - das ist kein Fehlschlag der Kampagne, sondern ein
-       geschlossener Tunnel (Punkt 5).
+    2. **Steht der Dienst?** Wenn nicht, wird der Tunnel aufgemacht - sofern
+       einer eingetragen ist (``watchdog.tunnel``, seit 20.09.2026). Kommt
+       der Port binnen ``TUNNEL_FRIST`` nicht, wird gewartet statt
+       gestartet: Ein Lauf ohne Tunnel scheitert an der ersten Anfrage,
+       meldet nichts und bucht nichts - das ist kein Fehlschlag der
+       Kampagne, sondern ein geschlossener Tunnel (Punkt 5).
     3. Erst dann starten.
     """
     if not einst.aktiv:
@@ -327,10 +495,35 @@ def blicke(
         return Blick("laeuft", f"campaign automatik laeuft (PID {roh.get('pid', '?')})")
 
     if not dienst_erreichbar(einst.server):
+        # **Erst aufmachen, dann klagen** (20.09.2026). Der Port ist zu; ist
+        # ein Tunnel eingetragen und laeuft unser eigenes ``ssh`` nicht mehr,
+        # wird er gestartet. Steht er aus einem anderen Fenster, antwortet
+        # der Port - dann sind wir hier gar nicht.
+        if tunnel is not None and tunnel.nutzbar and not tunnel.laeuft():
+            befehl = tunnel.oeffne()
+            if warte_auf_dienst(einst.server, frist=TUNNEL_FRIST, schlafe=schlafe):
+                startbefehl = baue_befehl(einst.server)
+                starte(startbefehl)
+                return Blick(
+                    "gestartet",
+                    f"SSH-Tunnel aufgemacht ({' '.join(befehl)}), dann "
+                    f"campaign automatik gestartet",
+                )
+            return Blick(
+                "tunnel_gestartet",
+                f"SSH-Tunnel gestartet ({' '.join(befehl)}) - der Port antwortet "
+                "noch nicht. Fragt ssh nach dem Kennwort des Schluessels? Dann "
+                "hier eingeben; der naechste Blick startet den Lauf.",
+            )
         return Blick(
             "dienst_weg",
             f"Dienst {einst.server} antwortet nicht - es wird nichts gestartet. "
-            "Laeuft der SSH-Tunnel? Der naechste Blick versucht es erneut.",
+            + (
+                "Unser SSH-Tunnel laeuft, leitet aber nicht weiter. "
+                if tunnel is not None and tunnel.laeuft()
+                else "Laeuft der SSH-Tunnel? "
+            )
+            + "Der naechste Blick versucht es erneut.",
         )
 
     befehl = baue_befehl(einst.server)
@@ -357,6 +550,7 @@ def wache(
     melde: Callable[[Blick], None] | None = None,
     schlafe: Callable[[float], None] = time.sleep,
     durchgaenge: int = 0,
+    tunnel: Tunnelwart | None = None,
 ) -> list[Blick]:
     """Die Schleife: alle ``abstand`` Sekunden ein Blick.
 
@@ -371,7 +565,7 @@ def wache(
     verlauf: list[Blick] = []
     runde = 0
     while True:
-        blick = blicke(sperre, einst, starte=starte)
+        blick = blicke(sperre, einst, starte=starte, tunnel=tunnel, schlafe=schlafe)
         verlauf.append(blick)
         if melde is not None:
             melde(blick)
@@ -388,16 +582,21 @@ def wache(
 
 
 __all__ = [
+    "TUNNEL_FRIST",
     "VERWAIST_NACH_STUNDEN",
     "VORGABE_ABSTAND",
     "Blick",
     "Einstellungen",
     "Sperre",
+    "Tunnel",
+    "Tunnelwart",
     "baue_befehl",
+    "baue_tunnelbefehl",
     "blicke",
     "dienst_erreichbar",
     "einstellungen",
     "sperre_fuer",
     "starte_prozess",
     "wache",
+    "warte_auf_dienst",
 ]

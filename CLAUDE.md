@@ -1736,7 +1736,8 @@ fbgroups campaign watchdog --server http://127.0.0.1:8090
    → alle 5 Min: hält jemand die Sperre?
         ja   → nichts tun
         nein → Dienst erreichbar?
-                 nein → warten
+                 nein → SSH-Tunnel aufmachen, kurz warten
+                          Port da?  nein → warten
                  ja   → campaign automatik starten
 ```
 
@@ -1770,6 +1771,40 @@ fbgroups campaign watchdog --server http://127.0.0.1:8090
   scheiterte an der ersten Anfrage, ohne etwas zu buchen. Geprüft wird die
   **TCP-Verbindung**, nicht `/healthz`: Ob der Weg antwortet, hängt an nginx
   und an Schlüsseln; ob der Tunnel steht, hängt nur am Port.
+- **Seit dem 20.09.2026 macht er den Tunnel selbst auf** (`watchdog.tunnel`
+  in `settings.yaml`, `Tunnel`/`Tunnelwart`/`baue_tunnelbefehl`). Ein
+  Wächter, der einen abgestürzten Lauf neu startet, aber vor einem
+  geschlossenen Tunnel die Hände hebt, löst die Hälfte des Problems —
+  nachts die falsche: Im Protokoll stand „Läuft der SSH-Tunnel?", und die
+  Antwort darauf war jedes Mal ein Mensch mit einem zweiten Fenster. Das
+  ist **keine** Kampagnenlogik: ein Port und ein Ziel, keine Gruppe und
+  keine Zählung — den Port prüfte er ohnehin schon, neu ist nur, dass er
+  ihn aufmachen darf. `baue_tunnelbefehl` ist dafür dieselbe nachprüfbare
+  Stelle wie `baue_befehl`.
+- **Gefragt wird der Port, nicht der eigene Prozess.** Steht der Tunnel aus
+  einem anderen Fenster, ist alles gut und es wird nichts gestartet; ein
+  zweites `ssh` auf denselben Port scheiterte ohnehin
+  (`ExitOnForwardFailure`) und schriebe einen Fehler ins Protokoll, an dem
+  nichts liegt. Läuft **unser** `ssh` und der Port antwortet trotzdem
+  nicht, sagt die Meldung genau das — die Leitung steht, die Weiterleitung
+  nicht.
+- **`-N`, und das ist kein Detail.** Der Befehl von Hand öffnet nebenbei
+  eine Kommandozeile auf dem Server; eine, die tagelang offensteht und der
+  niemand zusieht, ist der Zugang, den man am ehesten vergisst. Dazu
+  `ServerAliveCountMax=3`: Ohne das hinge `ssh` ewig an einer Verbindung,
+  die es nicht mehr gibt, und der Wächter hielte den Tunnel für stehend.
+- **Das Kennwort des Schlüssels steht in keiner Datei dieses Projekts** —
+  nicht in `settings.yaml`, nicht in einer `.env`, und `sshpass` gibt es
+  hier nicht. `ssh` nimmt es ohnehin nicht auf der Kommandozeile entgegen,
+  und ein Kennwort neben dem Bestand wäre ein Schlüssel ohne Schloss. Zwei
+  Wege bleiben, beide Sache des Rechners: einmal `ssh-add <schlüssel>` (der
+  Agent von Windows behält ihn über den Neustart), sonst fragt `ssh` im
+  Terminal des Wächters — deshalb läuft er im Vordergrund und behält seine
+  Ströme. Test: `test_im_tunnelbefehl_steht_kein_kennwort`.
+- **Nach dem Aufmachen wird kurz gewartet** (`TUNNEL_FRIST`, 10 s), nicht
+  einen ganzen Blickabstand: Sonst verstrichen fünf Minuten für nichts.
+  Kommt der Port in dieser Frist — der Regelfall mit hinterlegtem Schlüssel
+  —, startet derselbe Blick den Lauf.
 - **Ein laufender Prozess geht dem Dienst vor.** Läuft schon einer, ist alles
   gut — auch wenn der Tunnel gerade wackelt. Ihn deswegen als „Dienst weg" zu
   melden wäre eine Auskunft über den falschen Gegenstand.

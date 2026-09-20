@@ -337,6 +337,36 @@ watchdog:
   # Kommandozeile geht vor.
   server: http://127.0.0.1:8090
 
+  # Der SSH-Tunnel, durch den `server` ueberhaupt erst antwortet. Bis zum
+  # 20.09.2026 stand im Protokoll nur "Dienst antwortet nicht - laeuft der
+  # SSH-Tunnel?", und die Antwort war jedes Mal ein Mensch, der ein zweites
+  # Fenster oeffnete. Jetzt macht ihn der Waechter selbst auf, sobald der
+  # Port nicht antwortet - und nur dann.
+  #
+  # Das Kennwort des Schluessels steht hier NICHT und gehoert auch in keine
+  # .env: `ssh` nimmt es nicht auf der Kommandozeile entgegen. Einmal
+  #
+  #     ssh-add ~/.ssh/b-tarikak_vps_new
+  #
+  # ausfuehren (der Agent von Windows behaelt den Schluessel ueber den
+  # Neustart), dann fragt niemand mehr. Sonst fragt `ssh` im Terminal, in
+  # dem der Waechter laeuft.
+  tunnel:
+    enabled: true
+    ziel: karim@159.195.216.246
+    schluessel: ~/.ssh/b-tarikak_vps_new
+    # Oertlicher Port; er muss zu `server` passen, sonst macht der Waechter
+    # eine Tuer auf, hinter der er nicht nachsieht.
+    port: 8090
+    # Auf welchen Port am anderen Ende weitergeleitet wird. Leer bzw. 0
+    # heisst: derselbe.
+    fernport: 8090
+    fernziel: 127.0.0.1
+    # Sekunden zwischen zwei Lebenszeichen (ServerAliveInterval). Nach drei
+    # unbeantworteten endet `ssh` - erst dadurch merkt der Waechter, dass er
+    # neu aufmachen muss.
+    lebenszeichen: 30
+
 dedupe:
   # Unscharfer Namensabgleich: ab diesem Wert (0-100) gilt ein Paar als
   # Dublettenverdacht. Es wird NICHT automatisch zusammengefuehrt,

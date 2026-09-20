@@ -1424,9 +1424,16 @@ def campaign_watchdog(
     ``completed`` und beginnt keine von vorn: ``campaign automatik`` ohne
     ``--neu`` nimmt den offenen Lauf mitsamt Fortschritt wieder auf.
 
-    **Antwortet der Dienst nicht**, wird gewartet statt gestartet. Ein
-    geschlossener SSH-Tunnel ist kein Fehlschlag der Kampagne, und ein Lauf
-    ohne Tunnel scheiterte an der ersten Anfrage, ohne etwas zu buchen.
+    **Antwortet der Dienst nicht**, macht er den SSH-Tunnel selbst auf -
+    sofern einer in ``watchdog.tunnel`` eingetragen ist. Kommt der Port
+    trotzdem nicht, wird gewartet statt gestartet: Ein geschlossener Tunnel
+    ist kein Fehlschlag der Kampagne, und ein Lauf ohne Tunnel scheiterte an
+    der ersten Anfrage, ohne etwas zu buchen.
+
+    Das **Kennwort des Schluessels** steht in keiner Datei dieses Projekts.
+    Entweder ist der Schluessel einmal im Agenten hinterlegt
+    (``ssh-add ~/.ssh/...``), oder ``ssh`` fragt hier im Terminal danach -
+    deshalb laeuft der Waechter im Vordergrund.
 
     Beenden mit Strg+C. Soll er einen Neustart des Rechners ueberleben,
     gehoert er in einen Dienst (systemd, Aufgabenplanung) - das ist eine
@@ -1453,9 +1460,15 @@ def campaign_watchdog(
     farbe = {
         "laeuft": "green",
         "gestartet": "cyan",
+        "tunnel_gestartet": "cyan",
         "dienst_weg": "yellow",
         "abgeschaltet": "yellow",
     }
+
+    # Der Tunnelwart haelt den eigenen ``ssh``-Prozess. Er gehoert dem
+    # Waechter und nicht dem Lauf: Ein Lauf, der seinen eigenen Tunnel
+    # mitbraechte, machte beim naechsten Start einen zweiten auf.
+    tunnelwart = watchdog.Tunnelwart(einst.tunnel)
 
     def melde(blick: watchdog.Blick) -> None:
         # Jede Zeile mit Zeitstempel: Der Waechter laeuft tagelang, und die
@@ -1471,12 +1484,23 @@ def campaign_watchdog(
             f"[cyan]Waechter laeuft.[/cyan] Blick alle "
             f"{int(einst.abstand)} Sekunden"
             + (f", Dienst {einst.server}" if einst.server else "")
+            + (
+                f", Tunnel {einst.tunnel.ziel} (Port {einst.tunnel.port})"
+                if einst.tunnel.nutzbar
+                else ""
+            )
             + ".\n[dim]Beenden mit Strg+C. Es wird nichts gestartet, solange "
             "ein Lauf die Sperre haelt.[/dim]"
         )
 
     try:
-        watchdog.wache(sperre, einst, melde=melde, durchgaenge=1 if einmal else 0)
+        watchdog.wache(
+            sperre,
+            einst,
+            melde=melde,
+            durchgaenge=1 if einmal else 0,
+            tunnel=tunnelwart,
+        )
     except KeyboardInterrupt:
         # Der laufende Lauf bleibt laufen - der Waechter ist nur sein
         # Aufpasser, nicht sein Besitzer.
