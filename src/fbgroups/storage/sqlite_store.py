@@ -22,7 +22,7 @@ from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEM
 from fbgroups.marketing.store import SCHEMA_VORSCHLAEGE as MARKETING_VORSCHLAEGE_SCHEMA
 from fbgroups.models import Group, GroupPost, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 
 def _iso_oder_none(zeitpunkt: datetime | None) -> str | None:
@@ -436,6 +436,25 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
         MARKETING_SCHEMA,
         "ALTER TABLE automatik_lauf_uebersprungen ADD COLUMN wiederholen_ab TEXT",
     ),
+    # Die beiden gepflegten Einstufungen der Mitgliederliste (21.09.2026) und
+    # die Kampagnenfilter darauf.
+    #
+    # Rein additiv, und die Spalten bleiben fuer bestehende Zeilen **leer**:
+    # NULL heisst "nicht eingestuft" und ist etwas anderes als "B" oder
+    # "normal". Sie nachtraeglich zu fuellen hiesse, 300 Gruppen ein Urteil
+    # zu geben, das niemand gefaellt hat - dieselbe Zurueckhaltung wie bei
+    # Schritt 15 und den alten Scores.
+    #
+    # Die leeren Filterlisten der Kampagnen bedeuten unveraendert "keine
+    # Einschraenkung": Eine bestehende Kampagne erfasst nach diesem Schritt
+    # genau dieselben Gruppen wie davor.
+    25: (
+        "ALTER TABLE groups ADD COLUMN listenprioritaet TEXT",
+        "ALTER TABLE groups ADD COLUMN aktivitaetsstufe TEXT",
+        MARKETING_SCHEMA,
+        "ALTER TABLE campaigns ADD COLUMN target_prioritaeten TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE campaigns ADD COLUMN target_aktivitaet TEXT NOT NULL DEFAULT '[]'",
+    ),
 }
 
 SCHEMA = """
@@ -474,6 +493,12 @@ CREATE TABLE IF NOT EXISTS groups (
     country             TEXT,
     city_confidence     REAL NOT NULL DEFAULT 0,
     category            TEXT,
+    -- Von Hand gepflegt, nicht gerechnet: die Note der Mitgliederliste
+    -- ("A++".."B") und die Aktivitaetsstufe ("sehr_aktiv"|"aktiv"|"normal").
+    -- NULL heisst nicht eingestuft - kein DEFAULT, denn "normal" waere eine
+    -- Behauptung ueber eine Gruppe, die niemand angesehen hat.
+    listenprioritaet    TEXT,
+    aktivitaetsstufe    TEXT,
     secondary_categories TEXT NOT NULL DEFAULT '[]',
     category_confidence REAL NOT NULL DEFAULT 0,
     -- NULL ist ein gueltiger Wert: nicht bewertbar. Kein DEFAULT 0.
@@ -667,11 +692,12 @@ class SqliteStore:
                     privacy_hint, language_hint, audience_tags,
                     audience_confidence, city, bundesland, country, city_confidence,
                     category, secondary_categories, category_confidence,
+                    listenprioritaet, aktivitaetsstufe,
                     score, score_max, score_reason, score_breakdown, data_confidence,
                     last_checked_at, validation_status, data_quality, status, notes,
                     first_seen_at, last_seen_at, times_seen
                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                          ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                          ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(group_id) DO UPDATE SET
                     url_canonical       = excluded.url_canonical,
                     url_variants        = excluded.url_variants,
@@ -714,6 +740,14 @@ class SqliteStore:
                     category            = excluded.category,
                     secondary_categories = excluded.secondary_categories,
                     category_confidence = excluded.category_confidence,
+                    -- Wie bei den erhobenen Zahlen: Ein Schreiblauf, der die
+                    -- Einstufung nicht mitbringt, darf sie nicht loeschen.
+                    -- Sie ist Handarbeit, und niemand merkte ihr Verschwinden
+                    -- - der Kampagnenfilter traefe einfach weniger Gruppen.
+                    listenprioritaet    = COALESCE(excluded.listenprioritaet,
+                                                   groups.listenprioritaet),
+                    aktivitaetsstufe    = COALESCE(excluded.aktivitaetsstufe,
+                                                   groups.aktivitaetsstufe),
                     score               = excluded.score,
                     score_max           = excluded.score_max,
                     score_reason        = excluded.score_reason,
@@ -754,6 +788,8 @@ class SqliteStore:
                     group.category,
                     json.dumps(group.secondary_categories, ensure_ascii=False),
                     group.category_confidence,
+                    group.listenprioritaet,
+                    group.aktivitaetsstufe,
                     group.score,
                     group.score_max,
                     group.score_reason,
@@ -1009,6 +1045,8 @@ class SqliteStore:
             category=row["category"],
             secondary_categories=json.loads(row["secondary_categories"] or "[]"),
             category_confidence=row["category_confidence"],
+            listenprioritaet=row["listenprioritaet"],
+            aktivitaetsstufe=row["aktivitaetsstufe"],
             score=row["score"],
             score_max=row["score_max"],
             score_reason=row["score_reason"],

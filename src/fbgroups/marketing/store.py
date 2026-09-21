@@ -103,6 +103,10 @@ CREATE TABLE IF NOT EXISTS campaigns (
     target_cities           TEXT NOT NULL DEFAULT '[]',
     target_categories       TEXT NOT NULL DEFAULT '[]',
     target_statuses         TEXT NOT NULL DEFAULT '[]',
+    -- Die Note der Mitgliederliste ("A++".."B") und die Aktivitaetsstufe.
+    -- Leere Liste heisst auch hier: keine Einschraenkung.
+    target_prioritaeten     TEXT NOT NULL DEFAULT '[]',
+    target_aktivitaet       TEXT NOT NULL DEFAULT '[]',
     target_min_score        REAL,
     target_include_unscored INTEGER NOT NULL DEFAULT 0,
     auto_assign             INTEGER NOT NULL DEFAULT 0,
@@ -705,9 +709,10 @@ class MarketingStore:
                 campaign_id, name, description, audiences, cities, language,
                 message_template, landing_page, ziel, status, starts_on, ends_on,
                 target_audiences, target_cities, target_categories,
-                target_statuses, target_min_score, target_include_unscored,
+                target_statuses, target_prioritaeten, target_aktivitaet,
+                target_min_score, target_include_unscored,
                 auto_assign, kommentare, created_at, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(campaign_id) DO UPDATE SET
                 name             = excluded.name,
                 description      = excluded.description,
@@ -724,6 +729,8 @@ class MarketingStore:
                 target_cities           = excluded.target_cities,
                 target_categories       = excluded.target_categories,
                 target_statuses         = excluded.target_statuses,
+                target_prioritaeten     = excluded.target_prioritaeten,
+                target_aktivitaet       = excluded.target_aktivitaet,
                 target_min_score        = excluded.target_min_score,
                 target_include_unscored = excluded.target_include_unscored,
                 auto_assign             = excluded.auto_assign,
@@ -747,6 +754,8 @@ class MarketingStore:
                 json.dumps(campaign.target_cities, ensure_ascii=False),
                 json.dumps(campaign.target_categories, ensure_ascii=False),
                 json.dumps(campaign.target_statuses, ensure_ascii=False),
+                json.dumps(campaign.target_prioritaeten, ensure_ascii=False),
+                json.dumps(campaign.target_aktivitaet, ensure_ascii=False),
                 campaign.target_min_score,
                 int(campaign.target_include_unscored),
                 int(campaign.auto_assign),
@@ -3712,6 +3721,8 @@ class MarketingStore:
             target_cities=json.loads(row["target_cities"]),
             target_categories=json.loads(row["target_categories"]),
             target_statuses=json.loads(row["target_statuses"]),
+            target_prioritaeten=json.loads(row["target_prioritaeten"]),
+            target_aktivitaet=json.loads(row["target_aktivitaet"]),
             target_min_score=row["target_min_score"],
             target_include_unscored=bool(row["target_include_unscored"]),
             auto_assign=bool(row["auto_assign"]),

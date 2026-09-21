@@ -204,6 +204,18 @@ class Campaign(BaseModel):
     target_cities: list[str] = Field(default_factory=list)
     target_categories: list[str] = Field(default_factory=list)
     target_statuses: list[str] = Field(default_factory=list)
+    # Die beiden von Hand gepflegten Einstufungen aus der Mitgliederliste
+    # (21.09.2026): die Note ("A++".."B") und die Aktivitaetsstufe
+    # ("sehr_aktiv"|"aktiv"|"normal"). Sie stehen neben den uebrigen Feldern
+    # und nicht in ihnen: "welche Note?" und "welche Kategorie?" sind zwei
+    # Fragen, und eine Kampagne stellt oft nur eine davon.
+    #
+    # Wie ueberall hier heisst **leer: keine Einschraenkung** - auch eine
+    # Gruppe ohne Einstufung faellt dann nicht heraus. Steht dagegen eine
+    # Note in der Liste, erfasst die Regel nur eingestufte Gruppen: Wer "A++"
+    # sagt, meint nicht "A++ und alles Unbeurteilte".
+    target_prioritaeten: list[str] = Field(default_factory=list)
+    target_aktivitaet: list[str] = Field(default_factory=list)
     target_min_score: float | None = None
     # Gruppen ohne Score sind solche, von denen oft nur die URL bekannt ist.
     # Sie bekommen einen Code ohne Zielgruppe und ohne Stadt (FB-GEN-DE-...),

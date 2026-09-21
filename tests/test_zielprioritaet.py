@@ -525,13 +525,34 @@ def test_die_regel_der_klasse_a_ist_vollstaendig(config) -> None:
 
 
 def test_die_schwellen_je_klasse_stehen_in_der_konfiguration(config) -> None:
-    """A lockerer als B, B lockerer als C - und D hat gar keine."""
+    """A lockerer als B, B lockerer als C - und D am strengsten von allen."""
     tabelle = zielgruppe.anspruch_aus_config(config)
 
     assert tabelle[Zielprioritaet.A][0] is Relevanz.MITTEL
     assert tabelle[Zielprioritaet.B][0] is Relevanz.HOCH
     assert tabelle[Zielprioritaet.C] == (Relevanz.HOCH, True)
-    assert Zielprioritaet.D not in tabelle, "in D wird nicht geantwortet"
+    # Seit dem 21.09.2026 steht ``d`` in der Konfiguration - mit der
+    # strengsten Schwelle, die es gibt: belegter Bezug **und** die
+    # ausgeschriebene Strecke. Vorher wurde eine D-Gruppe nie besucht, und im
+    # Betrieb waren das neun von dreizehn zugeordneten Gruppen.
+    assert tabelle[Zielprioritaet.D] == (Relevanz.HOCH, True)
+    assert zielgruppe.bearbeitbare_klassen(config) == frozenset(Zielprioritaet)
+
+
+def test_ohne_eintrag_bleibt_d_aussen_vor() -> None:
+    """Die Vorgabe **im Code** kennt D nicht - gesagt wird es in settings.yaml.
+
+    Dieselbe Aufteilung wie bei ``mitgliedschaft_pflicht``, ``regeln_zuerst``
+    und ``anlass_pflicht``: Der Schutz gilt, solange niemand etwas sagt.
+    """
+
+    class _OhneD:
+        def get(self, *_pfad, default=None):  # noqa: ANN002, ANN003
+            return {"mindestrelevanz": {"a": "mittel", "b": "hoch", "c": "hoch"}}
+
+    tabelle = zielgruppe.anspruch_aus_config(_OhneD())
+    assert Zielprioritaet.D not in tabelle
+    assert Zielprioritaet.D not in zielgruppe.bearbeitbare_klassen(_OhneD())
 
 
 def test_ein_beitrag_traegt_immer_einen_link_ein_kommentar_nicht() -> None:

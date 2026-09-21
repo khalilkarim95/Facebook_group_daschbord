@@ -41,9 +41,20 @@ from fbgroups.marketing.analytics import funnel, kennzahlen
 from fbgroups.marketing.models import CampaignStatus, MarketingStatus
 from fbgroups.marketing.qualifikation import GRUND_BESCHRIFTUNG, Ablehnungsgrund
 from fbgroups.marketing.resonanz import resonanz_je_gruppe
-from fbgroups.marketing.selection import Auswahl, auswahl_der_kampagne, passt
+from fbgroups.marketing.selection import (
+    Auswahl,
+    auswahl_der_kampagne,
+    noten_sortiert,
+    passt,
+    stufen_sortiert,
+)
 from fbgroups.marketing.store import MarketingStore
-from fbgroups.models import Group
+from fbgroups.models import (
+    AKTIVITAET_LABEL,
+    AKTIVITAETSSTUFEN,
+    LISTENPRIORITAETEN,
+    Group,
+)
 from fbgroups.scoring import Resonanz
 from fbgroups.storage.sqlite_store import SqliteStore
 
@@ -124,6 +135,13 @@ def regel_kurzfassung(auswahl: Auswahl) -> str:
     ):
         if menge:
             teile.append(eins if len(menge) == 1 else f"{len(menge)} {viele}")
+    # Note und Stufe werden **genannt** und nicht gezaehlt: Es sind hoechstens
+    # fuenf bzw. drei kurze Werte, und "2 Prioritäten" beantwortet die einzige
+    # Frage nicht, die man an dieser Zelle hat - welche denn.
+    if auswahl.prioritaeten:
+        teile.append("Priorität " + ", ".join(noten_sortiert(auswahl.prioritaeten)))
+    if auswahl.aktivitaet:
+        teile.append("Aktivität " + ", ".join(stufen_sortiert(auswahl.aktivitaet)))
     if auswahl.min_score is not None:
         teile.append(f"Score ab {auswahl.min_score:g}")
     teile.append("auch ohne Score" if auswahl.include_unscored else "nur bewertete")
@@ -261,6 +279,17 @@ def _gruppe_als_zeile(
         "stadt": group.city or "",
         "zielgruppen": zielgruppen,
         "kategorie": kategorie,
+        # Die beiden von Hand gepflegten Einstufungen der Mitgliederliste.
+        # Sie stehen neben dem Score und neben der Zielklasse, nicht darin:
+        # Der Score beurteilt die Datenlage, die Zielklasse den Zielmarkt,
+        # und dies hier ist das Urteil dessen, der die Liste gefuehrt hat.
+        # Leer heisst **nicht eingestuft** - und genau das soll man filtern
+        # koennen, sonst bleibt die Luecke unsichtbar.
+        "prioritaet": group.listenprioritaet or "",
+        "aktivitaetsstufe": group.aktivitaetsstufe or "",
+        "aktivitaetsstufe_label": AKTIVITAET_LABEL.get(
+            group.aktivitaetsstufe or "", group.aktivitaetsstufe or ""
+        ),
         "status": group.status.value,
         "marketing": marketing_status,
         "marketing_label": _STATUS_LABEL.get(marketing_status, marketing_status),
@@ -549,6 +578,28 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             {"id": stadt, "label": stadt}
             for stadt in sorted({(g.city or "").strip() for g in groups if (g.city or "").strip()})
         ],
+        # Note und Aktivitaetsstufe kommen aus der **Aufzaehlung**, nicht aus
+        # dem Bestand: Sie sind eine feste Liste von fuenf bzw. drei Werten,
+        # und eine Kampagne darf auf "A++" filtern, auch wenn heute noch
+        # keine Gruppe so eingestuft ist - morgen kommt die Liste mit einer.
+        # Daneben steht, wie viele Gruppen es derzeit sind: Ein Filter, der
+        # null Gruppen trifft, soll das vor dem Klick sagen und nicht danach.
+        "prioritaeten": [
+            {
+                "id": note,
+                "label": note,
+                "anzahl": sum(1 for g in groups if (g.listenprioritaet or "") == note),
+            }
+            for note in LISTENPRIORITAETEN
+        ],
+        "aktivitaet": [
+            {
+                "id": stufe,
+                "label": AKTIVITAET_LABEL.get(stufe, stufe),
+                "anzahl": sum(1 for g in groups if (g.aktivitaetsstufe or "") == stufe),
+            }
+            for stufe in AKTIVITAETSSTUFEN
+        ],
         "kampagnen_status": [s.value for s in CampaignStatus],
     }
 
@@ -575,6 +626,8 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
                     "cities": list(c.target_cities),
                     "categories": list(c.target_categories),
                     "statuses": list(c.target_statuses),
+                    "prioritaeten": list(c.target_prioritaeten),
+                    "aktivitaet": list(c.target_aktivitaet),
                     "min_score": c.target_min_score,
                     "include_unscored": c.target_include_unscored,
                     "auto_assign": c.auto_assign,
@@ -864,6 +917,21 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
         for s in daten["trichter"]
     )
 
+    # Die Filterwerte der beiden gepflegten Einstufungen. Sie stehen im HTML
+    # und nicht im JavaScript, damit die Reihenfolge dieselbe ist wie ueberall
+    # sonst: von der besten Note nach unten. Die Zahl dahinter beantwortet die
+    # Frage, die man vor dem Klick hat - wie viele Gruppen das ueberhaupt sind.
+    noten_optionen = "".join(
+        f'<option value="{html.escape(e["id"])}">'
+        f'{html.escape(e["label"])} ({e["anzahl"]})</option>'
+        for e in (daten.get("auswahl") or {}).get("prioritaeten", [])
+    )
+    stufen_optionen = "".join(
+        f'<option value="{html.escape(e["id"])}">'
+        f'{html.escape(e["label"])} ({e["anzahl"]})</option>'
+        for e in (daten.get("auswahl") or {}).get("aktivitaet", [])
+    )
+
     # Ausgeblendet wird per CSS, nicht entfernt: Das Skript sucht mehrere
     # dieser Knoepfe beim Start ueber getElementById und liefe sonst in einen
     # Fehler, der die ganze Seite leer liesse.
@@ -1139,6 +1207,11 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   .sammel input[type=text] {{ flex: 1; min-width: 200px; }}
   .sammel button {{ cursor: pointer; padding: 6px 12px; border-radius: 6px; }}
   th.auswahl, td.auswahl {{ width: 28px; text-align: center; }}
+  /* Die Note der Liste. Sie traegt Farbe, weil sie eine Rangfolge ist und
+     in jeder Zeile steht; die Stufe darunter bleibt zart - sie ergaenzt,
+     sie ordnet nicht. */
+  .note {{ font-weight: 600; }}
+  .stufe {{ font-size: 11px; color: #64748b; }}
   /* Ausgeschlossen heisst zurueckgetreten, nicht verschwunden: Wer den Filter
      abschaltet, soll die Zeile sehen und den Grund gleich mitlesen koennen. */
   tr.ausgeschlossen {{ opacity: .5; }}
@@ -1227,7 +1300,7 @@ So bleiben zwei Auswertungen vergleichbar.">Anteil</th><th></th>
   <select id="f-kategorie"><option value="">Alle Kategorien</option></select>
   <select id="f-zielprio"
           title="Gehoert die Gruppe zum Zielmarkt? A wird zuerst bearbeitet, D gar nicht.">
-    <option value="">Jede Prioritaet</option>
+    <option value="">Jede Zielklasse</option>
     <option value="a">A – Reise &amp; Versand</option>
     <option value="b">B – Gemeinschaft</option>
     <option value="c">C – allgemein</option>
@@ -1242,6 +1315,24 @@ nennt, faellt aus dem Zielmarkt heraus - ihre Strecke ist nicht unsere.">
     <option value="eu">übriges Europa</option>
     <option value="unbekannt">Land unbekannt</option>
     <option value="ausserhalb">außerhalb Europas</option>
+  </select>
+  <!-- Die beiden gepflegten Einstufungen der Mitgliederliste. Sie stehen
+       neben der Zielklasse und nicht in ihr: Jene ist gerechnet (A-D), diese
+       ist das Urteil eines Menschen (A++ bis B). Deshalb heisst das Feld
+       daneben seit dem 21.09.2026 "Zielklasse" - zweimal "Prioritaet" in
+       derselben Leiste waere ein Raetsel und keine Auskunft. -->
+  <select id="f-note"
+          title="Die Note aus der Mitgliederliste - von Hand vergeben, nicht
+gerechnet. 'nicht eingestuft' ist eine eigene Wahl und kein Randfall: Es ist
+genau die Liste, die noch zu beurteilen ist.">
+    <option value="">Jede Priorität</option>
+    {noten_optionen}
+    <option value="-">nicht eingestuft</option>
+  </select>
+  <select id="f-stufe" title="Die Aktivitätsstufe aus der Mitgliederliste.">
+    <option value="">Jede Aktivitätsstufe</option>
+    {stufen_optionen}
+    <option value="-">nicht eingestuft</option>
   </select>
   <select id="f-marketing"><option value="">Jeder Stand</option></select>
   <select id="f-qualifikation" title="Darf hier ueberhaupt etwas stehen?">
@@ -1314,6 +1405,11 @@ nennt, faellt aus dem Zielmarkt heraus - ihre Strecke ist nicht unsere.">
     <th data-sort="stadt">Stadt</th>
     <th data-sort="zielgruppen">Zielgruppe</th>
     <th data-sort="kategorie">Kategorie</th>
+    <th data-sort="prioritaet"
+        title="Die Note aus der Mitgliederliste (A++ bis B) und darunter die
+Aktivitaetsstufe. Beides hat ein Mensch vergeben; gerechnet wird daran nichts,
+und in den Score geht es nicht ein. Leer heisst: noch nicht
+eingestuft.">Priorität</th>
     <th data-sort="zielprioritaet"
         title="Gehoert diese Gruppe zum Zielmarkt? A = Reise und Versand nach
 Syrien, B = syrische/arabische Gemeinschaft in Deutschland, C = allgemein,
@@ -1398,6 +1494,12 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
     <label>Städte <span class="zart">(leer = alle, mehrere mit Strg)</span>
       <select id="r-staedte" multiple size="8"></select>
     </label>
+    <label>Priorität <span class="zart">(leer = alle, mehrere mit Strg)</span>
+      <select id="r-prioritaeten" multiple size="5"></select>
+    </label>
+    <label>Aktivität <span class="zart">(leer = alle, mehrere mit Strg)</span>
+      <select id="r-aktivitaet" multiple size="3"></select>
+    </label>
     <label>Mindestscore <span class="zart">(leer = keiner)</span>
       <input type="number" id="r-minscore" min="0" max="100" step="1" placeholder="z. B. 60">
     </label>
@@ -1437,6 +1539,12 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
     </label>
     <label>Städte <span class="zart">(leer = alle, mehrere mit Strg)</span>
       <select id="k-staedte" multiple size="8"></select>
+    </label>
+    <label>Priorität <span class="zart">(leer = alle, mehrere mit Strg)</span>
+      <select id="k-prioritaeten" multiple size="5"></select>
+    </label>
+    <label>Aktivität <span class="zart">(leer = alle, mehrere mit Strg)</span>
+      <select id="k-aktivitaet" multiple size="3"></select>
     </label>
     <label>Sprache
       <input type="text" id="k-sprache" placeholder="ar | de">
@@ -1494,7 +1602,7 @@ let seite = 1, proSeite = 25;
 const MERKER = "fbgroups-uebersicht";
 const MERK_FELDER = ["f-stadt", "f-zielgruppe", "f-kategorie", "f-marketing",
                      "f-zielprio", "f-zielregion", "f-beitrag", "f-suche", "f-mitglieder",
-                     "f-aktivitaet", "f-konfidenz"];
+                     "f-aktivitaet", "f-konfidenz", "f-note", "f-stufe"];
 const MERK_SCHALTER = ["f-bewertet", "f-bearbeitet"];
 
 function standSichern() {{
@@ -1584,6 +1692,8 @@ function gefiltert() {{
   const beitrag = document.getElementById("f-beitrag").value;
   const mitglieder = document.getElementById("f-mitglieder").value;
   const aktivitaet = document.getElementById("f-aktivitaet").value;
+  const note = document.getElementById("f-note").value;
+  const stufe = document.getElementById("f-stufe").value;
   const konfidenz = document.getElementById("f-konfidenz").value;
 
   // "zu-tun" fasst zusammen, wonach man taeglich sucht: was noch aussteht.
@@ -1623,8 +1733,18 @@ function gefiltert() {{
     !konfidenz ||
     (konfidenz === "niedrig" ? z.konfidenz < 0.4 : z.konfidenz >= Number(konfidenz));
 
+  // "-" heisst **nicht eingestuft** und ist eine eigene Wahl: Es ist die
+  // Liste derer, die noch zu beurteilen sind, und ohne sie waere sie nur
+  // durch Abzaehlen zu bekommen.
+  const passtNote = (z) =>
+    !note || (note === "-" ? !z.prioritaet : z.prioritaet === note);
+  const passtStufe = (z) =>
+    !stufe || (stufe === "-" ? !z.aktivitaetsstufe : z.aktivitaetsstufe === stufe);
+
   return zeilen.filter((z) =>
     (!nurBearbeitet || z.bearbeiten) &&
+    passtNote(z) &&
+    passtStufe(z) &&
     passtBeitrag(z) &&
     passtMitglieder(z) &&
     passtAktivitaet(z) &&
@@ -1665,6 +1785,7 @@ function aktiveFilter() {{
     ["f-zielprio", "Ziel"], ["f-zielregion", "Land"], ["f-marketing", "Stand"],
     ["f-qualifikation", "Darf"], ["f-beitrag", "Beitrag"], ["f-mitglieder", "Groesse"],
     ["f-aktivitaet", "Aktivitaet"], ["f-konfidenz", "Datenqualitaet"],
+    ["f-note", "Prioritaet"], ["f-stufe", "Aktivitaetsstufe"],
   ];
   const aktiv = [];
   for (const [id, name] of felder) {{
@@ -1684,7 +1805,8 @@ function aktiveFilter() {{
 function filterZuruecksetzen() {{
   for (const id of ["f-stadt", "f-zielgruppe", "f-kategorie", "f-zielprio",
                     "f-zielregion", "f-marketing", "f-qualifikation", "f-beitrag",
-                    "f-mitglieder", "f-aktivitaet", "f-konfidenz"]) {{
+                    "f-mitglieder", "f-aktivitaet", "f-konfidenz",
+                    "f-note", "f-stufe"]) {{
     const feld = document.getElementById(id);
     if (feld) feld.value = "";
   }}
@@ -1694,6 +1816,20 @@ function filterZuruecksetzen() {{
   seite = 1;
   merkeStand();
   zeichne();
+}}
+
+// Note und Stufe in einer Zelle - es sind zwei Angaben aus derselben Hand,
+// und getrennt braeuchten sie zwei Spalten fuer zusammen acht Zeichen. Leer
+// bleibt sichtbar leer ("–"): "nicht eingestuft" ist eine Auskunft ueber
+// unsere Liste und darf nicht wie "normal" aussehen.
+function noteZelle(z) {{
+  const note = z.prioritaet
+    ? '<span class="note">' + esc(z.prioritaet) + "</span>"
+    : '<span class="zart">–</span>';
+  const stufe = z.aktivitaetsstufe
+    ? '<span class="stufe">' + esc(z.aktivitaetsstufe_label || z.aktivitaetsstufe) + "</span>"
+    : "";
+  return note + (stufe ? "<br>" + stufe : "");
 }}
 
 function zeichne() {{
@@ -1721,7 +1857,7 @@ function zeichne() {{
   zeichneBlaetterleiste(alle.length, seiten);
 
   document.getElementById("zeilen").innerHTML = alle.length === 0
-    ? "<tr><td colspan='15' class='leer'>Keine Gruppe passt zu diesem Filter.</td></tr>"
+    ? "<tr><td colspan='16' class='leer'>Keine Gruppe passt zu diesem Filter.</td></tr>"
     : liste.map((z) => {{
         const klasse = z.score === null ? "keine" : z.score >= 90 ? "hoch"
                      : z.score >= 70 ? "mittel" : "";
@@ -1746,6 +1882,7 @@ function zeichne() {{
           <td>${{esc(z.stadt) || "–"}}</td>
           <td>${{esc(z.zielgruppen.join(", ")) || "–"}}</td>
           <td>${{esc(z.kategorie) || "–"}}</td>
+          <td>${{noteZelle(z)}}</td>
           <td>${{zielZelle(z)}}</td>
           <td class="kampagnen-zelle">${{kampagnenZelle(z)}}</td>
           <td>${{standZelle(z)}}</td>
@@ -2073,7 +2210,22 @@ function beitragZelle(z) {{
     o.value = c.id; o.textContent = c.label;
     stadt.appendChild(o);
   }});
+  // Note und Stufe kommen aus der Aufzaehlung, nicht aus dem Bestand: Eine
+  // Kampagne darf auf "A++" filtern, auch wenn heute keine Gruppe so
+  // eingestuft ist. Die Zahl daneben sagt trotzdem, wie viele es gerade sind
+  // - "A++ (0)" ist die Auskunft, wegen der man das Feld ansieht.
+  fuelleStufen("k-prioritaeten", "k-aktivitaet");
 }})();
+
+function fuelleStufen(notenFeld, stufenFeld) {{
+  const noten = document.getElementById(notenFeld);
+  const stufen = document.getElementById(stufenFeld);
+  if (!noten || !stufen || !DATEN.auswahl) return;
+  (DATEN.auswahl.prioritaeten || []).forEach((p) =>
+    noten.add(new Option(p.label + "  (" + p.anzahl + ")", p.id)));
+  (DATEN.auswahl.aktivitaet || []).forEach((a) =>
+    stufen.add(new Option(a.label + "  (" + a.anzahl + ")", a.id)));
+}}
 
 function gewaehlteWerte(id) {{
   return [...document.getElementById(id).selectedOptions].map((o) => o.value);
@@ -2094,6 +2246,10 @@ document.getElementById("k-anlegen")?.addEventListener("click", async (e) => {{
         campaign_id: document.getElementById("k-id").value.trim(),
         audiences: gewaehlteWerte("k-zielgruppen"),
         cities: gewaehlteWerte("k-staedte"),
+        // Note und Stufe gehoeren zur Regel und nicht zur Beschreibung:
+        // "A++" sagt nichts darueber, wen die Kampagne bewirbt.
+        prioritaeten: gewaehlteWerte("k-prioritaeten"),
+        aktivitaet: gewaehlteWerte("k-aktivitaet"),
         language: document.getElementById("k-sprache").value.trim(),
         landing_page: document.getElementById("k-landing").value.trim(),
         // Eigene Textvorlage und Kommentar-Haken stehen hier nicht mehr:
@@ -2142,6 +2298,8 @@ function regelAnzeigen(id) {{
   document.getElementById("r-kampagne").value = id;
   auswahlSetzen("r-zielgruppen", kampagne.regel.audiences);
   auswahlSetzen("r-staedte", kampagne.regel.cities);
+  auswahlSetzen("r-prioritaeten", kampagne.regel.prioritaeten);
+  auswahlSetzen("r-aktivitaet", kampagne.regel.aktivitaet);
   document.getElementById("r-minscore").value =
     kampagne.regel.min_score === null ? "" : kampagne.regel.min_score;
   document.getElementById("r-unbewertete").checked = kampagne.regel.include_unscored;
@@ -2159,6 +2317,7 @@ function regelAnzeigen(id) {{
     document.getElementById("r-zielgruppen").add(new Option(a.label + "  (" + a.id + ")", a.id)));
   DATEN.auswahl.staedte.forEach((c) =>
     document.getElementById("r-staedte").add(new Option(c.label, c.id)));
+  fuelleStufen("r-prioritaeten", "r-aktivitaet");
   if (DATEN.kampagnen.length) regelAnzeigen(DATEN.kampagnen[0].id);
 }})();
 
@@ -2179,6 +2338,8 @@ document.getElementById("r-speichern")?.addEventListener("click", async (e) => {
       body: JSON.stringify({{
         audiences: gewaehlteWerte("r-zielgruppen"),
         cities: gewaehlteWerte("r-staedte"),
+        prioritaeten: gewaehlteWerte("r-prioritaeten"),
+        aktivitaet: gewaehlteWerte("r-aktivitaet"),
         // -1 hebt den Mindestscore auf - dieselbe Vereinbarung wie auf der
         // Kommandozeile. Ein leeres Feld heisst "kein Mindestscore", nicht
         // "unveraendert lassen".

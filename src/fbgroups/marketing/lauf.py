@@ -336,6 +336,20 @@ class Gruppenfortschritt:
     heute_in_gruppe: int = 0
     """Wie viele Versuche heute schon in **dieser** Gruppe standen."""
 
+    bearbeitbare_klassen: frozenset[Zielprioritaet] = BEARBEITBAR
+    """In welchen Zielklassen ueberhaupt gearbeitet wird.
+
+    Vorgabe ist die vorsichtige aus dem Code (``A``, ``B``, ``C`` - ``D``
+    nicht), gefuellt wird sie aus ``zielgruppe.bearbeitbare_klassen``, also
+    aus derselben Tabelle, die auch die Mindestrelevanz haelt. Dieselbe
+    Aufteilung wie bei ``mitgliedschaft_noetig`` und ``regeln_noetig``: Der
+    Code behaelt den Schutz fuer den Fall, dass niemand etwas gesagt hat.
+
+    Der Anlass (21.09.2026): Von dreizehn zugeordneten Gruppen waren neun
+    ``D``, und der Lauf kreiste stundenlang durch die uebrigen vier, ohne
+    dass irgendwo stand, wo die anderen geblieben sind.
+    """
+
     gruppenlimit: int = 0
     """Wie viele an einem Tag hoechstens - ``0`` heisst ohne Schranke.
 
@@ -490,7 +504,7 @@ class Gruppenfortschritt:
         versuchen kostet einen Versuch aus einem Konto, an dem alles haengt.
         """
         return (
-            self.zielprioritaet in BEARBEITBAR
+            self.zielprioritaet in self.bearbeitbare_klassen
             # **Die Tagesmenge je Gruppe gilt dem Kommentar, nicht der
             # Gruppe** (15.09.2026). Sie kommt aus
             # ``limits.comments.je_gruppe_taeglich`` und wird aus den
@@ -670,6 +684,20 @@ class Kampagnenfortschritt:
     def gruppen_gesperrt(self) -> int:
         """Von der Gruppe nicht erlaubt - fuer diesen Durchgang uebersprungen."""
         return sum(1 for g in self.gruppen if g.gesperrt and not g.fertig)
+
+    @property
+    def gruppen_ausserhalb(self) -> int:
+        """Gruppen, deren Zielklasse gar nicht bearbeitet wird.
+
+        **Die stillste Auslassung des Projekts** (21.09.2026): Neun von
+        dreizehn zugeordneten Gruppen waren ``D``, der Lauf kreiste durch die
+        uebrigen vier, und nirgends stand eine Zahl dazu. Wer die vier
+        Gruppennamen im Protokoll sah, hatte keinen Anlass, die anderen neun
+        zu vermissen.
+        """
+        return sum(
+            1 for g in self.gruppen if g.zielprioritaet not in g.bearbeitbare_klassen
+        )
 
     @property
     def beitritt_kandidaten(self) -> list[Gruppenfortschritt]:
@@ -1002,6 +1030,10 @@ class Lauffortschritt:
     @property
     def gruppen_gesperrt(self) -> int:
         return sum(k.gruppen_gesperrt for k in self.kampagnen)
+
+    @property
+    def gruppen_ausserhalb(self) -> int:
+        return sum(k.gruppen_ausserhalb for k in self.kampagnen)
 
     def lage(self, aktion: Aktion) -> Lage:
         """Was diese Aktion jetzt darf. Unbekannt heisst erlaubt.
@@ -1577,6 +1609,7 @@ def lies_fortschritt(
     regeln_pflicht: bool = True,
     heute_je_gruppe: dict | None = None,
     gruppenlimit: int = 0,
+    klassen: frozenset | None = None,
     kommentare_zuerst: bool = False,
 ) -> Lauffortschritt:
     """Baut den ganzen Stand aus den vorhandenen Tabellen.
@@ -1696,6 +1729,7 @@ def lies_fortschritt(
                     regeln_pflicht=regeln_pflicht,
                     heute_je_gruppe=heute_je_gruppe or {},
                     gruppenlimit=gruppenlimit,
+                    klassen=klassen or BEARBEITBAR,
                 )
             )
         except Exception:  # noqa: BLE001 - eine Kampagne, nicht der Lauf
@@ -1742,6 +1776,7 @@ def _lies_kampagne(
     regeln_pflicht: bool,
     heute_je_gruppe: dict,
     gruppenlimit: int,
+    klassen: frozenset = BEARBEITBAR,
 ) -> Kampagnenfortschritt:
     """Den Stand **einer** Kampagne lesen - herausgeloest, damit sie fuer sich scheitern kann.
 
@@ -1825,6 +1860,7 @@ def _lies_kampagne(
             ),
             heute_in_gruppe=int(heute_je_gruppe.get(gid, 0)),
             gruppenlimit=gruppenlimit,
+            bearbeitbare_klassen=klassen,
             **_urteil(
                 gid in ist_mitglied,
                 gid in angefragt,
@@ -1892,6 +1928,15 @@ def fortschrittstext(fortschritt: Lauffortschritt) -> str:
         zeilen += [
             f"{fortschritt.gruppen_uebersprungen} Gruppe(n) nach einem Fehlschlag "
             "beiseitegelegt - im naechsten Lauf sind sie wieder dabei.",
+        ]
+    # Die Zahl, die am 21.09.2026 gefehlt hat. Sie nennt den Weg mit: Wer
+    # nicht weiss, dass es die Klassen gibt, sucht die fehlenden Gruppen
+    # sonst im Bestand, in der Zuordnung oder in der Mitgliedschaft.
+    if fortschritt.gruppen_ausserhalb:
+        zeilen += [
+            f"{fortschritt.gruppen_ausserhalb} Gruppe(n) ausserhalb der bearbeiteten "
+            "Zielklassen - sie werden nie besucht "
+            "(marketing.zielprioritaet.mindestrelevanz).",
         ]
     # **Der haeufigste Grund, warum ein Lauf mit offener Arbeit endet - und
     # der einzige, der bis zum 15.09.2026 nirgends stand.**

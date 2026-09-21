@@ -134,6 +134,28 @@ class ScoreBreakdown(BaseModel):
         return round(sum(float(w) for w in self.model_dump().values()), 2)
 
 
+#: Die Noten der Mitgliederliste, von der besten zur schwaechsten. Kein Enum,
+#: weil "A++" kein Bezeichner ist - aber auch keine freie Zeichenkette: Was
+#: hier nicht steht, wird beim Einlesen **gemeldet** und nicht uebernommen.
+#: Eine erfundene Note verschoebe eine Gruppe in der Reihenfolge, nach der
+#: entschieden wird, wo die naechsten Beitraege hingehen.
+LISTENPRIORITAETEN: tuple[str, ...] = ("A++", "A+", "A", "B+", "B")
+
+#: Die drei Aktivitaetsstufen der Liste - Kennungen, keine Anzeigenamen. In
+#: der Quelltabelle steht "Sehr Aktiv (نشط جداً)", im Bestand steht
+#: ``sehr_aktiv``. Dieselbe Uebersetzung wie bei der Kategorie und aus
+#: demselben Grund: Ein Filter vergliche sonst Anzeigetexte.
+AKTIVITAETSSTUFEN: tuple[str, ...] = ("sehr_aktiv", "aktiv", "normal")
+
+#: Beschriftungen fuer die Anzeige. Sie stehen hier und nicht im JavaScript:
+#: Eine zweite Liste waere eine zweite Wahrheit ueber dieselbe Stufe.
+AKTIVITAET_LABEL: dict[str, str] = {
+    "sehr_aktiv": "sehr aktiv",
+    "aktiv": "aktiv",
+    "normal": "normal",
+}
+
+
 class Group(BaseModel):
     """Eine oeffentlich auffindbare Facebook-Gruppe."""
 
@@ -172,6 +194,26 @@ class Group(BaseModel):
     activity_confidence: float = 0.0
     activity_source: ActivitySource | None = None
     activity_checked_at: datetime | None = None
+
+    # -- Von Hand gepflegte Einstufung aus der Mitgliederliste -------------
+    # Zwei Angaben, die kein Programm errechnet hat: Ein Mensch hat die
+    # Gruppe angesehen und sie eingestuft. Sie stehen deshalb **neben** dem
+    # Score und neben der gerechneten ``zielgruppe.Zielprioritaet`` und
+    # ersetzen keines von beiden - der Score beurteilt die Datenlage, die
+    # Zielprioritaet den Zielmarkt, und dies hier ist das Urteil dessen, der
+    # die Liste gefuehrt hat.
+    #
+    # ``listenprioritaet`` traegt "A++" bis "B" (siehe LISTENPRIORITAETEN),
+    # ``aktivitaetsstufe`` "sehr_aktiv" | "aktiv" | "normal". Beide sind
+    # ``None``, wo nichts dastand - kein Ersatzwert: "normal" waere eine
+    # Behauptung ueber eine Gruppe, die niemand eingestuft hat.
+    #
+    # ``aktivitaetsstufe`` ist ausdruecklich **nicht** ``activity_factor``:
+    # Jene Zahl kommt aus den Beitraegen je Tag und ist gemessen, diese ist
+    # ein Eindruck. Verrechnet waeren beide unlesbar - dieselbe Trennung wie
+    # zwischen Score und ``data_confidence``.
+    listenprioritaet: str | None = None
+    aktivitaetsstufe: str | None = None
 
     # Klassifikation
     audience_tags: list[str] = Field(default_factory=list)

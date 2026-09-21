@@ -337,7 +337,8 @@ bereits Mitglied sind.
   | `category` | Anzeigename („Reise & Transport") | Kennung (`reise`) über `KATEGORIEN` |
   | `city` | **Reiseziel** („Damaskus", „دمشق") | **nichts** — Hinweis in `notes` |
   | `country` | Raum („Deutschland / Europa") | `Group.country` |
-  | `activity` | Kopf der Gruppenseite | Sichtbarkeit, Mitgliederzahl, Beiträge/Tag |
+  | `activity` | Kopf der Gruppenseite **oder** Stufe | Sichtbarkeit, Mitgliederzahl, Beiträge/Tag — sonst `aktivitaetsstufe` |
+  | `rating` | eigene Note („A++") | `listenprioritaet` (seit 21.09.2026 ein Feld, vorher `notes`) |
 
 - **`category` muss übersetzt werden, sonst greift die Zielpriorität nie.**
   `marketing.zielprioritaet.kategorien` nennt `reise` und `versand`; stünde
@@ -401,6 +402,98 @@ bereits Mitglied sind.
   * **Zugeordnet wird dabei nichts.** Neue Gruppen bekommen ihren
     Tracking-Code erst über `campaign sync` (erst `--dry-run`); der
     Schlusstext des Skripts nennt den Befehl.
+
+### Priorität und Aktivität als Kampagnenfilter (21.09.2026)
+
+```
+Mitgliederliste   rating: A++   activity: Sehr Aktiv (نشط جداً)
+        ▼
+Bestand           groups.listenprioritaet = 'A++'
+                  groups.aktivitaetsstufe = 'sehr_aktiv'
+        ▼
+Kampagne          target_prioritaeten = ['A++','A+']   target_aktivitaet = ['sehr_aktiv']
+```
+
+Beide Angaben standen schon in der Liste, keine kam bis in den Bestand: Die
+Note landete als Freitext in `notes` („Eigene Note: A++"), die Stufe fiel
+ganz heraus — `lies_seitenangaben` sucht in derselben Spalte nach
+Mitgliederzahl und Beiträgen je Tag und ergibt für „Sehr Aktiv (نشط جداً)"
+nichts. Filtern ließ sich nach keiner von beiden.
+
+- **Es sind Urteile eines Menschen, keine gerechneten Werte.** Sie stehen
+  deshalb **neben** dem Score und neben der gerechneten `Zielprioritaet` und
+  gehen in keinen von beiden ein: Der Score beurteilt die Datenlage, die
+  Zielpriorität den Zielmarkt, und dies hier ist die Einschätzung dessen, der
+  die Liste geführt hat. Verrechnet wären alle drei unlesbar — dieselbe
+  Trennung wie zwischen Score und `data_confidence`.
+- **`aktivitaetsstufe` ist nicht `activity_factor`.** Jener kommt aus den
+  Beiträgen je Tag und ist gemessen (Konfidenz 1,0), diese ist ein Eindruck.
+  Aus „sehr aktiv" wird **keine** Beitragszahl und aus „50+ Beiträge pro Tag"
+  keine Stufe; beide Wege lesen dieselbe Spalte und erfinden einander nicht.
+- **Zwei Namen für zwei Buchstabenskalen.** `zielprioritaet` (A–D, gerechnet)
+  und `listenprioritaet` (A++ … B, gepflegt) sähen als ein Feld gleich aus
+  und bedeuten Verschiedenes. In der Übersicht heißt das Filterfeld der
+  gerechneten Klasse seit diesem Tag **„Jede Zielklasse"** — zweimal
+  „Priorität" in derselben Leiste wäre ein Rätsel und keine Auskunft; ihre
+  Spalte hieß ohnehin schon „Ziel".
+- **Unbekanntes wird gemeldet und nicht geraten.** Aus „A-" wird kein „A"
+  (`note_aus_rating`), und ein Wert, den `AKTIVITAETSSTUFEN_TEXT` nicht
+  kennt, ergibt keine Stufe. `import-mitglieder` nennt beides und zählt in
+  seiner Tabelle, wie viele Zeilen überhaupt eine Einstufung mitbrachten:
+  Eine Datei, aus der 3 von 18 Zeilen eine Note tragen, ergibt einen Filter,
+  der 15 Gruppen nicht findet — und das gehört vor den Zuordnungslauf.
+- **„Sehr Aktiv" enthält „Aktiv".** Die Reihenfolge in `AKTIVITAETSSTUFEN_TEXT`
+  ist deshalb der halbe Inhalt der Tabelle: Stünde die schwächere Stufe
+  zuerst, bekäme jede sehr aktive Gruppe „aktiv", und gemerkt hätte man es an
+  einem Filter, der die besten Gruppen nicht findet. Dasselbe im Arabischen
+  („نشط جداً" enthält „نشط"), dort zusätzlich als Teilstring verglichen — das
+  Tanween steht nicht in jeder Zeile.
+- **Die Note hat ein Feld und steht nicht mehr im Freitext.** Zweimal
+  gespeichert wären es zwei Wahrheiten über dieselbe Einstufung, und die
+  Fassung in `notes` wäre die, nach der niemand filtern kann. Das Reiseziel
+  bleibt dort — es hat kein Feld und soll keines bekommen.
+- **`upsert_groups` schützt beide mit `COALESCE`.** Es ist Handarbeit; ein
+  Schreiblauf, der sie nicht mitbringt, darf sie nicht löschen — niemand
+  merkte es, der Kampagnenfilter träfe einfach weniger Gruppen. Dieselbe
+  Regel wie bei Mitgliederzahl und Aktivität.
+- **Leer heißt weiterhin keine Einschränkung, eine genannte Note aber
+  schließt die Unbeurteilten aus.** Wer „A++" wählt, meint nicht „A++ und
+  alles Unbeurteilte". Das ist der Unterschied zu `include_unscored`: Dort
+  ist „kein Score" eine Aussage über unsere Datenlage, hier ist „keine Note"
+  eine darüber, dass niemand die Gruppe angesehen hat.
+- **Geprüft wird gegen die Aufzählung, nicht gegen den Bestand.** Anders als
+  bei Zielgruppe, Stadt und Kategorie darf eine Kampagne auf „A++" filtern,
+  auch wenn heute keine Gruppe so eingestuft ist — morgen kommt die Liste mit
+  einer. Damit der Filter trotzdem nicht ins Leere greift, steht die heutige
+  Zahl in der Auswahlliste: „A++ (17)".
+- **In der Kurzfassung der Regel werden sie genannt, nicht gezählt.** Bei
+  höchstens fünf bzw. drei kurzen Werten beantwortet „2 Prioritäten" die
+  einzige Frage nicht, die man an diese Zelle hat. Sortiert von der besten
+  Note nach unten — alphabetisch stünde „A" vor „A+" vor „A++".
+
+Wege dorthin:
+
+```powershell
+& $py -m fbgroups.cli campaign new "Nur A++" --prioritaet A++ --aktivitaet sehr_aktiv
+& $py -m fbgroups.cli campaign target meine-kampagne --prioritaet A++ --prioritaet A+
+& $py -m fbgroups.cli campaign target meine-kampagne --aktivitaet alle   # aufheben
+```
+
+Dazu in der Übersicht: zwei Felder im Formular „Neue Kampagne anlegen", zwei
+in „Auswahlregel einer Kampagne ändern", zwei Filter über der Tabelle und
+eine Spalte „Priorität" (Note oben, Stufe darunter). `nicht eingestuft` ist
+in beiden Filtern eine eigene Wahl und kein Randfall — es ist genau die
+Liste, die noch zu beurteilen ist. Festgehalten in
+`tests/test_kampagnenfilter.py`.
+
+**Die Landingpage ist `https://b-tarikak.de/home`** (21.09.2026,
+`marketing.browser_url`), und `app_base_url` steht auf
+`https://go.b-tarikak.de`. Zwei Domains und nicht eine: Die Kurzdomain nimmt
+den Klick entgegen und zählt ihn, die Landingpage ist das Ziel dahinter.
+**Vergebene Codes ändern sich dadurch nicht** — nur ihr Vorspann, und die
+bereits gespeicherten Adressen tragen die alte Domain, bis einmal
+`campaign refresh-urls` gelaufen ist. Ohne diesen Lauf zeigen ältere
+Zuordnungen auf einen Dienst, der dort nicht mehr antwortet.
 
 ## Marketing-Erweiterung (`marketing/`)
 
@@ -1232,9 +1325,13 @@ mit 900, und die 900 sind genau die Menschen, die einen Mitnehmer suchen.
   Behandlung wie bei einer gesperrten Gruppe.
 - **Die Begriffe stehen seit dem 20.09.2026 in einer Datei**: `settings.yaml`
   unter `marketing.zielprioritaet`. Kategorie- und Zielgruppenbegriffe gab es
-  daneben in `categories.yaml`/`audiences.yaml`; mit ihnen ist der Abgleich
-  gegen den **Namen** einer Gruppe entfallen — maßgeblich sind jetzt
-  `kategorie`, `nebenkategorien` und `audiences` aus dem Bestand. `regeln_aus_config` ist die
+  daneben in `categories.yaml`/`audiences.yaml`; mit ihnen entfiel der
+  Abgleich gegen den **Namen** einer Gruppe. **Am 21.09.2026 ist er
+  zurückgekommen** (`kategoriebegriffe`, `audiencebegriffe` in derselben
+  Datei) — ohne ihn erreichte keine Gruppe der Mitgliederliste mehr Klasse A,
+  siehe „Warum nur 4 von 13 Gruppen besucht wurden". Maßgeblich bleibt
+  zuerst, was im Bestand steht (`kategorie`, `nebenkategorien`, `audiences`);
+  die Wörter greifen, wo dort nichts gepflegt ist. `regeln_aus_config` ist die
   **einzige** Stelle des Moduls, die Konfiguration liest; alles darunter ist
   ohne sie prüfbar (wie `grenzen.einstellungen`). Eine Kategorie, die im
   **Bestand** nicht vorkommt, meldet `config-check` — sonst verschwände die
@@ -2569,6 +2666,80 @@ gehen, bis jede ihre zehn Kommentare hat, und niemals aufhören.
 - Festgehalten in `tests/test_ruhezeit.py`; die beiden Treibertests zeigen
   den Unterschied im Betrieb: Mit „kein Anlass" kommt die erste Gruppe ein
   zweites Mal dran, mit „kein Kommentarfeld" nicht.
+
+### Warum nur 4 von 13 Gruppen besucht wurden (21.09.2026)
+
+```
+Mitgliederliste:  category = "Unbekannt"   →  Group.category = NULL
+zielgruppe:       kein Thema               →  Klasse A unerreichbar
+                  kein Syrienwort im Namen →  Klasse D
+lauf:             D nicht in BEARBEITBAR   →  Gruppe wird nie besucht
+```
+
+Der Befund war eine Schleife durch immer dieselben vier Gruppen, in jeder
+Runde dieselbe Meldung:
+
+```
+kein Anlass: kein passender Beitrag
+  (Bezug zu schwach fuer diese Gruppe (hoch, verlangt hoch + Strecke))
+```
+
+**„verlangt hoch + Strecke" ist die Anforderung der Klasse C** — die Schwelle
+war also nie pauschal, sie wurde nur überall aus der falschen Klasse geholt.
+Eine Gruppe namens „شركة شحن دولي سوريا" landete in C, weil seit dem
+20.09.2026 allein die **gepflegte** Kategorie das Thema lieferte und die
+Mitgliederliste in `category` fast durchgehend „Unbekannt" trägt. Wer dazu
+kein Syrienwort im Namen hatte, fiel auf **D** — und D stand nicht in
+`BEARBEITBAR`, wurde also nie besucht. Gemessen an den 17 Zeilen der Liste:
+**0× A, 0× B, 5× C, 12× D.** Nirgends stand eine Zahl dazu; im Protokoll
+standen nur die übrigen vier, immer wieder.
+
+Drei Reparaturen, alle an der bestehenden Logik:
+
+- **Der Name zählt wieder mit.** `Regeln.kategoriebegriffe` und
+  `Regeln.audiencebegriffe` sind zurück, gefüllt aus `settings.yaml` (bis zum
+  20.09.2026 standen sie in `categories.yaml`/`audiences.yaml`, mit denen sie
+  entfielen). **Die gepflegte Angabe geht weiterhin vor**: Die Listen
+  ergänzen eine fehlende Kategorie, sie überschreiben keine. Damit sind es
+  6× A, 4× B, 5× C, 2× D — und die sechs A-Gruppen verlangen `mittel` statt
+  `hoch + Strecke`.
+- **Eine Klasse ohne Schwelle ist eine, in der nicht gearbeitet wird.**
+  `zielgruppe.bearbeitbare_klassen` liest **dieselbe** Tabelle wie
+  `anspruch_aus_config` — zwei Listen könnten auseinanderlaufen, und dann
+  stünde in der Konfiguration eine Schwelle für eine Klasse, die der Lauf nie
+  besucht. In `settings.yaml` steht jetzt `mindestrelevanz.d: hoch`, also
+  bleibt auch D in der Runde, mit der **strengsten** Schwelle (belegter Bezug
+  **und** ausgeschriebene Strecke). Die Vorgabe **im Code** kennt D
+  weiterhin nicht — dieselbe Aufteilung wie bei `mitgliedschaft_pflicht`,
+  `regeln_zuerst` und `anlass_pflicht`. Die **Beitrittsanfrage** bleibt `A`
+  und `B` vorbehalten (`BEITRITT_WERT`): Die riskanteste Handlung des
+  Projekts wird hier nicht mitgeöffnet.
+- **Die übergangenen Gruppen werden gezählt.** `gruppen_ausserhalb` steht in
+  `fortschrittstext` neben „warten auf Mitgliedschaft" und „nach einem
+  Fehlschlag beiseitegelegt". Die stillste Auslassung des Projekts war nicht,
+  dass neun Gruppen fehlten, sondern dass niemand einen Anlass hatte, sie zu
+  vermissen.
+
+**Was schon richtig war und unverändert bleibt** — der Lauf sucht innerhalb
+einer Gruppe **alle** Beiträge ab (`beurteile_beitraege` urteilt über jeden,
+`waehle_gelegenheit` nimmt den besten *tauglichen*), kommentiert **nie**
+zweimal unter denselben Beitrag (`bisherige_post_urls`, nur Erfolge sperren),
+geht bei „kein Anlass" **sofort** zur nächsten Gruppe (Ruhezeit 2 Min) und
+wechselt die Kampagne erst, wenn sie nichts mehr hergibt — eine ruhende
+Gruppe hält ihren Platz (siehe „Eine volle Runde wechselt die Kampagne
+nicht").
+
+**Nicht behoben, weil es Daten sind und keine Regel:** „بطريقك" und
+„وصلني بطريقك بكل أوروبا" bleiben `C` — sie nennen ein Thema, aber kein Ziel,
+und „Reisen nach Thailand" trägt dieselben Wörter. Wer sie als A behandelt
+haben will, trägt `reise` bzw. `versand` am Datensatz ein; das ist eine
+Angabe, die bleibt, statt bei jedem Lauf neu geraten zu werden. Umgekehrt
+kostet der arabische Teilstringvergleich einen Fehlgriff: „الشامل"
+(vollständig) enthält „الشام" (Damaskus), also gilt „طريقك لالمانيا الشامل"
+als Gruppe mit genanntem Ziel. Das ist der Preis der arabischen Erkennung und
+steht seit jeher in `textnorm` — beheben lässt es sich nur am Datensatz.
+
+Festgehalten in `tests/test_alle_gruppen_der_kampagne.py`.
 
 ### Eine volle Runde wechselt die Kampagne nicht (21.09.2026)
 

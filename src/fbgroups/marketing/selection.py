@@ -26,13 +26,34 @@ from fbgroups.config import AppConfig
 from fbgroups.marketing.models import Campaign, CampaignGroup
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.marketing.tracking import CodeAllocator, tracking_url
-from fbgroups.models import Group
+from fbgroups.models import (
+    AKTIVITAET_LABEL,
+    AKTIVITAETSSTUFEN,
+    LISTENPRIORITAETEN,
+    Group,
+)
 
 # Wert, mit dem sich eine Einschraenkung auf der Kommandozeile aufheben laesst:
 # "--stadt alle" loescht die Staedteliste. Ohne ein solches Wort gaebe es keinen
 # Weg, eine einmal gesetzte Einschraenkung wieder loszuwerden - genau daran
 # scheiterte die erste Fassung.
 ALLE = "alle"
+
+
+def noten_sortiert(werte: frozenset[str]) -> list[str]:
+    """Die Noten in ihrer fachlichen Reihenfolge, nicht alphabetisch.
+
+    Alphabetisch stuende "A" vor "A+" vor "A++" - genau verkehrt herum, und
+    eine Regel, die man liest, soll von der besten Note nach unten lesen.
+    """
+    bekannt = [p for p in LISTENPRIORITAETEN if p in werte]
+    return bekannt + sorted(werte - set(bekannt))
+
+
+def stufen_sortiert(werte: frozenset[str]) -> list[str]:
+    """Die Aktivitaetsstufen von der staerksten zur schwaechsten."""
+    bekannt = [a for a in AKTIVITAETSSTUFEN if a in werte]
+    return [AKTIVITAET_LABEL.get(a, a) for a in bekannt] + sorted(werte - set(bekannt))
 
 
 @dataclass(frozen=True)
@@ -48,6 +69,12 @@ class Auswahl:
     cities: frozenset[str] = frozenset()
     categories: frozenset[str] = frozenset()
     statuses: frozenset[str] = frozenset()
+    # Die beiden von Hand gepflegten Einstufungen. ``prioritaeten`` traegt die
+    # Noten in Grossschreibung ("A++"), ``aktivitaet`` die Kennungen
+    # ("sehr_aktiv") - jeweils so, wie sie im Bestand stehen, damit der
+    # Vergleich keine Uebersetzung braucht.
+    prioritaeten: frozenset[str] = frozenset()
+    aktivitaet: frozenset[str] = frozenset()
     min_score: float | None = None
     include_unscored: bool = False
 
@@ -59,6 +86,8 @@ class Auswahl:
             or self.cities
             or self.categories
             or self.statuses
+            or self.prioritaeten
+            or self.aktivitaet
             or self.min_score is not None
         ) and self.include_unscored
 
@@ -76,6 +105,10 @@ class Auswahl:
             teile.append(f"Kategorie: {', '.join(sorted(self.categories))}")
         if self.statuses:
             teile.append(f"Status: {', '.join(sorted(self.statuses))}")
+        if self.prioritaeten:
+            teile.append(f"Priorität: {', '.join(noten_sortiert(self.prioritaeten))}")
+        if self.aktivitaet:
+            teile.append(f"Aktivität: {', '.join(stufen_sortiert(self.aktivitaet))}")
         if self.min_score is not None:
             teile.append(f"Score ab {self.min_score:g}")
         teile.append(
@@ -100,6 +133,16 @@ def auswahl_der_kampagne(campaign: Campaign) -> Auswahl:
         cities=frozenset(c.strip().lower() for c in campaign.target_cities if c.strip()),
         categories=frozenset(k.lower() for k in campaign.target_categories),
         statuses=frozenset(s.lower() for s in campaign.target_statuses),
+        # Die Note steht im Bestand gross ("A++"), die Stufe klein
+        # ("sehr_aktiv"). Beides wird hier auf die Schreibweise des Bestands
+        # gebracht, damit ``passt`` nur noch vergleicht - eine zweite
+        # Normalisierung dort waere eine zweite Regel.
+        prioritaeten=frozenset(
+            p.strip().upper() for p in campaign.target_prioritaeten if p.strip()
+        ),
+        aktivitaet=frozenset(
+            a.strip().lower() for a in campaign.target_aktivitaet if a.strip()
+        ),
         min_score=campaign.target_min_score,
         include_unscored=campaign.target_include_unscored,
     )
@@ -118,6 +161,17 @@ def passt(group: Group, auswahl: Auswahl) -> bool:
     if auswahl.cities and (group.city or "").lower() not in auswahl.cities:
         return False
     if auswahl.categories and (group.category or "").lower() not in auswahl.categories:
+        return False
+    # Eine Gruppe ohne Einstufung faellt heraus, sobald die Regel eine nennt.
+    # Das ist der Unterschied zu ``include_unscored``: Dort ist "kein Score"
+    # eine Aussage ueber unsere Datenlage, hier ist "keine Note" eine Aussage
+    # darueber, dass niemand die Gruppe angesehen hat - und wer "A++" waehlt,
+    # meint nicht "A++ und alles Unbeurteilte".
+    if auswahl.prioritaeten and (group.listenprioritaet or "").upper() not in (
+        auswahl.prioritaeten
+    ):
+        return False
+    if auswahl.aktivitaet and (group.aktivitaetsstufe or "").lower() not in auswahl.aktivitaet:
         return False
     return not (auswahl.statuses and group.status.value.lower() not in auswahl.statuses)
 

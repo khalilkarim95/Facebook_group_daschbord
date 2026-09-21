@@ -600,6 +600,9 @@ def fuehre_lauf_aus(
             gruppenlimit=grenzen.einstellungen(config)
             .fuer(grenzen.Aktion.KOMMENTAR)
             .je_gruppe_taeglich,
+            # Aus derselben Tabelle wie die Mindestrelevanz: Eine Klasse ohne
+            # Schwelle ist eine, in der nicht gearbeitet wird.
+            klassen=zielgruppe.bearbeitbare_klassen(config),
             kommentare_zuerst=kommentare_zuerst(config),
         )
 

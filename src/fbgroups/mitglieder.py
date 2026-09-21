@@ -50,6 +50,7 @@ from pathlib import Path
 
 from fbgroups.config import AppConfig
 from fbgroups.models import (
+    LISTENPRIORITAETEN,
     ActivitySource,
     Group,
     MemberCountSource,
@@ -99,6 +100,21 @@ KEINE_KATEGORIE = frozenset({"", "allgemein", "unbekannt", "oeffentlich", "öffe
 #: wuerde bewertet und stuende ueber einem Beitrag. Dieselbe Falle wie ein
 #: Beitragstitel, der frueher als Gruppenname im Export landete.
 KEIN_NAME = frozenset({"الإشعارات", "benachrichtigungen", "notifications", "-", "?"})
+
+#: Anzeigetext der Spalte ``activity`` -> Kennung im Bestand. Geprueft wird in
+#: dieser Reihenfolge, und die ist der halbe Inhalt der Tabelle: "Sehr Aktiv"
+#: enthaelt "Aktiv", und "نشط جدا" enthaelt "نشط". Stuende die schwaechere
+#: Stufe zuerst, bekaeme jede sehr aktive Gruppe die Stufe "aktiv" - und
+#: gemerkt haette man es an einem Filter, der die besten Gruppen nicht findet.
+#:
+#: Arabisch wird als Teilstring verglichen (dieselbe Regel wie in
+#: ``textnorm``): Artikel und Praepositionen haengen dort am Wort, und
+#: "نشط جداً" traegt ein Tanween, das nicht in jeder Zeile steht.
+AKTIVITAETSSTUFEN_TEXT: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("sehr_aktiv", ("sehr aktiv", "very active", "نشط جدا")),
+    ("aktiv", ("aktiv", "active", "نشط")),
+    ("normal", ("normal", "عادي")),
+)
 
 _MITGLIEDER_RE = re.compile(r"(\d[\d.,\s ]*)\s*Mitglied", re.IGNORECASE)
 
@@ -166,6 +182,12 @@ class Einlesebericht:
     unbekannte_kategorien: list[str] = field(default_factory=list)
     #: Zeilen, deren ``city`` verworfen wurde, weil sie ein Reiseziel nennt.
     verworfene_staedte: list[str] = field(default_factory=list)
+    #: Noten, die ``LISTENPRIORITAETEN`` nicht kennt. Gemeldet aus demselben
+    #: Grund wie eine unbekannte Kategorie: Ein Tippfehler in der Quelltabelle
+    #: faellt sonst erst auf, wenn ein Kampagnenfilter die Gruppe nie trifft.
+    unbekannte_noten: list[str] = field(default_factory=list)
+    #: Aktivitaetstexte, aus denen weder Seitenangaben noch eine Stufe wurden.
+    unbekannte_aktivitaet: list[str] = field(default_factory=list)
 
 
 def lies_seitenangaben(text: str | None) -> Seitenangaben:
@@ -207,6 +229,44 @@ def lies_seitenangaben(text: str | None) -> Seitenangaben:
     return Seitenangaben(
         privacy_hint=sichtbarkeit, member_count=mitglieder, posts_per_day=beitraege
     )
+
+
+def stufe_aus_aktivitaet(rohwert: str | None) -> str | None:
+    """Der Aktivitaetstext der Liste -> Kennung. ``None``, wo nichts steht.
+
+    Die Spalte traegt zweierlei: manchmal den Kopf der Gruppenseite
+    ("Öffentlich · 5.366 Mitglieder · 50+ Beiträge pro Tag"), manchmal die
+    Einstufung eines Menschen ("Sehr Aktiv (نشط جداً)"). Beides steht
+    nebeneinander in derselben Datei; ``lies_seitenangaben`` nimmt das erste,
+    diese Funktion das zweite. Keines von beiden erfindet das andere: Aus
+    "sehr aktiv" wird **keine** Beitragszahl, und aus "50+ Beiträge pro Tag"
+    wird hier keine Stufe - das waere eine Umrechnung zwischen einem
+    gemessenen Wert und einem Eindruck.
+    """
+    roh = (rohwert or "").strip().lower()
+    if not roh:
+        return None
+    for kennung, begriffe in AKTIVITAETSSTUFEN_TEXT:
+        if any(begriff in roh for begriff in begriffe):
+            return kennung
+    return None
+
+
+def note_aus_rating(rohwert: str | None) -> tuple[str | None, str]:
+    """Die eigene Note der Liste -> "A++".."B". Liefert ``(note, unbekannt)``.
+
+    Gross- und Kleinschreibung und umgebende Leerzeichen spielen keine Rolle,
+    alles andere schon: Eine Note, die ``LISTENPRIORITAETEN`` nicht kennt,
+    wird **gemeldet und nicht geraten**. Aus "A-" ein "A" zu machen hiesse,
+    ein Urteil zu erfinden, das niemand gefaellt hat - dieselbe
+    Zurueckhaltung wie bei der Kategorie.
+    """
+    roh = (rohwert or "").strip().upper()
+    if not roh:
+        return None, ""
+    if roh in LISTENPRIORITAETEN:
+        return roh, ""
+    return None, roh
 
 
 def faktor_aus_posts_pro_tag(posts_per_day: float, config: AppConfig) -> float:
@@ -255,14 +315,18 @@ def _hinweis(zeile: dict[str, str]) -> str:
     Ausdruecklich benannt und nicht als Wert getarnt: "Reiseziel laut Liste:
     Damaskus" ist eine Auskunft, ein "Damaskus" in der Stadtspalte waere eine
     Behauptung ueber den Sitz der Gruppe.
+
+    Die eigene Note stand hier bis zum 21.09.2026 als "Eigene Note: A++". Sie
+    hat seither ein Feld (``Group.listenprioritaet``) und gehoert nicht mehr
+    hierher: Zweimal gespeichert waeren es zwei Wahrheiten ueber dieselbe
+    Einstufung, und die Fassung im Freitext waere die, nach der niemand
+    filtern kann.
     """
     teile = []
     if (ziel := (zeile.get("city") or "").strip()):
         teile.append(f"Reiseziel laut Liste: {ziel}")
     if (land := (zeile.get("country") or "").strip()):
         teile.append(f"Raum: {land}")
-    if (note := (zeile.get("rating") or "").strip()):
-        teile.append(f"Eigene Note: {note}")
     if (frei := (zeile.get("notes") or "").strip()):
         teile.append(frei)
     return " · ".join(teile)
@@ -298,6 +362,16 @@ def zeile_zu_gruppe(
         bericht.verworfene_staedte.append(stadt)
 
     angaben = lies_seitenangaben(zeile.get("activity"))
+    stufe = stufe_aus_aktivitaet(zeile.get("activity"))
+    if stufe is None and angaben.leer and (roh_aktiv := (zeile.get("activity") or "").strip()):
+        # Gemeldet wird nur, was **weder** Seitenangaben **noch** Stufe ergab.
+        # Der Kopf einer Gruppenseite ist keine unbekannte Stufe, und ihn hier
+        # zu melden waere Laerm ueber jede zweite Zeile der Datei.
+        bericht.unbekannte_aktivitaet.append(roh_aktiv)
+
+    note, unbekannte_note = note_aus_rating(zeile.get("rating"))
+    if unbekannte_note:
+        bericht.unbekannte_noten.append(unbekannte_note)
 
     group = Group(
         group_id=parsed.group_id,
@@ -312,6 +386,13 @@ def zeile_zu_gruppe(
             MemberCountSource.FACEBOOK if angaben.member_count is not None else None
         ),
         posts_per_day=angaben.posts_per_day,
+        # Die beiden Urteile des Menschen, der die Liste gefuehrt hat. Sie
+        # werden uebernommen, wo sie dastehen, und bleiben sonst leer - und
+        # sie greifen in nichts ein: Der Score rechnet weiter mit den
+        # gemessenen Zahlen, die Zielprioritaet weiter mit Kategorie, Stadt
+        # und Zielgruppe. Was sie koennen, ist eine Kampagne auszuwaehlen.
+        listenprioritaet=note,
+        aktivitaetsstufe=stufe,
         category=kategorie,
         # ``country`` ist das eine Feld der Quelltabelle, das genau das
         # bedeutet, was es heisst: der Raum, in dem die Gruppe arbeitet
@@ -385,9 +466,12 @@ __all__ = [
     "Einlesebericht",
     "Seitenangaben",
     "Zeilenfehler",
+    "AKTIVITAETSSTUFEN_TEXT",
     "faktor_aus_posts_pro_tag",
     "kategorie_aus",
     "lies_mitgliederdatei",
     "lies_seitenangaben",
+    "note_aus_rating",
+    "stufe_aus_aktivitaet",
     "zeile_zu_gruppe",
 ]

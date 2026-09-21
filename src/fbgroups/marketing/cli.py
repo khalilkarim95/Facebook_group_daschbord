@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import atexit
 import csv
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -73,7 +74,7 @@ from fbgroups.marketing.tracking import (
     slug,
     tracking_url,
 )
-from fbgroups.models import Group
+from fbgroups.models import AKTIVITAETSSTUFEN, LISTENPRIORITAETEN, Group
 from fbgroups.scoring import sort_by_rank
 from fbgroups.storage import SqliteStore
 
@@ -143,6 +144,14 @@ def campaign_new(
     audience: list[str] = typer.Option(None, "--zielgruppe", help="Mehrfach moeglich."),
     city: list[str] = typer.Option(None, "--stadt", help="Mehrfach moeglich."),
     language: str = typer.Option("", "--sprache", help="de | ar | translit"),
+    prioritaet: list[str] = typer.Option(
+        None, "--prioritaet", help="Note aus der Liste: A++ | A+ | A | B+ | B. Mehrfach moeglich."
+    ),
+    aktivitaet: list[str] = typer.Option(
+        None,
+        "--aktivitaet",
+        help="sehr_aktiv | aktiv | normal. Mehrfach moeglich.",
+    ),
     landing_page: str = typer.Option("", "--landingpage"),
     template: str = typer.Option("", "--vorlage", help="Textvorlage zum Selberposten."),
     template_file: Path = typer.Option(None, "--vorlage-datei", help="Vorlage aus einer Datei."),
@@ -169,6 +178,14 @@ def campaign_new(
             audiences=list(audience or []),
             cities=list(city or []),
             language=language,
+            # Die Auswahlregel beginnt als Abbild der Beschreibung - dieselbe
+            # Vereinbarung wie im Formular. Note und Aktivitaetsstufe gibt es
+            # nur als Regel: Sie beschreiben keine Zielgruppe, sondern eine
+            # Eigenschaft der Gruppen, die einen Code bekommen sollen.
+            target_audiences=list(audience or []),
+            target_cities=list(city or []),
+            target_prioritaeten=_noten(prioritaet),
+            target_aktivitaet=_stufen(aktivitaet),
             message_template=template,
             landing_page=landing_page,
             starts_on=_datum(starts_on),
@@ -392,19 +409,58 @@ def campaign_status(
     console.print(f"[green]{campaign_id}:[/green] Status ist jetzt {status}.")
 
 
-def _liste_setzen(vorhanden: list[str], neu: list[str] | None) -> list[str] | None:
+def _liste_setzen(
+    vorhanden: list[str],
+    neu: list[str] | None,
+    normieren: Callable[[str], str] = str.lower,
+) -> list[str] | None:
     """Wertet eine wiederholbare Option aus. ``None`` heisst "nicht angegeben".
 
     Der Wert ``alle`` loescht die Einschraenkung. Ohne so ein Wort gaebe es
     keinen Weg zurueck: Eine leere Liste ist von "nicht angegeben" nicht zu
     unterscheiden, und genau daran scheiterte bisher jeder Versuch, eine
     Kampagne wieder zu weiten.
+
+    ``normieren`` ist fuer den einen Wert da, der nicht kleingeschrieben
+    gehoert: Die Note steht im Bestand als "A++". Gespeichert in
+    Kleinschreibung traefe sie zwar trotzdem (``auswahl_der_kampagne``
+    vergleicht ohne Ruecksicht darauf), aber in jeder Anzeige der Regel
+    stuende dann "a++" - eine Schreibweise, die es nirgends sonst gibt.
     """
     if not neu:
         return None
     if any(wert.strip().lower() == ALLE for wert in neu):
         return []
-    return [wert.strip().lower() for wert in neu if wert.strip()] or vorhanden
+    return [normieren(wert.strip()) for wert in neu if wert.strip()] or vorhanden
+
+
+def _noten(werte: list[str] | None) -> list[str]:
+    """Noten in der Schreibweise des Bestands - und nur bekannte.
+
+    Eine unbekannte Note waere eine Regel, die nie eine Gruppe trifft, und
+    das faellt erst auf, wenn die Kampagne leer bleibt. Deshalb wird sie
+    gemeldet und abgewiesen, statt still in der Datenbank zu landen.
+    """
+    sauber = [w.strip().upper() for w in (werte or []) if w.strip()]
+    if unbekannt := [w for w in sauber if w not in LISTENPRIORITAETEN and w.lower() != ALLE]:
+        console.print(
+            f"[red]Unbekannte Prioritaet: {', '.join(unbekannt)}[/red] - "
+            f"moeglich sind {', '.join(LISTENPRIORITAETEN)}."
+        )
+        raise typer.Exit(code=2)
+    return sauber
+
+
+def _stufen(werte: list[str] | None) -> list[str]:
+    """Aktivitaetsstufen als Kennung - und nur bekannte."""
+    sauber = [w.strip().lower().replace(" ", "_") for w in (werte or []) if w.strip()]
+    if unbekannt := [w for w in sauber if w not in AKTIVITAETSSTUFEN and w != ALLE]:
+        console.print(
+            f"[red]Unbekannte Aktivitaet: {', '.join(unbekannt)}[/red] - "
+            f"moeglich sind {', '.join(AKTIVITAETSSTUFEN)}."
+        )
+        raise typer.Exit(code=2)
+    return sauber
 
 
 def _regel_anzeigen(campaign: Campaign, config: AppConfig, treffer: int, gesamt: int) -> None:
@@ -435,6 +491,16 @@ def campaign_target(
     ),
     status: list[str] = typer.Option(
         None, "--status", help=f"Datensatzstatus. '{ALLE}' hebt die Einschraenkung auf."
+    ),
+    prioritaet: list[str] = typer.Option(
+        None,
+        "--prioritaet",
+        help=f"A++ | A+ | A | B+ | B. '{ALLE}' hebt die Einschraenkung auf.",
+    ),
+    aktivitaet: list[str] = typer.Option(
+        None,
+        "--aktivitaet",
+        help=f"sehr_aktiv | aktiv | normal. '{ALLE}' hebt die Einschraenkung auf.",
     ),
     min_score: float = typer.Option(None, "--min-score", help="Mindestscore (-1 hebt ihn auf)."),
     unbewertete: bool = typer.Option(
@@ -473,6 +539,8 @@ def campaign_target(
             campaign.target_cities = []
             campaign.target_categories = []
             campaign.target_statuses = []
+            campaign.target_prioritaeten = []
+            campaign.target_aktivitaet = []
             campaign.target_min_score = None
             campaign.target_include_unscored = True
             geaendert.append("alle Einschraenkungen aufgehoben")
@@ -490,6 +558,25 @@ def campaign_target(
                 "Kategorie",
             ),
             ("target_statuses", _liste_setzen(campaign.target_statuses, status), "Status"),
+            (
+                "target_prioritaeten",
+                # Geprueft wird vor dem Setzen: ``_noten`` weist eine
+                # unbekannte Note ab, ``_liste_setzen`` entscheidet danach
+                # nur noch zwischen "unveraendert", "aufheben" und "setzen".
+                _liste_setzen(
+                    campaign.target_prioritaeten,
+                    _noten(prioritaet) if prioritaet else None,
+                    normieren=str.upper,
+                ),
+                "Prioritaet",
+            ),
+            (
+                "target_aktivitaet",
+                _liste_setzen(
+                    campaign.target_aktivitaet, _stufen(aktivitaet) if aktivitaet else None
+                ),
+                "Aktivitaet",
+            ),
         ):
             if wert is not None:
                 setattr(campaign, feld, wert)
@@ -1599,7 +1686,7 @@ def campaign_automatik(
     Aufruf dort aufgenommen, wo er stand - der Fortschritt steht in den
     Fassungen selbst und nicht in einem Zaehler, der veralten koennte.
     """
-    from fbgroups.marketing import automatik, grenzen, lauf
+    from fbgroups.marketing import automatik, grenzen, lauf, zielgruppe
     from fbgroups.marketing.models import CampaignStatus
 
     config = _config()
@@ -1757,6 +1844,7 @@ def campaign_automatik(
                 int(offen["lauf_id"]),
                 gruppen,
                 aktionen=lagen,
+                klassen=zielgruppe.bearbeitbare_klassen(config),
             )
         console.print(Panel(lauf.fortschrittstext(fortschritt), title="Automatik"))
 
@@ -1878,6 +1966,7 @@ def campaign_automatik(
                 lauf_id,
                 gruppen,
                 aktionen=lagen,
+                klassen=zielgruppe.bearbeitbare_klassen(config),
             )
             schritt = lauf.naechster_schritt(fortschritt)
         console.print(Panel(lauf.fortschrittstext(fortschritt), title="Automatik (dry-run)"))

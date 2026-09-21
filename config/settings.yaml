@@ -16,7 +16,16 @@ marketing:
   # Die Umgebungsvariable APP_BASE_URL hat Vorrang - so laeuft dieselbe
   # Konfiguration lokal und auf der echten Domain, ohne die gespeicherten
   # Codes anzufassen. Der Code steht fest, nur sein Vorspann wechselt.
-  app_base_url: https://b-tarikak.de/
+  # Seit dem 21.09.2026 die eigene Kurzdomain: Sie nimmt den Tracking-Link
+  # entgegen (``/r/{code}``), waehrend ``browser_url`` das Ziel dahinter ist.
+  # Beides auf derselben Domain hiesse, dass die Landingpage jeden Klick
+  # beantworten muesste, bevor gezaehlt wird.
+  #
+  # **Vergebene Codes aendern sich dadurch nicht** - nur ihr Vorspann. Die
+  # bereits gespeicherten Adressen tragen die alte Domain, bis einmal
+  # ``fbgroups campaign refresh-urls`` gelaufen ist; sie zeigen sonst auf
+  # einen Dienst, der dort nicht mehr antwortet.
+  app_base_url: https://go.b-tarikak.de
 
   tracking:
     prefix: FB        # Kanal, erster Teil des Codes: FB-SYR-BER-001
@@ -27,7 +36,7 @@ marketing:
   #
   # Zwei Ziele stehen zur Wahl, und der Unterschied ist keine Kleinigkeit:
   #
-  #   landing  ->  b-tarikak.de/?ref=CODE
+  #   landing  ->  b-tarikak.de/home?ref=CODE
   #                Der Code steht in der Adresse, die Web-App liest ihn und
   #                traegt ihn durch die Registrierung. Ein Play-Store-Install
   #                sieht diese Adresse aber nie - wer die App dort holt, ist
@@ -81,7 +90,7 @@ marketing:
   # Eigener Eintrag und nicht ``fallback_url``: Der Browser ist ein
   # gleichrangiges Ziel, kein Notnagel. Steht an der Kampagne eine eigene
   # ``landing_page``, gilt sie vor diesem Wert.
-  browser_url: https://b-tarikak.de/
+  browser_url: https://b-tarikak.de/home
 
   store:
     # Die echte Package-ID der App (b-tarikak-frontend/android/app/build.gradle.kts).
@@ -188,6 +197,37 @@ marketing:
     # Kategorie, die an keiner Gruppe steht, meldet "config-check".
     kategorien: [versand, reise]
 
+    # Die Woerter, an denen dasselbe Thema **im Namen** erkannt wird.
+    #
+    # Sie standen bis zum 20.09.2026 in categories.yaml und sind am
+    # 21.09.2026 zurueckgekommen. Der Anlass ist ein Lauf, der in vier
+    # Gruppen im Kreis ging und in jeder Runde meldete:
+    #
+    #     Bezug zu schwach fuer diese Gruppe (hoch, verlangt hoch + Strecke)
+    #
+    # "verlangt hoch + Strecke" ist die Anforderung der Klasse C - und dass
+    # eine Gruppe namens "شركة شحن دولي سوريا" dort landete, lag allein an
+    # einer leeren Spalte: Die Mitgliederliste traegt in `category` fast
+    # durchgehend "Unbekannt", also ist `Group.category` leer, also fehlte
+    # das Thema, also war Klasse A unerreichbar. Neun von dreizehn Gruppen
+    # fielen aus demselben Grund sogar auf D und wurden nie besucht.
+    #
+    # DIE GEPFLEGTE KATEGORIE GEHT WEITERHIN VOR. Diese Liste greift, wo
+    # nichts gepflegt ist - sie ergaenzt eine fehlende Angabe und
+    # ueberschreibt keine.
+    #
+    # Sie steht bewusst eng: Nur Woerter, die das Thema des Hauses nennen,
+    # nicht die, mit denen ein einzelner Beitrag darueber spricht. Der
+    # Beitragswortschatz steht in marketing/inhalt.py und hat eine andere
+    # Aufgabe - er beurteilt Saetze, diese Liste beurteilt Titel.
+    kategoriebegriffe: [Versand, Mitnahme, Transport, Reise, Reisen, Kurier,
+                        Fracht, Logistik, Sendung, Paket,
+                        شحن, ارسال, إرسال, توصيل, وصلني, نقل, بريد, طرود, طرد,
+                        امانات, أمانات, امانة, أمانة, كرتونة, شنطة, حقيبة,
+                        مشاوير, مشوار, سفر, مسافر, مسافرين, مسافره, musafer,
+                        نازل, نازلة, رايح, راجع, عوده, عودة, رحلة, رحلات,
+                        بطريقك, طريقك, سرفيس, باص, بولمان, تكسي, تاكسي]
+
     # Wohin der Weg geht. Ohne eines dieser Worte ist "Reisegruppe" keine
     # Gruppe fuer uns - "Reisen nach Thailand" traegt dieselbe Kategorie und
     # meint etwas anderes. Arabisch wird als Teilstring verglichen (Artikel
@@ -290,6 +330,20 @@ marketing:
     # konkreten Reise- oder Versandbedarf nennt.
     audiences: [syrians, arabs]
 
+    # Ihre Woerter, aus demselben Grund wie bei `kategoriebegriffe`: Eine
+    # Gruppe heisst "السوريون في ألمانيا" und traegt im Bestand trotzdem
+    # keinen Tag, solange niemand einen eingetragen hat. Ohne diese Liste
+    # fiel sie nach D - also aus der Bearbeitung heraus, obwohl ein Mensch
+    # sie der Kampagne ausdruecklich zugeordnet hatte.
+    #
+    # Der Deutschlandbezug bleibt Bedingung (Stadt am Datensatz oder ein Wort
+    # aus `herkunft`): Eine Gruppe ueber Syrien, die Deutschland nie nennt,
+    # ist keine Gemeinschaft HIER.
+    audiencebegriffe: [Syrer, Syrerinnen, Syrien, Araber, arabisch, arabische,
+                       سوري, سوريين, سوريون, السوريين, السوريون, سورية,
+                       عرب, العرب, عربي, العربية, الجالية, جالية,
+                       اللاجئين, لاجئين, مجتمع]
+
     # Welche Relevanz ein einzelner Beitrag mindestens haben muss, damit in
     # einer Gruppe dieser Klasse ueberhaupt geantwortet wird. Die Stufen sind
     # die aus ``marketing/inhalt.Relevanz``.
@@ -300,11 +354,31 @@ marketing:
     #    moegliche; nur ein belegter Bezug ist ein Anlass.
     # C: "hoch" UND die genannte Strecke - der klare, konkrete Einzelfall.
     # D: gar nicht (steht nicht in der Liste).
+    #
+    # D steht seit dem 21.09.2026 dabei, und das ist eine Entscheidung und
+    # keine Kleinigkeit: Vorher wurde eine Gruppe der Klasse D ueberhaupt
+    # nicht besucht. Im Betrieb waren das neun von dreizehn zugeordneten
+    # Gruppen - der Lauf kreiste stundenlang durch die uebrigen vier, und
+    # nirgends stand, wo die anderen geblieben sind. Zugeordnet hat sie ein
+    # Mensch; "kein erkennbarer Bezug" ist dagegen ein Schluss aus einem
+    # Namen.
+    #
+    # Die Schwelle dort ist die strengste, die es gibt - belegter Bezug UND
+    # die ausgeschriebene Strecke: Es wird also nur der klare Einzelfall
+    # beantwortet, und der Rest der Gruppe bleibt unberuehrt. Die
+    # Beitrittsanfrage geht weiterhin NUR an A und B (BEITRITT_WERT im Code):
+    # Die riskanteste Handlung des Projekts bleibt den Gruppen des
+    # Zielmarkts vorbehalten.
+    #
+    # Wer es wieder abstellen will, loescht die Zeile "d:" - ohne sie gilt
+    # die Vorgabe des Codes, und die kennt D nicht.
     mindestrelevanz:
       a: mittel
       b: hoch
       c: hoch
-    # Verlangt Klasse C zusaetzlich, dass Beitrag Herkunft UND Ziel nennt?
+      d: hoch
+    # Verlangt Klasse C (und D) zusaetzlich, dass ein Beitrag Herkunft UND
+    # Ziel nennt?
     c_verlangt_strecke: true
 
 # --- Der Waechter (15.09.2026) ------------------------------------------

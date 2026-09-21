@@ -76,7 +76,7 @@ from fbgroups.marketing.rewards import bewerte_benutzer, load_reward_rules
 from fbgroups.marketing.selection import auswahl_der_kampagne, baue_plan, synchronisiere
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.marketing.tracking import app_base_url, slug
-from fbgroups.models import RecordStatus
+from fbgroups.models import AKTIVITAETSSTUFEN, LISTENPRIORITAETEN, RecordStatus
 from fbgroups.storage import SqliteStore
 
 # Optionale Abhaengigkeit, aber auf Modulebene importiert: Wegen
@@ -139,6 +139,13 @@ class KampagneNeu(BaseModel):
     description: str = Field(default="", max_length=500)
     audiences: list[str] = Field(default_factory=list, max_length=50)
     cities: list[str] = Field(default_factory=list, max_length=50)
+    # Die beiden Filter der Mitgliederliste. Sie gehoeren zur **Regel** und
+    # nicht zur Beschreibung: "A++" sagt nichts darueber, wen die Kampagne
+    # bewirbt, sondern welche Gruppen einen Code bekommen. Deshalb landen sie
+    # nur in den ``target_*``-Feldern - anders als Zielgruppe und Stadt, die
+    # beides sind.
+    prioritaeten: list[str] = Field(default_factory=list, max_length=10)
+    aktivitaet: list[str] = Field(default_factory=list, max_length=10)
     language: str = Field(default="", max_length=16)
     message_template: str = Field(default="", max_length=2000)
     landing_page: str = Field(default="", max_length=300)
@@ -405,6 +412,8 @@ class AuswahlMeldung(BaseModel):
     cities: list[str] | None = Field(default=None, max_length=100)
     categories: list[str] | None = Field(default=None, max_length=100)
     statuses: list[str] | None = Field(default=None, max_length=20)
+    prioritaeten: list[str] | None = Field(default=None, max_length=10)
+    aktivitaet: list[str] | None = Field(default=None, max_length=10)
     min_score: float | None = Field(default=None, ge=-1, le=100)
     include_unscored: bool | None = None
     auto_assign: bool | None = None
@@ -1178,7 +1187,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         ``fbgroups campaign automatik`` auf dem Rechner, an dem der Browser
         steht.
         """
-        from fbgroups.marketing import automatik, grenzen, lauf, qualifikation
+        from fbgroups.marketing import automatik, grenzen, lauf, qualifikation, zielgruppe
 
         with _store() as store:
             offen = store.offener_lauf()
@@ -1202,6 +1211,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 qualifikation_pflicht=qualifikation.pflicht(cfg),
                 kommentare_zuerst=automatik.kommentare_zuerst(cfg),
                 aktionen=lagen,
+                klassen=zielgruppe.bearbeitbare_klassen(cfg),
             )
 
         aktuell = fortschritt.naechste_kampagne
@@ -1397,6 +1407,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 gruppenlimit=grenzen.einstellungen(cfg)
                 .fuer(grenzen.Aktion.KOMMENTAR)
                 .je_gruppe_taeglich,
+                klassen=zielgruppe.bearbeitbare_klassen(cfg),
             )
             schritt = lauf.naechster_schritt(fortschritt)
 
@@ -2655,6 +2666,8 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     landing_page=meldung.landing_page,
                     target_audiences=list(meldung.audiences),
                     target_cities=list(meldung.cities),
+                    target_prioritaeten=[p.strip().upper() for p in meldung.prioritaeten],
+                    target_aktivitaet=[a.strip().lower() for a in meldung.aktivitaet],
                 )
             )
             store.audit("kampagne_angelegt", kennung, meldung.name)
@@ -2988,10 +3001,24 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             k for k in (meldung.categories or []) if k.strip().lower() not in bekannte_kategorien
         ]
         unbekannt += [s for s in (meldung.statuses or []) if s not in zustaende]
+        # Note und Aktivitaetsstufe werden gegen die **Aufzaehlung** geprueft
+        # und nicht gegen den Bestand: Sie sind eine feste Liste, und eine
+        # Kampagne darf auf "A++" filtern, auch wenn heute noch keine Gruppe
+        # so eingestuft ist - morgen kommt die Liste mit einer.
+        unbekannt += [
+            p for p in (meldung.prioritaeten or []) if p.strip().upper() not in LISTENPRIORITAETEN
+        ]
+        unbekannt += [
+            a for a in (meldung.aktivitaet or []) if a.strip().lower() not in AKTIVITAETSSTUFEN
+        ]
         if unbekannt:
             raise HTTPException(
                 status_code=422,
-                detail=f"Im Bestand nicht vorhanden: {', '.join(unbekannt)}",
+                # Zwei Gruende, eine Meldung: Zielgruppe, Stadt und
+                # Kategorie werden gegen den Bestand geprueft, Note und
+                # Stufe gegen ihre Aufzaehlung. "Im Bestand nicht vorhanden"
+                # waere fuer eine erfundene Note schlicht falsch.
+                detail=f"Unbekannt oder im Bestand nicht vorhanden: {', '.join(unbekannt)}",
             )
 
         with _store() as store:
@@ -3009,6 +3036,10 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 campaign.target_categories = list(meldung.categories)
             if meldung.statuses is not None:
                 campaign.target_statuses = list(meldung.statuses)
+            if meldung.prioritaeten is not None:
+                campaign.target_prioritaeten = [p.strip().upper() for p in meldung.prioritaeten]
+            if meldung.aktivitaet is not None:
+                campaign.target_aktivitaet = [a.strip().lower() for a in meldung.aktivitaet]
             if meldung.min_score is not None:
                 campaign.target_min_score = None if meldung.min_score < 0 else meldung.min_score
             if meldung.include_unscored is not None:
@@ -3047,6 +3078,8 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     "cities": campaign.target_cities,
                     "categories": campaign.target_categories,
                     "statuses": campaign.target_statuses,
+                    "prioritaeten": campaign.target_prioritaeten,
+                    "aktivitaet": campaign.target_aktivitaet,
                     "min_score": campaign.target_min_score,
                     "include_unscored": campaign.target_include_unscored,
                     "auto_assign": campaign.auto_assign,

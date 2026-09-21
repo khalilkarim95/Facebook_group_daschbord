@@ -31,6 +31,7 @@ from fbgroups.config import AppConfig, load_config
 from fbgroups.marketing.cli import campaign_app, marketing_app
 from fbgroups.marketing.tracking import app_base_url
 from fbgroups.mitglieder import lies_mitgliederdatei
+from fbgroups.models import AKTIVITAETSSTUFEN, LISTENPRIORITAETEN
 from fbgroups.scoring import score_all
 from fbgroups.storage import SqliteStore
 
@@ -112,6 +113,16 @@ def import_mitglieder_command(
     tabelle.add_row("mit Mitgliederzahl", str(sum(1 for g in gruppen if g.member_count)))
     tabelle.add_row("mit Aktivitaet", str(sum(1 for g in gruppen if g.activity_factor is not None)))
     tabelle.add_row("mit Kategorie", str(sum(1 for g in gruppen if g.category)))
+    # Die beiden Einstufungen der Liste. Sie stehen hier, weil sie ab jetzt
+    # eine Kampagne auswaehlen: Eine Datei, aus der nur 3 von 18 Zeilen eine
+    # Note mitbringen, ergibt einen Filter, der 15 Gruppen nicht findet - und
+    # das soll man beim Einlesen sehen und nicht beim Zuordnen.
+    tabelle.add_row(
+        "mit Prioritaet", str(sum(1 for g in gruppen if g.listenprioritaet))
+    )
+    tabelle.add_row(
+        "mit Aktivitaetsstufe", str(sum(1 for g in gruppen if g.aktivitaetsstufe))
+    )
     tabelle.add_row("bewertet", str(sum(1 for g in gruppen if g.score is not None)))
     console.print(tabelle)
 
@@ -129,6 +140,19 @@ def import_mitglieder_command(
             f"[yellow]Unbekannte Kategorien:[/yellow] "
             f"{', '.join(sorted(set(bericht.unbekannte_kategorien)))}. Sie wurden "
             f"uebergangen - ergaenzen in mitglieder.KATEGORIEN."
+        )
+    if bericht.unbekannte_noten:
+        console.print(
+            f"[yellow]Unbekannte Prioritaet:[/yellow] "
+            f"{', '.join(sorted(set(bericht.unbekannte_noten)))}. Moeglich sind "
+            f"{', '.join(LISTENPRIORITAETEN)} - die Zeile bleibt ohne Note, "
+            f"geraten wird nichts."
+        )
+    if bericht.unbekannte_aktivitaet:
+        console.print(
+            f"[dim]Spalte 'activity' ohne verwertbare Angabe "
+            f"({len(bericht.unbekannte_aktivitaet)}x): weder Seitenkopf noch eine der "
+            f"Stufen {', '.join(AKTIVITAETSSTUFEN)}.[/dim]"
         )
     if bericht.verworfene_staedte:
         console.print(
@@ -443,6 +467,7 @@ def config_check_command() -> None:
             "nicht gegengeprueft.[/dim]"
         )
     if block and not unbekannte_kat and not unbekannte_aud:
+        zielregeln_vorab = zielgruppe.regeln_aus_config(config)
         anspruch = zielgruppe.anspruch_aus_config(config)
         stufen = ", ".join(
             f"{klasse.value.upper()} ab {stufe.value}"
@@ -454,10 +479,49 @@ def config_check_command() -> None:
             f"{', '.join(sorted(kategorien))} + Ziel, B = {', '.join(sorted(audiences))} "
             f"+ Deutschland."
         )
+        klassen = zielgruppe.bearbeitbare_klassen(config)
         console.print(
             f"[dim]Mindestrelevanz je Klasse: {stufen}. "
-            f"In D wird nicht geantwortet.[/dim]"
+            + (
+                "In D wird nicht geantwortet."
+                if zielgruppe.Zielprioritaet.D not in klassen
+                else "D steht dabei - auch Gruppen ohne erkennbaren Bezug "
+                "werden besucht, mit der strengsten Schwelle."
+            )
+            + "[/dim]"
         )
+
+        # --- Die Woerter, an denen Thema und Zielgruppe im Namen haengen --
+        #
+        # Gezaehlt und nicht nur genannt, und zwar aus dem teuersten Anlass
+        # des Projekts (21.09.2026): Ohne ``kategoriebegriffe`` erreicht eine
+        # Gruppe die Klasse A nur mit **gepflegter** Kategorie - und die
+        # Mitgliederliste traegt in ``category`` fast durchgehend
+        # "Unbekannt". Im Betrieb war damit keine einzige Gruppe mehr A,
+        # jede verlangte "hoch + Strecke", und neun von dreizehn fielen als
+        # D ganz aus der Runde. Eine leere Liste sieht dabei vollkommen
+        # richtig aus - sie meldet nichts, sie liefert nur nie ein Thema.
+        leere_listen = [
+            name
+            for name, liste in (
+                ("kategoriebegriffe", zielregeln_vorab.kategoriebegriffe),
+                ("audiencebegriffe", zielregeln_vorab.audiencebegriffe),
+            )
+            if not liste
+        ]
+        if leere_listen:
+            console.print(
+                f"[yellow]Warnung: marketing.zielprioritaet."
+                f"{' und .'.join(leere_listen)} ist leer. Dann zaehlt nur die "
+                f"gepflegte Kategorie bzw. der gepflegte Tag - eine Gruppe ohne "
+                f"beides faellt aus dem Zielmarkt heraus.[/yellow]"
+            )
+        else:
+            console.print(
+                f"[dim]Im Namen erkannt: {len(zielregeln_vorab.kategoriebegriffe)} "
+                f"Themenwoerter, {len(zielregeln_vorab.audiencebegriffe)} "
+                f"Zielgruppenwoerter. Die gepflegte Angabe geht ihnen vor.[/dim]"
+            )
 
         # --- Der geografische Vorrang (14.09.2026) ------------------------
         #

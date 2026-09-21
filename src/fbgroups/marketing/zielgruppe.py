@@ -202,9 +202,28 @@ class Regeln:
     #: Strecke, auf der diese App niemandem hilft.
     ausserhalb: tuple[str, ...] = ()
 
+    #: Die Woerter, an denen das Thema **im Namen** erkannt wird (شحن,
+    #: مشاوير, Versand, Mitnahme ...). Sie standen bis zum 20.09.2026 in
+    #: ``categories.yaml`` und sind am 21.09.2026 zurueckgekommen - nicht aus
+    #: Nostalgie, sondern weil ohne sie **keine** Gruppe mehr Klasse A
+    #: erreichte: Die Mitgliederliste traegt in ``category`` fast durchgehend
+    #: "Unbekannt", und damit ist ``Group.category`` leer. Jede Reise- und
+    #: Versandgruppe galt als ``C``, wo "hoch **und** die genannte Strecke"
+    #: verlangt wird, und der Lauf meldete in jeder Runde
+    #: "Bezug zu schwach fuer diese Gruppe".
+    #:
+    #: **Die gepflegte Kategorie geht weiterhin vor** (siehe ``beurteile``):
+    #: Diese Liste greift, wo nichts gepflegt ist, und ersetzt keine Angabe.
+    kategoriebegriffe: tuple[str, ...] = ()
+
     #: Die Zielgruppen, die eine Gemeinschaftsgruppe ausmachen (``syrians``,
     #: ``arabs``) - fuer den Abgleich mit ``Group.audience_tags``.
     audiences: frozenset[str] = frozenset()
+
+    #: Ihre Woerter, aus demselben Grund wie ``kategoriebegriffe``: Eine
+    #: Gemeinschaftsgruppe heisst "السوريون في ألمانيا" und traegt im Bestand
+    #: trotzdem keinen Tag, solange niemand einen eingetragen hat.
+    audiencebegriffe: tuple[str, ...] = ()
 
 
 
@@ -383,16 +402,26 @@ def einstufe(merkmale: Merkmale, regeln: Regeln) -> Zielbefund:
     erkannt sein - ein Beitrag ueber ein Paket macht aus einer
     Wohnungsgruppe keine Versandgruppe.
     """
+    name = normalize(merkmale.name)
     text = normalize(f"{merkmale.name} {merkmale.beschreibung}")
     region, region_treffer = bestimme_region(merkmale, regeln)
 
     # --- A: das Thema, das Ziel und ein Weg, der durch Europa fuehrt ----
     kategorien = {merkmale.kategorie or "", *merkmale.nebenkategorien}
     kategorie_passt = bool(kategorien & regeln.kategorien)
+    # **Der Name zaehlt wieder mit** (21.09.2026). Vom 20.09. bis dahin war
+    # die gepflegte Kategorie die einzige Quelle des Themas - und die
+    # Mitgliederliste traegt in ``category`` fast durchgehend "Unbekannt".
+    # Damit erreichte **keine** Gruppe mehr Klasse A: "شركة شحن دولي سوريا"
+    # stand als ``C`` im Bestand, wo "hoch + genannte Strecke" verlangt wird,
+    # und der Lauf meldete Runde um Runde "Bezug zu schwach fuer diese
+    # Gruppe". Die gepflegte Kategorie geht weiterhin vor; diese Liste
+    # greift, wo nichts gepflegt ist.
+    thema_im_namen = _treffer(name, regeln.kategoriebegriffe)
     ziel = _treffer(text, regeln.ziele)
 
-    if kategorie_passt and ziel:
-        thema = [merkmale.kategorie or "kategorie"]
+    if (kategorie_passt or thema_im_namen) and ziel:
+        thema = [merkmale.kategorie] if kategorie_passt else thema_im_namen
         teile = [", ".join(thema[:2]), ", ".join(ziel[:2])]
         if region_treffer:
             teile.append(", ".join(region_treffer[:1]))
@@ -431,11 +460,17 @@ def einstufe(merkmale: Merkmale, regeln: Regeln) -> Zielbefund:
         )
 
     # --- B: Gemeinschaft in Deutschland --------------------------------
+    # Auch hier zaehlt der Text wieder mit, und aus demselben Grund: "السوريون
+    # في ألمانيا" traegt im Bestand keinen Tag, solange niemand einen
+    # eingetragen hat - und fiel damit nicht nach ``C``, sondern gleich nach
+    # ``D``, also aus der Bearbeitung heraus.
     zielgruppe = [tag for tag in merkmale.audiences if tag in regeln.audiences]
+    zielgruppe_im_text = _treffer(text, regeln.audiencebegriffe)
+    hat_zielgruppe = bool(zielgruppe or zielgruppe_im_text)
     deutschlandbezug = bool(merkmale.stadt) or bool(_treffer(text, regeln.herkunft))
 
-    if zielgruppe and deutschlandbezug:
-        belege = zielgruppe
+    if hat_zielgruppe and deutschlandbezug:
+        belege = zielgruppe or zielgruppe_im_text[:2]
         ort = merkmale.stadt or "Deutschland"
         return Zielbefund(
             prioritaet=Zielprioritaet.B,
@@ -455,11 +490,11 @@ def einstufe(merkmale: Merkmale, regeln: Regeln) -> Zielbefund:
     # einem Syrienwort im Text. Bearbeitet wird sie nicht - aber ein einzelner
     # Beitrag, der ausdruecklich nach einem Mitnehmer fragt, bleibt erreichbar.
     anzeichen = []
-    if zielgruppe:
+    if hat_zielgruppe:
         anzeichen.append("Zielgruppe")
     if ziel:
         anzeichen.append("Ziel")
-    if kategorie_passt:
+    if kategorie_passt or thema_im_namen:
         anzeichen.append("Reise/Versand")
     if anzeichen:
         return Zielbefund(
@@ -518,7 +553,9 @@ def regeln_aus_config(config) -> Regeln:  # noqa: ANN001 - AppConfig, ohne Impor
         herkunft=tuple(str(h) for h in (block.get("herkunft") or [])),
         europa=tuple(str(e) for e in (block.get("europa") or [])),
         ausserhalb=tuple(str(a) for a in (block.get("ausserhalb") or [])),
+        kategoriebegriffe=tuple(str(k) for k in (block.get("kategoriebegriffe") or [])),
         audiences=frozenset(str(a) for a in (block.get("audiences") or [])),
+        audiencebegriffe=tuple(str(a) for a in (block.get("audiencebegriffe") or [])),
     )
 
 
@@ -554,14 +591,52 @@ def anspruch_aus_config(config) -> dict:  # noqa: ANN001 - AppConfig
     strecke = bool(block.get("c_verlangt_strecke", True))
 
     tabelle: dict[Zielprioritaet, tuple[Relevanz, bool]] = {}
-    for klasse, vorgabe in _VORGABE_RELEVANZ.items():
+    # ``D`` kommt nur dazu, wenn ``settings.yaml`` es ausdruecklich nennt -
+    # die Vorgabe im Code bleibt "dort wird nicht geantwortet". Dieselbe
+    # Aufteilung wie bei ``mitgliedschaft_pflicht`` und ``regeln_zuerst``:
+    # Der Schutz gilt, solange niemand etwas sagt; gesagt wird es in der
+    # Konfiguration.
+    klassen = dict(_VORGABE_RELEVANZ)
+    if Zielprioritaet.D.value in stufen:
+        klassen[Zielprioritaet.D] = str(stufen[Zielprioritaet.D.value])
+
+    for klasse, vorgabe in klassen.items():
         roh = str(stufen.get(klasse.value, vorgabe)).strip().lower()
         try:
             stufe = Relevanz(roh)
         except ValueError:
             stufe = Relevanz(vorgabe)
-        tabelle[klasse] = (stufe, strecke and klasse is Zielprioritaet.C)
+        # Die genannte Strecke verlangen die beiden Klassen, in denen ein
+        # Reisethema ein Zufall sein kann: die allgemeine (``C``) und die
+        # ohne erkennbaren Bezug (``D``).
+        tabelle[klasse] = (
+            stufe,
+            strecke and klasse in (Zielprioritaet.C, Zielprioritaet.D),
+        )
     return tabelle
+
+
+def bearbeitbare_klassen(config) -> frozenset[Zielprioritaet]:  # noqa: ANN001
+    """In welchen Klassen ueberhaupt gearbeitet wird - aus derselben Tabelle.
+
+    **Eine Quelle fuer zwei Fragen, und das ist der Punkt.** "Wird dort
+    gearbeitet?" und "was muss ein Beitrag dort hergeben?" sind dieselbe
+    Entscheidung, von zwei Seiten gestellt: Eine Klasse ohne Schwelle ist
+    eine, in der nichts durchkaeme - und eine Klasse mit Schwelle ist eine,
+    in der gearbeitet wird. Zwei getrennte Listen koennten auseinanderlaufen,
+    und dann stuende in der Konfiguration eine Schwelle fuer eine Klasse, die
+    der Lauf nie besucht.
+
+    Der Anlass (21.09.2026): Neun von dreizehn zugeordneten Gruppen fielen
+    als ``D`` aus der Runde, ohne dass der Lauf es irgendwo sagte - im
+    Protokoll standen nur die vier uebrigen, immer wieder. Wer ``D``
+    mitnehmen will, traegt in ``mindestrelevanz`` ein ``d:`` ein und bekommt
+    dort die strengste Schwelle: belegter Bezug **und** die ausgeschriebene
+    Strecke. Die Beitrittsanfrage bleibt davon unberuehrt
+    (``BEITRITT_WERT``) - die riskanteste Handlung des Projekts geht
+    weiterhin nur an ``A`` und ``B``.
+    """
+    return frozenset(anspruch_aus_config(config))
 
 
 __all__ = [
