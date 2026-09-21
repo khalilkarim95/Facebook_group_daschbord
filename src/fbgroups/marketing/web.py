@@ -1684,6 +1684,9 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     "anspruch": {
                         "mindestrelevanz": anspruch.mindestrelevanz.value,
                         "verlangt_strecke": anspruch.verlangt_strecke,
+                        # Der Schalter liegt beim Bestand, nicht beim
+                        # Arbeitsrechner (siehe automatik.vorgaben_lesen).
+                        "anlass_pflicht": anspruch.anlass_pflicht,
                     },
                     # Damit derselbe Satz nicht zweimal in derselben Gruppe
                     # steht - ueber **alle** Kampagnen, wie oertlich auch.

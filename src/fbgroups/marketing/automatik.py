@@ -1466,8 +1466,12 @@ def anspruch_fuer(config: AppConfig, group_id: str):  # noqa: ANN201
 
     with SqliteStore(config.path("sqlite_path")) as gruppen_store:
         gruppe = gruppen_store.get_group(group_id)
+    # Der Schalter gehoert zur Schwelle, nicht zur Gruppe: Er sagt, ob neben
+    # ihr noch ein Halbsatz verlangt wird. Deshalb steht er in **jedem**
+    # Rueckgabewert hier - auch in der Vorgabe.
+    pflicht = anlass_pflicht(config)
     if gruppe is None:
-        return entscheidung_modul.Anspruch()
+        return entscheidung_modul.Anspruch(anlass_pflicht=pflicht)
 
     befund = zielgruppe.aus_group(gruppe, zielgruppe.regeln_aus_config(config))
     tabelle = zielgruppe.anspruch_aus_config(config)
@@ -1477,10 +1481,14 @@ def anspruch_fuer(config: AppConfig, group_id: str):  # noqa: ANN201
         # normalerweise nicht hin (``bearbeitbar`` schliesst sie aus); wer es
         # doch versucht, bekommt die Schwelle, die nichts durchlaesst.
         return entscheidung_modul.Anspruch(
-            mindestrelevanz=inhalt.Relevanz.HOCH, verlangt_strecke=True
+            mindestrelevanz=inhalt.Relevanz.HOCH,
+            verlangt_strecke=True,
+            anlass_pflicht=pflicht,
         )
     relevanz, strecke = stufe
-    return entscheidung_modul.Anspruch(mindestrelevanz=relevanz, verlangt_strecke=strecke)
+    return entscheidung_modul.Anspruch(
+        mindestrelevanz=relevanz, verlangt_strecke=strecke, anlass_pflicht=pflicht
+    )
 
 
 def waehle_gelegenheit(
@@ -2466,6 +2474,11 @@ def vorgaben_lesen(vorgaben: dict | None):  # noqa: ANN201 - (Erlaubnis, Anspruc
     anspruch = entscheidung_modul.Anspruch(
         mindestrelevanz=stufe,
         verlangt_strecke=bool(roh_anspruch.get("verlangt_strecke", False)),
+        # **Der Server entscheidet, nicht dieser Rechner.** Dieselbe Regel
+        # wie bei der Mitgliedschaftspflicht: Der Stand liegt dort, also
+        # liegt auch der Schalter dort. Ein aelterer Server sendet das Feld
+        # nicht - dann gilt die vorsichtige Vorgabe.
+        anlass_pflicht=bool(roh_anspruch.get("anlass_pflicht", True)),
     )
     return erlaubnis, anspruch, set(vorgaben.get("verbrauchte_vorlagen") or ())
 

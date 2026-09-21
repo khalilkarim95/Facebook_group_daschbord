@@ -1439,6 +1439,86 @@ passte deshalb auf jeden Beitrag gleich gut, also auf keinen.
   `anlaesse.de` noch fehlt. Ohne ihn stünde eine Sprache ohne Anlassvorrat
   still, und das wäre eine Änderung, die niemand angeordnet hat.
 
+### So schreiben die Reisegruppen wirklich (21.09.2026)
+
+```
+Bewegung + Ziel      نازل ع الشام يوم الجمعة   → bietet_mitnahme
+Gepäck-Halbsatz      معي وزن / عندي مساحة      → platz_im_koffer
+ein Wort allein      سوريا · دمشق · وزن        → nichts
+```
+
+Der Anlass ist ein Lauf in einer Reisegruppe, in der noch fünf Kommentare
+offen waren und sichtbar passende Beiträge standen:
+
+```
+kein Anlass: kein passender Beitrag
+  (kein Bezug zum Angebot (sonstiges), keine passende Form (reise/unbekannt (سفر)))
+```
+
+Drei Ursachen lagen übereinander, und jede für sich hätte gereicht:
+
+- **Der Wortschatz war Hocharabisch, die Gruppen schreiben syrisch.**
+  „مرحبا نازلة من ألمانيا عالشام ب 27/9 متوفر وزن خفيف" trug kein einziges
+  Wort aus `_REISE` — der Beitrag, für den es die App gibt, galt als
+  `sonstiges`. Dazugekommen sind die Bewegungswörter (`_BEWEGUNG`: نازل،
+  رايح، طالع، جاي، راجع، واصل، بسافر …), die Gepäckwörter (وزن، مطار،
+  حجز، رحلتي) und in `_PLATZ` die Formulierungen mit Besitz („معي وزن",
+  „عندي كم كيلو", „ضايل وزن") und Ort („مجال بالشنطة", „مساحة بالحقيبة").
+- **Eine Kombination ist die Schranke, kein einzelnes Wort.**
+  `_reise_mit_ziel` verlangt **Bewegung und Ziel** im selben Beitrag —
+  nicht nebeneinander, denn geschrieben wird „نازلة من ألمانيا عالشام"
+  ebenso wie „رحلتي ع دمشق". Eine Liste fertiger Wendungen träfe immer nur
+  die, an die jemand gedacht hat; der arabische Abgleich ohne Wortgrenze
+  deckt „عالشام", „ع الشام" und „للشام" von selbst ab. Damit bleibt
+  „سوريا حلوة" nichts, „رايح ع الشغل" auch — und das ist die ausdrückliche
+  Forderung: *keine zu breiten Keywords*.
+  **Das kehrt die Regel vom 13.09.2026 für diesen einen Fall um** („ich
+  fliege nächste Woche nach Syrien" war dort ausdrücklich kein Anlass). In
+  einer Gruppe namens „مسافر من أوروبا إلى سوريا" ist die Ankündigung einer
+  Fahrt kein Small Talk, sondern die andere Hälfte des Marktplatzes.
+- **Ein Gepäckhalbsatz bringt sein Thema mit.** „بقي معي كم كيلو" nennt
+  weder Reise noch Versand; die Themenerkennung ließ es als `sonstiges`
+  liegen. Trifft `_PLATZ` und ist sonst kein Thema erkannt, gilt `REISE` —
+  dieselbe Überlegung wie bei `_SUCHT_REISENDEN`: Wer den Satz schreibt,
+  hat sein Thema geliefert. **Nur aus `SONSTIGES` heraus**, sonst würde aus
+  einer Wohnungsanzeige mit dem Wort „مساحة" eine Reise.
+- **Ein erkannter Anlass hebt `Relevanz.KEINE` auf `MITTEL`.** „معي وزن
+  متوفر" nennt kein Ziel — in einer Reisegruppe ist das selbstverständlich.
+  Die Schwelle kannte die Gruppe aber nicht, und so fiel die deutlichste
+  Gelegenheit durch, **bevor** der Anlass überhaupt gefragt wurde. Genau
+  diese Begründung stand seit dem 13.09.2026 in `soll_app_nennen` („belegt
+  heißt HOCH **oder** ein erkannter Anlass") — sie wirkte nur eine Stufe zu
+  spät. Gehoben wird auf `MITTEL`, nicht auf `HOCH`: In einer
+  Gemeinschaftsgruppe bleibt es damit bei nichts.
+
+### `anlass_pflicht` wirkt jetzt, wo es gemeint war (21.09.2026)
+
+`marketing.anlass_pflicht: false` steht seit dem 13.09.2026 in
+`settings.yaml` und versprach: *„Der vorbereitete Text der Fassung geht
+hinaus, sobald die Relevanz reicht."* Gelesen wurde der Schalter aber nur in
+`automatik.text_zur_gelegenheit` — und dorthin kam ein Beitrag ohne Anlass
+gar nicht: `soll_app_nennen` hatte ihn längst auf `NO_LINK` gesetzt, und für
+`NO_LINK` gibt es keinen Vorrat. Der Schalter stand auf „aus" und änderte
+nichts.
+
+- **Er gehört zum `Anspruch`, nicht zur Vorlagenwahl.** `Anspruch` ist die
+  Stelle, an der steht, was ein Beitrag **hier** hergeben muss; der Schalter
+  sagt, ob dazu noch ein Halbsatz verlangt wird. `soll_app_nennen` liest
+  beides zusammen.
+- **Die Schwelle bleibt, nur die Zusatzforderung entfällt.** In einer
+  Gemeinschaftsgruppe ist weiterhin `hoch` nötig, in einer allgemeinen dazu
+  die ausgeschriebene Strecke — der Ort entscheidet, nicht der Schalter.
+- **Die Vorgabe im Code ist `True`**, wie bei `mitgliedschaft_pflicht` und
+  `regeln_zuerst`: Der Schutz gilt, solange niemand etwas sagt; gesagt wird
+  es in `settings.yaml`.
+- **Im Fernbetrieb entscheidet der Server.** `anspruch.anlass_pflicht` reist
+  in `vorgaben` mit; die `settings.yaml` des Arbeitsrechners ist dort
+  belanglos. Ein älterer Server sendet das Feld nicht — dann gilt die
+  vorsichtige Vorgabe.
+- Festgehalten in `tests/test_anlasspflicht.py` und
+  `tests/test_reisewortschatz.py`; letzteres ist der Abnahmetest der zwölf
+  Proben des Nutzers, neun davon müssen antworten, drei dürfen es nicht.
+
 ### Link-Modus: kein Link ist die Vorgabe (`entscheidung.Linkmodus`)
 
 ```

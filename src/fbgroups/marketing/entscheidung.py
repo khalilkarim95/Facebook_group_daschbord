@@ -156,6 +156,31 @@ class Anspruch:
     und konkreter Reise- oder Versandbedarf" nennt.
     """
 
+    anlass_pflicht: bool = True
+    """Braucht die App-Nennung einen **erkannten Anlass**?
+
+    Eingeschaltet (Vorgabe) gilt die Regel vom 13.09.2026: Genannt wird die
+    App nur, wo der Bezug **belegt** ist - durch ``HOCH`` oder durch einen
+    Halbsatz, den ``inhalt.erkenne_anlass`` findet ("مساحة بالشنطة", "wer
+    nimmt mit", "Medikamente").
+
+    Ausgeschaltet (``marketing.anlass_pflicht: false``) genuegt die Schwelle
+    der Gruppe, die eine Zeile darueber steht - und das ist genau das, was
+    der Schalter immer versprochen hat: *"Der vorbereitete Text der Fassung
+    geht hinaus, sobald die Relevanz reicht."* Bis zum 21.09.2026 stand er
+    nur in ``automatik.text_zur_gelegenheit`` und wirkte deshalb nicht: Die
+    Entscheidung war vorher schon bei ``NO_LINK`` gelandet, und dort gibt es
+    keinen Vorrat. Im Betrieb sah das so aus - eine Reisegruppe, in der zehn
+    Kommentare hingehoeren, und der Lauf ging weiter:
+
+        keine passende Form (reise/unbekannt (سفر))
+
+    **Der Ort entscheidet weiterhin.** Der Schalter hebt die Schwelle nicht
+    auf: In einer Gemeinschaftsgruppe bleibt ``HOCH`` noetig, in einer
+    allgemeinen dazu die ausgeschriebene Strecke. Was entfaellt, ist allein
+    die Forderung nach dem Halbsatz **zusaetzlich** zur Schwelle.
+    """
+
 
 @dataclass(frozen=True)
 class Erlaubnis:
@@ -289,7 +314,11 @@ def soll_privat_anbieten(befund: Inhaltsbefund, erlaubnis: Erlaubnis) -> bool:
     return befund.absicht in (Absicht.SUCHT, Absicht.FRAGT)
 
 
-def soll_app_nennen(befund: Inhaltsbefund, erlaubnis: Erlaubnis) -> bool:
+def soll_app_nennen(
+    befund: Inhaltsbefund,
+    erlaubnis: Erlaubnis,
+    anspruch: Anspruch | None = None,
+) -> bool:
     """Gehoert die App zu **dieser** Frage - oder waere sie eingeworfen?
 
     Verlangt dreierlei: ein Thema, das die App betrifft (Versand oder Reise),
@@ -307,12 +336,21 @@ def soll_app_nennen(befund: Inhaltsbefund, erlaubnis: Erlaubnis) -> bool:
     """
     if not erlaubnis.werbung:
         return False
-    if befund.relevanz is not Relevanz.HOCH and befund.anlass is Anlass.KEINER:
+    anspruch = anspruch or Anspruch()
+    if (
+        anspruch.anlass_pflicht
+        and befund.relevanz is not Relevanz.HOCH
+        and befund.anlass is Anlass.KEINER
+    ):
         return False
     return befund.thema in (Thema.VERSAND, Thema.REISE)
 
 
-def soll_link_nutzen(befund: Inhaltsbefund, erlaubnis: Erlaubnis) -> bool:
+def soll_link_nutzen(
+    befund: Inhaltsbefund,
+    erlaubnis: Erlaubnis,
+    anspruch: Anspruch | None = None,
+) -> bool:
     """Braucht diese Antwort einen Link - und darf sie einen tragen?
 
     Zwei Fragen in einer, und beide muessen mit ja beantwortet sein. Ein Link
@@ -320,7 +358,7 @@ def soll_link_nutzen(befund: Inhaltsbefund, erlaubnis: Erlaubnis) -> bool:
     Gruppe, die Links nicht ausdruecklich erlaubt, ist er der haeufigste Grund
     fuer eine Ablehnung.
     """
-    return erlaubnis.links and soll_app_nennen(befund, erlaubnis)
+    return erlaubnis.links and soll_app_nennen(befund, erlaubnis, anspruch)
 
 
 # --- Die Zusammenfuehrung --------------------------------------------------
@@ -370,8 +408,8 @@ def entscheide(
             )
         )
 
-    if soll_app_nennen(befund, erlaubnis):
-        mit_link = soll_link_nutzen(befund, erlaubnis)
+    if soll_app_nennen(befund, erlaubnis, anspruch):
+        mit_link = soll_link_nutzen(befund, erlaubnis, anspruch)
         art = (
             Antwortart.DIRECT_APP_RECOMMENDATION
             if mit_link

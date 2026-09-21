@@ -163,6 +163,31 @@ _VERSAND = (
     # es die App gibt.
     "ارسل", "ترسل", "يرسل", "نرسل", "رسلي", "ابعتلك", "بعتلي",
 )
+#: Die Bewegungswoerter der syrischen Umgangssprache - **eine Haelfte** der
+#: Kombination, die eine Reiseankuendigung ausmacht. Allein sagen sie nichts:
+#: "رايح ع الشغل" ist kein Reiseanlass, und genau deshalb steht die andere
+#: Haelfte (``_ZIELE``) daneben.
+_BEWEGUNG = (
+    "نازل", "نازلة", "طالع", "طالعة", "رايح", "رايحة", "راجع", "راجعة",
+    "جاي", "جاية", "واصل", "واصلة", "مسافر", "مسافرة", "بسافر", "مسافرين",
+    "بنزل", "برجع", "طاير",
+)
+
+#: Zeitangaben, wie sie in diesen Beitraegen neben der Reise stehen.
+#:
+#: **Sie begruenden allein keinen Anlass** und stehen deshalb in keiner
+#: Themenliste: "بكرا" heisst morgen, und die meisten Beitraege einer Gruppe
+#: handeln von morgen. Sie sind der Beleg dafuer, dass eine Reise
+#: tatsaechlich bevorsteht - gefragt werden sie nur **zusammen** mit einem
+#: Bewegungswort (``erkenne_anlass``).
+_ZEITNAH = (
+    "بكرا", "بعد بكرا", "هالجمعة", "هالاسبوع", "هالأسبوع",
+    "الاسبوع الجاي", "الأسبوع الجاي", "يوم الجمعة", "يوم السبت",
+    "يوم الاحد", "يوم الأحد", "اليوم", "هالشهر", "نهاية الاسبوع",
+    "نهاية الأسبوع",
+)
+
+
 _REISE = (
     "reise", "reisen", "flug", "fluege", "koffer", "gepaeck", "ticket",
     "travel", "flight", "luggage", "baggage",
@@ -172,6 +197,24 @@ _REISE = (
     "flieg", "abflug", "heimreise", "urlaub",
     "سفر", "مسافر", "مسافرين", "رحلة", "طيارة", "طيران", "شنطة", "حقيبة",
     "عفش", "تذكرة",
+    # 21.09.2026: Wie die Reisenden selbst schreiben. "مرحبا نازلة من
+    # ألمانيا عالشام ب 27/9 متوفر وزن خفيف" trug kein einziges Wort von
+    # oben - der Beitrag galt als "sonstiges", also ohne Bezug, und der Lauf
+    # ging an ihm vorbei. Dabei ist er der Beitrag, fuer den es die App gibt:
+    # ein Reisender mit freiem Gepaeck.
+    #
+    # Es ist syrische Umgangssprache und kein Hocharabisch: "نازل/نازلة"
+    # (hinunter nach Syrien), "طالع" (hinauf nach Europa), "رايح/جاي/راجع",
+    # dazu "وزن" (Gepaeckgewicht), "مطار" und "حجز".
+    #
+    # **Thema ist nicht Anlass.** Diese Woerter sagen nur, wovon ein Beitrag
+    # handelt. Ob daraus eine Gelegenheit wird, entscheidet
+    # ``erkenne_anlass`` - dort braucht es ein **Ziel** dazu oder einen
+    # Halbsatz ueber freies Gepaeck. "وزن" allein bleibt damit folgenlos:
+    # Reise ohne Ziel ist ``Relevanz.KEINE``.
+    *_BEWEGUNG,
+    "وزن", "مطار", "بالمطار", "عالطيارة", "بالطائرة", "حجز", "ترانزيت",
+    "رحلتي", "وصلت",
 )
 _WOHNUNG = (
     "wohnung", "wohnungen", "zimmer", "wg", "miete", "mieten", "apartment",
@@ -318,6 +361,28 @@ _PLATZ = (
     "مساحة بالشنطة", "مكان بالشنطة", "مجال بالشنطة", "مساحة بالحقيبة",
     "مكان بالحقيبة", "مجال بالحقيبة", "وزن زيادة", "كيلو زيادة",
     "وزن فاضي", "شنطة فاضية", "عندي مساحة", "عندي مجال",
+    # Aus den Beitraegen des Bestands (21.09.2026): In den Reisegruppen
+    # heisst freies Gepaeck fast immer "وزن" - "متوفر وزن خفيف", "معي وزن",
+    # "في وزن". Ohne diese Zeilen trug der haeufigste Beitrag dieser Gruppen
+    # keinen Anlass, und der Lauf ging an ihm vorbei.
+    #
+    # **Jede Zeile traegt ihren Zusammenhang mit sich.** "وزن" allein steht
+    # hier nicht, "مجال" und "مساحة" auch nicht: "في مجال العمل" ist ein
+    # Stellenangebot, und ein Kommentar ueber Koffer waere dort eingeworfene
+    # Werbung. Was hier steht, ist immer Besitz ("معي", "عندي", "ضايل") oder
+    # der Ort ("بالشنطة", "بالحقيبة").
+    "متوفر وزن", "وزن متوفر", "عندي وزن", "معي وزن", "في وزن", "بقي وزن",
+    "وزن خفيف", "وزن متاح", "باقي وزن", "ضايل وزن", "ضلّ وزن", "ضل وزن",
+    "معي مجال", "معي مساحة", "معي مكان", "معي كيلو", "معي كم كيلو",
+    "عندي كيلو", "عندي كيلوات", "عندي كم كيلو", "ضايل كم كيلو",
+    "مجال بالشنطة", "مجال بالحقيبة", "مساحة بالشنطة", "مساحة بالحقيبة",
+    "مكان بالشنطة", "مكان بالحقيبة", "مجال بالجنطة", "مساحة بالجنطة",
+    "شنطة فاضي", "جنطة فاضية", "كيلو فاضي", "كيلوات فاضية",
+    # "Ich kann etwas mitnehmen" - dieselbe Gelegenheit, aus Sicht des
+    # Reisenden formuliert.
+    "فيني اخد غرض", "فيني آخد غرض", "بقدر اخد غرض", "بقدر آخد غرض",
+    "فيني اخد", "فيني آخد", "بقدر اخد امانة", "بقدر آخد امانة",
+    "في مجال اخد", "في مجال آخد",
 )
 
 #: Jemand sucht einen Reisenden - die haeufigste Gelegenheit ueberhaupt und
@@ -428,6 +493,20 @@ def lies(text: str) -> Inhaltsbefund:
             gefunden = treffer
             break
 
+    # **Ein Gepaeckhalbsatz bringt sein Thema mit** (21.09.2026). "بقي معي
+    # كم كيلو" und "في مجال آخد غرض" nennen weder Reise noch Versand, und
+    # die Themenerkennung liess sie deshalb als "sonstiges" liegen - obwohl
+    # sie die deutlichste Gelegenheit ueberhaupt sind: freier Platz im
+    # Koffer. Dieselbe Ueberlegung wie bei ``_SUCHT_REISENDEN`` in
+    # ``erkenne_anlass``: Wer den Satz schreibt, hat sein Thema geliefert,
+    # auch wenn keine Wortliste es aufgefangen hat.
+    #
+    # Nur aus ``SONSTIGES`` heraus: Ein Beitrag ueber eine Wohnung bleibt
+    # eine Wohnung, auch wenn das Wort "مساحة" darin vorkommt.
+    if thema is Thema.SONSTIGES and (platz := _treffer(normal, _PLATZ)):
+        thema = Thema.REISE
+        gefunden = platz
+
     absicht = Absicht.UNBEKANNT
     if _treffer(normal, _SUCHT):
         absicht = Absicht.SUCHT
@@ -440,14 +519,50 @@ def lies(text: str) -> Inhaltsbefund:
     herkunft = bool(_treffer(normal, _HERKUNFT))
     strecke = ziel and herkunft
 
+    anlass = erkenne_anlass(normal, thema, absicht)
+    relevanz = _relevanz(thema, absicht, ziel=ziel, strecke=strecke)
+    if anlass is not Anlass.KEINER and relevanz is Relevanz.KEINE:
+        # **Ein erkannter Anlass ist selbst der Beleg** (21.09.2026).
+        # "معي وزن متوفر" nennt kein Ziel - es steht in einer Reisegruppe,
+        # dort ist das selbstverstaendlich. Die Relevanzstufe kennt die
+        # Gruppe aber nicht, und so fiel die deutlichste Gelegenheit
+        # ueberhaupt durch die Schwelle, bevor der Anlass ueberhaupt gefragt
+        # wurde. Dieselbe Begruendung steht seit dem 13.09.2026 in
+        # ``entscheidung.soll_app_nennen`` ("Belegt heisst HOCH **oder** ein
+        # erkannter Anlass") - sie wirkte nur eine Stufe zu spaet.
+        #
+        # Gehoben wird auf ``MITTEL`` und nicht auf ``HOCH``: In einer
+        # Gemeinschaftsgruppe (Schwelle "hoch") bleibt es damit bei nichts,
+        # und der Ort entscheidet weiter.
+        relevanz = Relevanz.MITTEL
+
     return Inhaltsbefund(
         thema=thema,
         absicht=absicht,
-        relevanz=_relevanz(thema, absicht, ziel=ziel, strecke=strecke),
+        relevanz=relevanz,
         treffer=tuple(gefunden[:6]),
         strecke=strecke,
-        anlass=erkenne_anlass(normal, thema, absicht),
+        anlass=anlass,
     )
+
+
+def _reise_mit_ziel(normal: str) -> bool:
+    """Nennt der Beitrag **Bewegung und Ziel**? Dann steht eine Fahrt an.
+
+    Die Antwort auf die Forderung, einzelne Woerter nicht ausreichen zu
+    lassen (21.09.2026): "سوريا" allein ist ein Land, "نازل" allein ist ein
+    Weg zur Arbeit - erst zusammen sind sie eine Ankuendigung. Gefragt wird
+    nach dem Vorkommen im selben Beitrag und nicht nach der Reihenfolge:
+    Geschrieben wird "نازلة من ألمانيا عالشام", "رحلتي ع دمشق" und "مسافر
+    يوم الجمعة ع حلب", und eine Liste fertiger Wendungen traefe immer nur
+    die, an die jemand gedacht hat. Der arabische Abgleich laeuft ohne
+    Wortgrenze, deshalb sind "عالشام", "ع الشام" und "للشام" mitgemeint.
+
+    Eine **Zeitangabe** ersetzt das Ziel nicht. Sie steht in ``_ZEITNAH``
+    und dient dem Anlasstext, nicht der Schranke: "مسافر بكرا" kann jede
+    Fahrt meinen.
+    """
+    return bool(_treffer(normal, _BEWEGUNG)) and bool(_treffer(normal, _ZIELE))
 
 
 def erkenne_anlass(normal: str, thema: Thema, absicht: Absicht) -> Anlass:
@@ -494,10 +609,22 @@ def erkenne_anlass(normal: str, thema: Thema, absicht: Absicht) -> Anlass:
         return Anlass.VERSANDWEG
 
     if thema is Thema.REISE:
-        # Eine Reise **ohne** einen der Halbsaetze oben ist eine Mitteilung
-        # und keine Gelegenheit - ausser der Reisende bietet ausdruecklich
-        # an, etwas mitzunehmen. Genau das ist der Fall, den die Anforderung
-        # von "ich fliege naechste Woche nach Syrien" unterscheidet.
+        # Ein Reisender, der **Bewegung und Ziel** nennt, ist die andere
+        # Haelfte des Marktplatzes: "نازل ع الشام يوم الجمعة" sagt, dass
+        # jemand fahren wird und wohin - mehr braucht es nicht, um zu
+        # wissen, dass er etwas mitnehmen koennte.
+        #
+        # **Das kehrt die Regel vom 13.09.2026 fuer diesen einen Fall um**
+        # (Anweisung des Nutzers, 21.09.2026). Dort galt "ich fliege
+        # naechste Woche nach Syrien" ausdruecklich als blosse Mitteilung.
+        # Im Betrieb war es der haeufigste Beitrag der Reisegruppen, und die
+        # Gruppen stehen genau dafuer: In einer Gruppe namens "مسافر من
+        # أوروبا إلى سوريا" ist die Ankuendigung einer Fahrt kein Small Talk.
+        # Die Schranke bleibt die **Kombination**: ein Bewegungswort allein
+        # ("رايح ع الشغل") und ein Zielwort allein ("سوريا حلوة") ergeben
+        # weiterhin nichts.
+        if _reise_mit_ziel(normal):
+            return Anlass.BIETET_MITNAHME
         if absicht is Absicht.BIETET:
             return Anlass.BIETET_MITNAHME
         return Anlass.KEINER
