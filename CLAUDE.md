@@ -2671,6 +2671,67 @@ gehen, bis jede ihre zehn Kommentare hat, und niemals aufhören.
   den Unterschied im Betrieb: Mit „kein Anlass" kommt die erste Gruppe ein
   zweites Mal dran, mit „kein Kommentarfeld" nicht.
 
+### Die Regeln der Gruppe, in der kommentiert wird (21.09.2026)
+
+```
+regeln_offen  →  naechste Beitrittsgruppe
+              →  naechste_gruppe          (Arbeit)
+              →  naechste_kommentargruppe (FEHLTE — seit 15.09.2026)
+```
+
+Ein Lauf über sechs Gruppen schrieb **null** Kommentare. In jeder Gruppe
+stand eines von beiden im Protokoll:
+
+```
+[Versuch 1/3] private_contact_suggestion: reise/sucht (سفر, مطار),
+              Regeln ungelesen - vorsichtig
+  kein Anlass: kein vorbereiteter Text fuer keiner
+```
+
+Die Kette dahinter ist geschlossen und endet immer am selben Ort:
+
+```
+Regeln nie gelesen
+  → Erlaubnis.aus_regeln: werbung = False   (aus nichts keine Erlaubnis)
+  → soll_app_nennen: False
+  → private_contact_suggestion / helpful_reply
+  → Linkmodus.NO_LINK
+  → kein Textvorrat (absichtlich — er wäre erfunden)
+  → kein Kommentar, in jeder Runde, für immer
+```
+
+- **Die Ursache ist eine fehlende Zeile in `regeln_offen`.** Es bot die
+  nächste **Beitritts**- und die nächste **Arbeits**gruppe an. Seit dem
+  15.09.2026 wählt der Kommentarzweig seine Gruppe aber selbst
+  (`naechste_kommentargruppe`) — eingeführt, damit eine Gruppe an ihrer
+  Tagesmenge die nächste nicht aufhält. In einer Kampagne aus lauter
+  Mitgliedern gibt es keine Beitrittskandidaten, und `naechste_gruppe` ist
+  genau **eine**: Alle übrigen wurden kommentiert, ohne je gelesen worden zu
+  sein. Der Kommentar in `regeln_offen` beschrieb längst den richtigen
+  Zustand („auch für Bestandsmitglieder ... sonst wäre `werbung=False` für
+  immer"); die Liste hat ihn nur nicht mehr hergestellt.
+- **Das ist dieselbe Klasse Fehler wie die drei davor**: Eine Rangfolge wurde
+  an einer Stelle verfeinert und an der zweiten, die sie mitliest, nicht
+  nachgezogen. Zwei Listen für dieselbe Frage — hier „welche Gruppe ist als
+  nächstes dran?" — laufen auseinander, und das Ergebnis ist kein Fehler,
+  sondern Stille.
+- **Das Werbeverbot einer Gruppe bindet weiter.** Steht es in einer
+  **gelesenen** Regel, bleibt es bei `NO_LINK`, und dort geht nichts hinaus —
+  unverändert und mit Absicht. Was sich ändert, ist allein, dass dieses
+  Urteil jetzt auf einer gelesenen Regel beruht statt darauf, dass niemand
+  nachgesehen hat.
+- **Die Meldung nennt jetzt die Ursache.** „kein vorbereiteter Text fuer
+  geschenk" las sich wie eine Lücke in `textvorlagen.yaml`; in Wahrheit war
+  die Erlaubnis das Hindernis. Bei `NO_LINK` steht dort seither
+  *„private_contact_suggestion nennt die App nicht — dafür gibt es keinen
+  Textvorrat (…)"*. Wer nur den Anlass liest, sucht die Ursache an der
+  falschen Stelle — und genau das ist eine Runde nach der anderen passiert.
+
+Festgehalten in `tests/test_regeln_der_kommentargruppe.py`: die Ursache (die
+Kommentargruppe steht in `regeln_offen`, der Regelschritt kommt vor dem
+Kommentar) und die Folge (ungelesen → `NO_LINK`, gelesen → App-Nennung,
+Werbeverbot → weiterhin `NO_LINK`).
+
 ### Die gepflegte Note entscheidet, nicht die gerechnete Klasse (21.09.2026)
 
 ```

@@ -1698,11 +1698,25 @@ def entscheide_und_kommentiere(
             # **Kein Anlass, kein Text, kein Kommentar.** "Ich fliege
             # naechste Woche nach Syrien" ist noch kein Grund fuer einen
             # Kommentar. Kein Fehlschlag - gegen die Gruppe spricht nichts.
-            return Schrittergebnis(
-                erfolg=False,
-                fehler=f"kein vorbereiteter Text fuer {gewaehlt.befund.anlass.value}",
-                kein_anlass=True,
+            # **Der Grund steht im Linkmodus, nicht im Anlass.** "kein
+            # vorbereiteter Text fuer geschenk" liest sich wie eine Luecke in
+            # ``textvorlagen.yaml`` - in Wahrheit war meist die Erlaubnis das
+            # Hindernis: Bei ``NO_LINK`` (bloss hilfreiche Antwort, privater
+            # Hinweis) gibt es **absichtlich** keinen Vorrat, und ein Text
+            # dafuer waere erfunden. Wer nur den Anlass liest, sucht die
+            # Ursache an der falschen Stelle - und genau das ist am
+            # 21.09.2026 eine Runde nach der anderen passiert.
+            modus = entscheidung_modul.LINKMODUS.get(gewaehlt.entscheidung.art)
+            grund = (
+                f"kein vorbereiteter Text fuer {gewaehlt.befund.anlass.value}"
+                if modus is not entscheidung_modul.Linkmodus.NO_LINK
+                else (
+                    f"{gewaehlt.entscheidung.art.value} nennt die App nicht - "
+                    f"dafuer gibt es keinen Textvorrat "
+                    f"({gewaehlt.entscheidung.grund})"
+                )
             )
+            return Schrittergebnis(erfolg=False, fehler=grund, kein_anlass=True)
 
         # **Erst jetzt die Adresse.** Der gespeicherte und der
         # weitergereichte Text tragen ``{link}``; was in die Gruppe geht,

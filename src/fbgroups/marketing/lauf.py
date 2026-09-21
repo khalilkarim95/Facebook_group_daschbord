@@ -775,6 +775,22 @@ class Kampagnenfortschritt:
         kandidaten = [
             next(iter(self.beitritt_kandidaten), None),
             self.naechste_gruppe,
+            # **Und die Gruppe, in der gleich kommentiert wird** (21.09.2026).
+            # Seit dem 15.09.2026 waehlt der Kommentarzweig seine Gruppe
+            # selbst (``naechste_kommentargruppe``) - hier stand aber nur
+            # ``naechste_gruppe``. In einer Kampagne aus lauter Mitgliedern
+            # gibt es keine Beitrittskandidaten, und ``naechste_gruppe`` ist
+            # **eine** Gruppe: Die Regeln aller uebrigen wurden nie gelesen,
+            # obwohl der Lauf dort kommentierte.
+            #
+            # Die Folge war nicht ein vorsichtiger Kommentar, sondern gar
+            # keiner. ``Erlaubnis.aus_regeln`` liefert ohne gelesene Regeln
+            # ``werbung=False``; damit faellt ``soll_app_nennen`` aus, die
+            # Entscheidung landet bei ``private_contact_suggestion``, und
+            # fuer ``Linkmodus.NO_LINK`` gibt es keinen Textvorrat. Im
+            # Protokoll stand rundenlang "Regeln ungelesen - vorsichtig"
+            # und danach "kein vorbereiteter Text".
+            self.naechste_kommentargruppe,
         ]
         gesehen: dict[str, Gruppenfortschritt] = {}
         for gruppe in kandidaten:
