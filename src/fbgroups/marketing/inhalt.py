@@ -171,6 +171,12 @@ _BEWEGUNG = (
     "نازل", "نازلة", "طالع", "طالعة", "رايح", "رايحة", "راجع", "راجعة",
     "جاي", "جاية", "واصل", "واصلة", "مسافر", "مسافرة", "بسافر", "مسافرين",
     "بنزل", "برجع", "طاير",
+    # 21.09.2026: **Die Rueckreise fehlte.** In "مين نازل على الشام" stand
+    # "عوده من حلب والشام الى المانيا بعد 3 ايام" - eine Fahrt mit Ziel und
+    # Datum, und trotzdem "sonstiges": Kein Wort davon war eine Bewegung.
+    # Dabei ist der Rueckweg dieselbe Gelegenheit wie der Hinweg - wer aus
+    # Syrien kommt, kann von dort etwas mitbringen.
+    "عوده", "عودة", "رجعه", "رجعة", "رجوع", "عائد", "عايد", "راجعين",
 )
 
 #: Zeitangaben, wie sie in diesen Beitraegen neben der Reise stehen.

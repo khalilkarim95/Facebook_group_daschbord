@@ -828,6 +828,19 @@ automatik:
   # und danach "erschoepft".
   mitgliedschaft_pflicht: false
 
+  # Kommt in einer Gruppe der Kommentar vor dem Beitrag?
+  #
+  # Vorgabe im Code ist "false": Erst der eigene Beitrag, dann die zehn
+  # Kommentare (Regel vom 10.09.2026 - der Beitrag ist der Anlass und steht
+  # in der Gruppe, ein Kommentar haengt an einem fremden).
+  #
+  # Am 21.09.2026 vom Nutzer umgedreht: "Prioritaet Nr. 1 ist das
+  # Kommentieren, der Beitrag ist unwichtig." Eingeschaltet geht in jeder
+  # Gruppe der Kommentar zuerst hinaus; der Beitrag kommt, wenn gerade kein
+  # Kommentar moeglich ist (Takt, Tagesmenge, kein passender Beitrag).
+  # Verloren geht er nicht - er steht nur hinten.
+  kommentare_zuerst: true
+
   # Wie lange eine Gruppe ruht, in der gerade nichts Passendes stand.
   #
   # Der Anlass (20.09.2026): Ein Lauf ueber zwoelf Gruppen war nach zwoelf
@@ -846,4 +859,11 @@ automatik:
   # Gilt fuer "kein Anlass" und fuer eine geloeschte Beitragsadresse. Ein
   # technischer Fehlschlag ruht NICHT: Dort wird die Gruppe aus der Kampagne
   # genommen (siehe "Ein technischer Fehlschlag schliesst die Gruppe aus").
-  ruhe_minuten: 30
+  #
+  # **Am 21.09.2026 vom Nutzer auf 2 gesetzt** ("2 Min reichen schon, die
+  # Gruppen muessen mehr leisten"). Damit sieht der Lauf dieselbe
+  # Gruppenseite bis zu dreissigmal in der Stunde an, wenn dort nichts
+  # Passendes steht - das ist der Preis, und er ist bewusst bezahlt: Ein
+  # Seitenabruf ist keine Handlung in der Gruppe, und der Takt der
+  # Kommentare (delays.comment) bleibt davon unberuehrt.
+  ruhe_minuten: 2

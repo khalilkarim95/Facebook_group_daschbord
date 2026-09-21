@@ -1200,6 +1200,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 gruppen,
                 mitgliedschaft_pflicht=automatik.mitgliedschaft_pflicht(cfg),
                 qualifikation_pflicht=qualifikation.pflicht(cfg),
+                kommentare_zuerst=automatik.kommentare_zuerst(cfg),
                 aktionen=lagen,
             )
 
@@ -1383,6 +1384,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 gruppen,
                 mitgliedschaft_pflicht=automatik.mitgliedschaft_pflicht(cfg),
                 qualifikation_pflicht=qualifikation.pflicht(cfg),
+                kommentare_zuerst=automatik.kommentare_zuerst(cfg),
                 aktionen=lagen,
                 zielbefunde={
                     gid: zielgruppe.aus_group(g, zielregeln)

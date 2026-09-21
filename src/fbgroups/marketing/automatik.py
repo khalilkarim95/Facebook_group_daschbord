@@ -600,6 +600,7 @@ def fuehre_lauf_aus(
             gruppenlimit=grenzen.einstellungen(config)
             .fuer(grenzen.Aktion.KOMMENTAR)
             .je_gruppe_taeglich,
+            kommentare_zuerst=kommentare_zuerst(config),
         )
 
     while True:
@@ -725,6 +726,21 @@ def _schlafe(sekunden: float) -> None:
 #: einen neuen Beitrag bekommt - und der ist der einzige Grund, es noch
 #: einmal zu versuchen.
 RUHE_MINUTEN = 30
+
+
+def kommentare_zuerst(config: AppConfig) -> bool:
+    """Kommt in einer Gruppe der Kommentar vor dem Beitrag?
+
+    Vorgabe **falsch**, und das ist die Regel vom 10.09.2026: Der eigene
+    Beitrag ist der Anlass und steht in der Gruppe; ein Kommentar haengt an
+    einem fremden.
+
+    Eingeschaltet (``automatik.kommentare_zuerst: true``) gilt die Anweisung
+    des Nutzers vom 21.09.2026: *"Prioritaet Nr. 1 ist das Kommentieren, der
+    Beitrag ist unwichtig."* Umgedreht wird allein die Reihenfolge - der
+    Beitrag geht hinaus, sobald gerade kein Kommentar zustande kommt.
+    """
+    return bool(config.get("automatik", "kommentare_zuerst", default=False))
 
 
 def ruhe_minuten(config: AppConfig) -> int:
@@ -2606,6 +2622,7 @@ __all__ = [
     "hole_oder_starte_lauf",
     "merke_bremse",
     "entscheide_und_kommentiere",
+    "kommentare_zuerst",
     "ruhe_minuten",
     "ruhesekunden",
     "vorgaben_lesen",

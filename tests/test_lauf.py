@@ -935,11 +935,16 @@ class _Konfig:
     beantwortet wurde. Ihre eigenen Tests stehen in ``test_grenzen.py``.
     """
 
-    def __init__(self, pfad: Path) -> None:
+    def __init__(self, pfad: Path, *, kommentare_zuerst: bool = False) -> None:
         from fbgroups.config import load_config
 
         self._echt = load_config()
         self._pfad = pfad
+        # **Der Test sagt, welche Reihenfolge er meint.** Seit dem 21.09.2026
+        # steht in ``settings.yaml`` ``kommentare_zuerst: true``; ein Test,
+        # der die Vorgabe prueft, darf nicht davon abhaengen, was dort gerade
+        # eingestellt ist - dieselbe Ueberlegung wie beim Kaltmodus oben.
+        self._kommentare_zuerst = kommentare_zuerst
 
     def __getattr__(self, name: str):
         return getattr(self._echt, name)
@@ -950,6 +955,8 @@ class _Konfig:
     def get(self, *pfad, default=None):
         if pfad[:2] == ("kaltmodus", "aktiv"):
             return False
+        if pfad[:2] == ("automatik", "kommentare_zuerst"):
+            return self._kommentare_zuerst
         if pfad[:1] == ("limits",) and pfad[-1:] == ("daily",):
             return 1000
         if pfad[-1:] == ("je_gruppe_taeglich",):
@@ -1034,8 +1041,54 @@ def _beitragstexte_anlegen(store: MarketingStore, campaign_id: str, gruppen: lis
         )
 
 
+def test_mit_kommentare_zuerst_steht_der_beitrag_hinten(bestand: Path) -> None:
+    """**Die Anweisung vom 21.09.2026**: erst kommentieren, dann posten.
+
+    Umgedreht wird die Reihenfolge, nicht die Menge - der Beitrag geht
+    trotzdem hinaus, nur eben nach den zehn Kommentaren. Deshalb zaehlt der
+    Test beides: die Folge **und** die Summe.
+    """
+    from fbgroups.marketing import automatik
+
+    with MarketingStore(bestand) as store:
+        _texte_anlegen(store, KAMPAGNE, list(GRUPPEN))
+        _beitragstexte_anlegen(store, KAMPAGNE, list(GRUPPEN))
+        store.starte_lauf([KAMPAGNE], ziel_je_gruppe=lauf.ZIEL_JE_GRUPPE)
+
+    gesehen: list[tuple[str, str]] = []
+
+    def ausfuehren(
+        url: str,
+        group_id: str,
+        text: str,
+        texttyp: str = "kommentar",
+        link_url: str = "",
+    ) -> automatik.Schrittergebnis:
+        gesehen.append((group_id, texttyp))
+        post_url = "" if texttyp == "post" else f"p{len(gesehen)}"
+        return automatik.Schrittergebnis(erfolg=True, post_url=post_url)
+
+    fortschritt = automatik.fuehre_lauf_aus(
+        _Konfig(bestand, kommentare_zuerst=True), ausfuehren=ausfuehren
+    )
+
+    voll = lauf.ZIEL_JE_GRUPPE
+    erste = gesehen[0][0]
+    assert gesehen[0][1] == "kommentar", "der Kommentar steht vorn"
+    assert [zweck for gid, zweck in gesehen if gid == erste] == ["kommentar"] * voll + [
+        "post"
+    ]
+    assert fortschritt.beitraege_veroeffentlicht == 2, "der Beitrag geht trotzdem hinaus"
+    assert fortschritt.kommentare_veroeffentlicht == 2 * voll
+
+
 def test_in_jeder_gruppe_zuerst_der_beitrag_dann_die_kommentare(bestand: Path) -> None:
-    """Der ganze Weg einmal durch: Beitrag, zehn Kommentare, naechste Gruppe."""
+    """Der ganze Weg einmal durch: Beitrag, zehn Kommentare, naechste Gruppe.
+
+    Die **Vorgabe** (``automatik.kommentare_zuerst: false``) - in
+    ``settings.yaml`` steht seit dem 21.09.2026 das Gegenteil, und der
+    Schalter hat seinen eigenen Test eine Zeile darueber.
+    """
     from fbgroups.marketing import automatik
 
     with MarketingStore(bestand) as store:

@@ -896,6 +896,20 @@ class Lauffortschritt:
     status: LaufStatus
     kampagnen: list[Kampagnenfortschritt]
 
+    kommentare_zuerst: bool = False
+    """Kommt in einer Gruppe der Kommentar vor dem Beitrag?
+
+    Vorgabe ``False``: erst der eigene Beitrag, dann die zehn Kommentare
+    (Regel vom 10.09.2026 - der Beitrag ist der Anlass und steht in der
+    Gruppe, ein Kommentar haengt an einem fremden).
+
+    ``True`` dreht die **Reihenfolge** um, nicht die Menge: Kommt gerade kein
+    Kommentar zustande, geht der Beitrag hinaus. Anweisung des Nutzers vom
+    21.09.2026 (*"Prioritaet Nr. 1 ist das Kommentieren"*), gesagt wird es in
+    ``settings.yaml`` unter ``automatik.kommentare_zuerst`` - der Schalter
+    steht dort und nicht hier, wie jeder andere auch.
+    """
+
     aktionen: dict[Aktion, Lage] = field(default_factory=dict)
     """Was jede Aktion **jetzt** darf - Tagesmenge, Takt und Bremse zusammen.
 
@@ -1371,11 +1385,12 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
     darf_post = fortschritt.lage(Aktion.POST).moeglich
     darf_kommentar = fortschritt.lage(Aktion.KOMMENTAR).moeglich
 
-    if (
-        darf_post
-        and (post_nummer := gruppe.post_nummer) is not None
-        and gruppe.erlaubt(Texttyp.POST, post_nummer)
-    ):
+    def _beitragsschritt() -> Schritt | None:
+        if not darf_post:
+            return None
+        post_nummer = gruppe.post_nummer
+        if post_nummer is None or not gruppe.erlaubt(Texttyp.POST, post_nummer):
+            return None
         return Schritt(
             campaign_id=kampagne.campaign_id,
             group_id=gruppe.group_id,
@@ -1388,51 +1403,74 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
             kommentar_ziel=1,
         )
 
-    if not darf_kommentar:
-        # Kommentare sind heute erschoepft, gebremst oder abgeschaltet. Das
-        # ist kein Urteil ueber die Gruppe: Der naechste Lauf findet sie
-        # unveraendert vor. ``None`` fuehrt den Aufrufer zur naechsten
-        # Kampagne, nicht zum Abbruch.
-        return None
+    def _kommentarschritt() -> Schritt | None:
+        if not darf_kommentar:
+            # Kommentare sind heute erschoepft, gebremst oder abgeschaltet.
+            # Das ist kein Urteil ueber die Gruppe: Der naechste Lauf findet
+            # sie unveraendert vor.
+            return None
 
-    # **Fuer den Kommentar wird die Gruppe neu gewaehlt.** Seit die
-    # Tagesmenge je Gruppe nur noch den Kommentar sperrt (und nicht mehr die
-    # ganze Gruppe), kann ``naechste_gruppe`` eine liefern, die **nur** noch
-    # ihren Beitrag offen hat. Ist der gerade getaktet, stuende der Lauf vor
-    # ihr still - obwohl in der naechsten Gruppe ein Kommentar hinausgehen
-    # koennte. Die Rangfolge bleibt dieselbe (beide lesen ``arbeitsliste``),
-    # nur die Frage ist eine andere: "wer darf heute noch kommentieren?"
-    gruppe = kampagne.naechste_kommentargruppe
-    if gruppe is None:
-        return None
+        # **Fuer den Kommentar wird die Gruppe neu gewaehlt.** Seit die
+        # Tagesmenge je Gruppe nur noch den Kommentar sperrt (und nicht mehr
+        # die ganze Gruppe), kann ``naechste_gruppe`` eine liefern, die
+        # **nur** noch ihren Beitrag offen hat. Ist der gerade getaktet,
+        # stuende der Lauf vor ihr still - obwohl in der naechsten Gruppe ein
+        # Kommentar hinausgehen koennte. Die Rangfolge bleibt dieselbe (beide
+        # lesen ``arbeitsliste``), nur die Frage ist eine andere: "wer darf
+        # heute noch kommentieren?"
+        ziel_gruppe = kampagne.naechste_kommentargruppe
+        if ziel_gruppe is None:
+            return None
 
-    # Was die Gruppe nicht erlaubt, gilt hier wie eine aufgegebene Fassung:
-    # uebersprungen statt versucht. Ein Kommentar mit Link in einer Gruppe,
-    # die Links ablehnt, scheitert nicht zufaellig, sondern immer - und der
-    # Fehlschlag stuende hinterher als Urteil ueber die Gruppe da.
-    verboten = {
-        n
-        for n in range(1, gruppe.ziel + 1)
-        if not gruppe.erlaubt(Texttyp.KOMMENTAR, n)
-    }
-    nummer = naechste_nummer(
-        set(range(1, gruppe.veroeffentlicht + 1)),
-        set(gruppe.gescheiterte_fassungen) | verboten,
+        # Was die Gruppe nicht erlaubt, gilt hier wie eine aufgegebene
+        # Fassung: uebersprungen statt versucht. Ein Kommentar mit Link in
+        # einer Gruppe, die Links ablehnt, scheitert nicht zufaellig, sondern
+        # immer - und der Fehlschlag stuende hinterher als Urteil ueber die
+        # Gruppe da.
+        verboten = {
+            n
+            for n in range(1, ziel_gruppe.ziel + 1)
+            if not ziel_gruppe.erlaubt(Texttyp.KOMMENTAR, n)
+        }
+        nummer = naechste_nummer(
+            set(range(1, ziel_gruppe.veroeffentlicht + 1)),
+            set(ziel_gruppe.gescheiterte_fassungen) | verboten,
+        )
+        if nummer is None:
+            # Alle Fassungen sind heraus oder aufgegeben, die Gruppe gilt
+            # aber noch nicht als fertig: Dann ist sie erschoepft, und der
+            # Treiber traegt das ein. Ein Schritt waere hier eine
+            # Endlosschleife.
+            return None
+        return Schritt(
+            campaign_id=kampagne.campaign_id,
+            group_id=ziel_gruppe.group_id,
+            nummer=nummer,
+            texttyp=Texttyp.KOMMENTAR,
+            gruppe_name=ziel_gruppe.name,
+            kommentar_nr=ziel_gruppe.veroeffentlicht + 1,
+            kommentar_ziel=ziel_gruppe.ziel,
+        )
+
+    # **Welcher von beiden zuerst** (21.09.2026). Die Vorgabe ist der Beitrag
+    # (Regel vom 10.09.2026: Er ist der Anlass und steht in der Gruppe).
+    # ``automatik.kommentare_zuerst`` dreht es um - Anweisung des Nutzers:
+    # "Prioritaet Nr. 1 ist das Kommentieren, der Beitrag ist unwichtig."
+    #
+    # Umgedreht wird nur die **Reihenfolge**, nicht die Menge: Kommt gerade
+    # kein Kommentar zustande (Takt, Tagesmenge, keine Fassung mehr), geht
+    # der Beitrag hinaus. Ein Zweig, der nichts hergibt, ist kein Ende des
+    # Laufs - genau deshalb sind es zwei Kandidaten und keine zwei Ausgaenge.
+    kandidaten = (
+        (_kommentarschritt, _beitragsschritt)
+        if fortschritt.kommentare_zuerst
+        else (_beitragsschritt, _kommentarschritt)
     )
-    if nummer is None:
-        # Alle Fassungen sind heraus oder aufgegeben, die Gruppe gilt aber
-        # noch nicht als fertig: Dann ist sie erschoepft, und der Treiber
-        # traegt das ein. Ein Schritt waere hier eine Endlosschleife.
-        return None
+    for kandidat in kandidaten:
+        if (schritt := kandidat()) is not None:
+            return schritt
+    return None
 
-    return Schritt(
-        campaign_id=kampagne.campaign_id,
-        group_id=gruppe.group_id,
-        nummer=nummer,
-        gruppe_name=gruppe.name,
-        kommentar_nr=gruppe.veroeffentlicht + 1,
-        kommentar_ziel=gruppe.ziel,
-    )
 
 
 def gruppe_ist_erschoepft(gruppe: Gruppenfortschritt) -> bool:
@@ -1508,6 +1546,7 @@ def lies_fortschritt(
     regeln_pflicht: bool = True,
     heute_je_gruppe: dict | None = None,
     gruppenlimit: int = 0,
+    kommentare_zuerst: bool = False,
 ) -> Lauffortschritt:
     """Baut den ganzen Stand aus den vorhandenen Tabellen.
 
@@ -1641,6 +1680,7 @@ def lies_fortschritt(
         status=LaufStatus(kopf["status"]),
         kampagnen=kampagnen,
         aktionen=dict(aktionen or {}),
+        kommentare_zuerst=kommentare_zuerst,
     )
 
 

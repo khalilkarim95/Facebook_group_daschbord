@@ -1487,6 +1487,11 @@ Drei Ursachen lagen übereinander, und jede für sich hätte gereicht:
   رايح، طالع، جاي، راجع، واصل، بسافر …), die Gepäckwörter (وزن، مطار،
   حجز، رحلتي) und in `_PLATZ` die Formulierungen mit Besitz („معي وزن",
   „عندي كم كيلو", „ضايل وزن") und Ort („مجال بالشنطة", „مساحة بالحقيبة").
+  **Die Rückreise kam am selben Tag dazu** (عوده، عودة، رجعة، رجوع، عائد):
+  In „مين نازل على الشام" stand „عوده من حلب والشام الى المانيا بعد 3 ايام"
+  — eine Fahrt mit Strecke und Datum, die als `sonstiges` durchfiel. Der
+  Rückweg ist dieselbe Gelegenheit wie der Hinweg: Wer aus Syrien kommt,
+  kann von dort etwas mitbringen.
 - **Eine Kombination ist die Schranke, kein einzelnes Wort.**
   `_reise_mit_ziel` verlangt **Bewegung und Ziel** im selben Beitrag —
   nicht nebeneinander, denn geschrieben wird „نازلة من ألمانيا عالشام"
@@ -1541,6 +1546,42 @@ nichts.
 - Festgehalten in `tests/test_anlasspflicht.py` und
   `tests/test_reisewortschatz.py`; letzteres ist der Abnahmetest der zwölf
   Proben des Nutzers, neun davon müssen antworten, drei dürfen es nicht.
+
+### Der Kommentar vor dem Beitrag (21.09.2026)
+
+```
+Vorgabe                     Beitrag → 10 Kommentare → naechste Gruppe
+automatik.kommentare_zuerst 10 Kommentare → Beitrag → naechste Gruppe
+```
+
+Anweisung des Nutzers: *„Priorität Nr. 1 ist das Kommentieren, der Beitrag
+ist unwichtig."* Die Regel vom 10.09.2026 (erst der eigene Beitrag, er ist
+der Anlass) bleibt die **Vorgabe im Code** und wird in `settings.yaml`
+umgedreht — dieselbe Aufteilung wie bei `mitgliedschaft_pflicht`,
+`regeln_zuerst` und `anlass_pflicht`.
+
+- **Umgedreht wird die Reihenfolge, nicht die Menge.** `naechster_schritt`
+  hat dafür zwei **Kandidaten** (`_beitragsschritt`, `_kommentarschritt`)
+  statt zweier Ausgänge: Gibt der erste nichts her — Takt, Tagesmenge, keine
+  Fassung mehr —, wird der zweite gefragt. Vorher war „kein Kommentar
+  möglich" ein `return None` und damit das Ende für diese Gruppe; jetzt geht
+  in genau diesem Fall der Beitrag hinaus.
+- **Die Rangfolge der Gruppen bleibt unberührt** (Zielpriorität → Region →
+  Vorrang → Score). Der Schalter sagt nur, was *innerhalb* einer Gruppe
+  zuerst kommt.
+- Tests: `test_mit_kommentare_zuerst_steht_der_beitrag_hinten` (die Folge
+  **und** die Summe: zehn Kommentare, danach der Beitrag) neben dem
+  unveränderten Test für die Vorgabe. `_Konfig` im Test sagt seitdem selbst,
+  welche Reihenfolge es meint — ein Test der Vorgabe darf nicht davon
+  abhängen, was gerade in `settings.yaml` steht.
+
+**Die Ruhezeit steht seit demselben Tag auf 2 Minuten** (vorher 30,
+`automatik.ruhe_minuten`): *„2 Min reichen schon, die Gruppen müssen mehr
+leisten."* Der Preis ist ausgesprochen: Der Lauf sieht dieselbe Gruppenseite
+bis zu dreißigmal in der Stunde an, wenn dort nichts Passendes steht. Ein
+Seitenabruf ist keine Handlung in der Gruppe, und der Takt der Kommentare
+(`delays.comment`) bleibt davon unberührt — was steigt, ist allein die Zahl
+der Abrufe.
 
 ### Link-Modus: kein Link ist die Vorgabe (`entscheidung.Linkmodus`)
 
