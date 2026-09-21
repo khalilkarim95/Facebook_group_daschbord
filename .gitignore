@@ -23,6 +23,8 @@ data/runs/
 data/exports/
 data/backups/
 data/browser_state/
+# Die Sperre eines laufenden `campaign automatik` - Laufzeit, kein Code.
+data/*.lock
 data/*.sqlite
 data/*.sqlite-journal
 data/*.sqlite-wal
