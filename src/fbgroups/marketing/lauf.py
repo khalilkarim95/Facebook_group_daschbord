@@ -79,6 +79,7 @@ from fbgroups.marketing.zielgruppe import (
     RANG_REGION,
     Region,
     Zielprioritaet,
+    notenrang,
 )
 
 # Zehn Kommentare je Gruppe, aus fuenf Vorlagen. Die beiden Zahlen sind
@@ -336,6 +337,20 @@ class Gruppenfortschritt:
     heute_in_gruppe: int = 0
     """Wie viele Versuche heute schon in **dieser** Gruppe standen."""
 
+    note: str = ""
+    """Die gepflegte Note der Mitgliederliste ("A++" bis "B") - oder leer.
+
+    **Sie geht der gerechneten Klasse vor** (21.09.2026). Ein Mensch hat die
+    Gruppe angesehen und eingestuft; die Klasse wird aus Name, Kategorie,
+    Zielgruppe und Stadt erschlossen. Wo beides vorliegt, gilt die Note - fuer
+    die Reihenfolge (``arbeitsliste``), fuer die Frage, ob hier ueberhaupt
+    gearbeitet wird (``bearbeitbar``), und fuer die Schwelle je Beitrag
+    (``automatik.anspruch_fuer``).
+
+    Leer heisst **nicht eingestuft** und ist kein schlechtes Urteil: Dann
+    entscheidet wie bisher die Klasse.
+    """
+
     bearbeitbare_klassen: frozenset[Zielprioritaet] = BEARBEITBAR
     """In welchen Zielklassen ueberhaupt gearbeitet wird.
 
@@ -504,7 +519,12 @@ class Gruppenfortschritt:
         versuchen kostet einen Versuch aus einem Konto, an dem alles haengt.
         """
         return (
-            self.zielprioritaet in self.bearbeitbare_klassen
+            # **Eine benotete Gruppe wird immer bearbeitet.** Sie steht auf
+            # einer Liste, die ein Mensch von Hand gefuehrt hat; ihn mit
+            # "kein erkennbarer Bezug" zu ueberstimmen - einem Schluss aus
+            # einem Gruppennamen - waere genau die Verwechslung, an der neun
+            # von dreizehn Gruppen nie besucht wurden.
+            (bool(self.note) or self.zielprioritaet in self.bearbeitbare_klassen)
             # **Die Tagesmenge je Gruppe gilt dem Kommentar, nicht der
             # Gruppe** (15.09.2026). Sie kommt aus
             # ``limits.comments.je_gruppe_taeglich`` und wird aus den
@@ -696,7 +716,12 @@ class Kampagnenfortschritt:
         zu vermissen.
         """
         return sum(
-            1 for g in self.gruppen if g.zielprioritaet not in g.bearbeitbare_klassen
+            1
+            for g in self.gruppen
+            # Die Note hebt den Ausschluss auf - also zaehlt hier nur, wer
+            # wirklich draussen bleibt. Sonst meldete die Zeile Gruppen als
+            # uebergangen, an denen der Lauf gerade arbeitet.
+            if not g.note and g.zielprioritaet not in g.bearbeitbare_klassen
         )
 
     @property
@@ -833,7 +858,17 @@ class Kampagnenfortschritt:
         """
         return sorted(
             self.gruppen,
-            key=lambda g: (RANG[g.zielprioritaet], RANG_REGION[g.zielregion], g.vorrang),
+            key=lambda g: (
+                # **Stufe 0: die gepflegte Note** (21.09.2026). A++ zuerst,
+                # B zuletzt, ohne Note dahinter. Sie steht vor der
+                # gerechneten Klasse, weil sie von einem Menschen stammt -
+                # und sie ordnet den ganzen Bestand, wo die Klasse mangels
+                # gepflegter Kategorie fast ueberall dasselbe sagte.
+                notenrang(g.note),
+                RANG[g.zielprioritaet],
+                RANG_REGION[g.zielregion],
+                g.vorrang,
+            ),
         )
 
     @property
@@ -1861,6 +1896,7 @@ def _lies_kampagne(
             heute_in_gruppe=int(heute_je_gruppe.get(gid, 0)),
             gruppenlimit=gruppenlimit,
             bearbeitbare_klassen=klassen,
+            note=(gruppen[gid].listenprioritaet or "") if gid in gruppen else "",
             **_urteil(
                 gid in ist_mitglied,
                 gid in angefragt,

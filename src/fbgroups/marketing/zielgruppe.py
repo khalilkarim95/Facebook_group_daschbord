@@ -616,6 +616,54 @@ def anspruch_aus_config(config) -> dict:  # noqa: ANN001 - AppConfig
     return tabelle
 
 
+#: Die Noten der Mitgliederliste in ihrer Rangfolge. Sie steht hier und nicht
+#: in ``models``, weil sie eine **Reihenfolge der Arbeit** ist und keine
+#: Eigenschaft der Gruppe: A++ zuerst, B zuletzt. Eine Gruppe ohne Note
+#: bekommt den Rang dahinter - nicht weil sie schlecht waere, sondern weil
+#: niemand sie angesehen hat.
+NOTENRANG: dict[str, int] = {"A++": 0, "A+": 1, "A": 2, "B+": 3, "B": 4}
+
+#: Der Rang einer Gruppe ohne Note.
+OHNE_NOTE: int = len(NOTENRANG)
+
+
+def notenrang(note: str | None) -> int:
+    """Rang der gepflegten Note - ohne Note der Platz dahinter."""
+    return NOTENRANG.get((note or "").strip().upper(), OHNE_NOTE)
+
+
+def anspruch_aus_note(config) -> dict:  # noqa: ANN001 - AppConfig
+    """Je **gepflegter Note**: was ein Beitrag dort hergeben muss.
+
+    Zurueck kommt ``{"A++": (Relevanz, verlangt_strecke), ...}``.
+
+    **Die gepflegte Note geht der gerechneten Klasse vor** (21.09.2026), und
+    das ist dieselbe Regel wie ueberall in diesem Projekt: Handarbeit schlaegt
+    Worterkennung. Ein Mensch hat die Gruppe angesehen und "A++" hingeschrieben
+    - das ist eine bessere Auskunft, als aus einem Gruppennamen zu erschliessen,
+    worum es dort geht. Die Klassentabelle (``anspruch_aus_config``) gilt
+    weiter, aber nur noch fuer Gruppen **ohne** Note.
+
+    Leer heisst: Es gibt keine solche Zuordnung, und dann entscheidet wie
+    bisher allein die Klasse. Der Code erfindet keine Vorgabe - eine geratene
+    Schwelle je Note waere genau das, was diese Aenderung abschafft.
+    """
+    from fbgroups.marketing.inhalt import Relevanz
+
+    block = config.get("marketing", "zielprioritaet", default={}) or {}
+    roh = block.get("mindestrelevanz_note") or {}
+    strecke = bool(block.get("note_verlangt_strecke", False))
+
+    tabelle: dict[str, tuple[Relevanz, bool]] = {}
+    for note, wert in roh.items():
+        try:
+            stufe = Relevanz(str(wert).strip().lower())
+        except ValueError:
+            continue
+        tabelle[str(note).strip().upper()] = (stufe, strecke)
+    return tabelle
+
+
 def bearbeitbare_klassen(config) -> frozenset[Zielprioritaet]:  # noqa: ANN001
     """In welchen Klassen ueberhaupt gearbeitet wird - aus derselben Tabelle.
 

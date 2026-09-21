@@ -1762,6 +1762,10 @@ TRACKING_LINK   mit {link}              → direct_app_recommendation
 
 ### Was ein Beitrag hergeben muss, hängt am Ort (`entscheidung.Anspruch`)
 
+**Seit dem 21.09.2026 gilt diese Tabelle nur noch für Gruppen ohne gepflegte
+Note.** Steht eine da, entscheidet sie — siehe „Die gepflegte Note
+entscheidet, nicht die gerechnete Klasse".
+
 | Klasse | Mindestrelevanz | zusätzlich          |
 |--------|-----------------|---------------------|
 | `A`    | `mittel`        | –                   |
@@ -2666,6 +2670,62 @@ gehen, bis jede ihre zehn Kommentare hat, und niemals aufhören.
 - Festgehalten in `tests/test_ruhezeit.py`; die beiden Treibertests zeigen
   den Unterschied im Betrieb: Mit „kein Anlass" kommt die erste Gruppe ein
   zweites Mal dran, mit „kein Kommentarfeld" nicht.
+
+### Die gepflegte Note entscheidet, nicht die gerechnete Klasse (21.09.2026)
+
+```
+Mitgliederliste   rating: A++            →  groups.listenprioritaet
+        ▼
+Schwelle          A++ A+ A → mittel      ·  B+ B → hoch   (ohne Strecke)
+Bearbeitung       benotet  → immer       ·  ohne Note → wie bisher die Klasse
+Reihenfolge       A++ → A+ → A → B+ → B  →  danach die Gruppen ohne Note
+```
+
+Die Note stand längst in der Tabelle — `rating` in der Mitgliederliste, für
+fast jede Zeile `A++`. Entschieden hat trotzdem die **erschlossene** Klasse
+(A–D aus Name, Kategorie, Zielgruppe, Stadt), und weil dieselbe Liste in
+`category` durchgehend „Unbekannt" trägt, war das fast überall
+`C: hoch + Strecke` — die Schwelle, an der im Betrieb jeder Kommentar
+scheiterte. Ein Urteil eines Menschen lag vor und wurde von einer
+Worterkennung überstimmt.
+
+- **Note vor Klasse, wie überall in diesem Projekt.** Dieselbe Rangfolge wie
+  zwischen gepflegter Kategorie und `kategoriebegriffe`, zwischen
+  `review_status` und jedem Reimport, zwischen `ValidationStatus.UNREACHABLE`
+  und jedem Suchtreffer: Was ein Mensch hingeschrieben hat, wird nicht von
+  einer Ableitung zurückgenommen.
+- **Drei Dinge hängen daran, und alle drei lesen dieselbe Note.** Die
+  Schwelle je Beitrag (`automatik.anspruch_fuer`), die Frage, ob hier
+  überhaupt gearbeitet wird (`Gruppenfortschritt.bearbeitbar` — eine benotete
+  Gruppe immer), und die Reihenfolge (`arbeitsliste` sortiert **zuerst** nach
+  `zielgruppe.notenrang`). Drei Stellen mit je eigener Rechnung wären drei
+  Wahrheiten über dieselbe Gruppe.
+- **Die ausgeschriebene Strecke wird bei keiner Note verlangt.** Genau diese
+  Zusatzforderung hat im Betrieb alles blockiert, und sie ist der Ersatz für
+  ein Urteil, das hier vorliegt: Sie prüft, ob ein einzelner Beitrag den
+  Zusammenhang selbst mitbringt — in einer Gruppe, die jemand als `A++`
+  eingestuft hat, ist der Zusammenhang die Gruppe.
+- **Die Tabelle steht in `settings.yaml`** (`mindestrelevanz_note`), die
+  Klassentabelle daneben gilt weiter für Gruppen **ohne** Note. Fehlt die
+  Notentabelle, ändert sich nichts: Der Code erfindet keine Schwelle je Note —
+  eine geratene wäre genau das, was diese Änderung abschafft. Eine Note, die
+  `Relevanz` nicht kennt, wird übergangen statt geraten.
+- **Die Note wird gelesen, nie geschrieben.** Sie ist Handarbeit und kommt
+  ausschließlich aus `import-mitglieder`; `upsert_groups` schützt sie mit
+  `COALESCE`.
+
+**Drei Spalten sind aus der Übersicht verschwunden** — Stadt, Zielgruppe,
+Kategorie. Sie waren in **jeder** Zeile leer, und das ist kein Zufall,
+sondern die Folge einer Entscheidung: Der einzige Weg in den Bestand ist die
+Mitgliederliste, und die trägt in `category` „Unbekannt", in `city` ein
+Reiseziel (wird bewusst verworfen) und keinerlei Zielgruppe. Drei Spalten
+Breite für einen Gedankenstrich, dazu drei Filter, die nichts filtern. Die
+**Daten** sind unberührt und wirken weiter in Score und Zielklasse; wer die
+Felder eines Tages pflegt, holt Spalte und Filter mit einer Zeile zurück. An
+ihrer Stelle steht die Spalte „Priorität": die Note, darunter die
+Aktivitätsstufe.
+
+Festgehalten in `tests/test_note_vor_klasse.py`.
 
 ### Warum nur 4 von 13 Gruppen besucht wurden (21.09.2026)
 

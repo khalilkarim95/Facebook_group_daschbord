@@ -286,6 +286,12 @@ def _gruppe_als_zeile(
         # Leer heisst **nicht eingestuft** - und genau das soll man filtern
         # koennen, sonst bleibt die Luecke unsichtbar.
         "prioritaet": group.listenprioritaet or "",
+        # Zum Sortieren: A++ ist 0, B ist 4, ohne Note 5. Alphabetisch stuende
+        # "A" vor "A+" vor "A++" - genau verkehrt herum, und eine Spalte, die
+        # die Arbeitsreihenfolge zeigt, muss sie auch sortieren koennen.
+        # Dieselbe Rangfolge wie in ``lauf.arbeitsliste`` (``notenrang``) -
+        # zwei Reihenfolgen fuer dieselbe Frage waeren zwei Wahrheiten.
+        "notenrang": zielgruppe.notenrang(group.listenprioritaet),
         "aktivitaetsstufe": group.aktivitaetsstufe or "",
         "aktivitaetsstufe_label": AKTIVITAET_LABEL.get(
             group.aktivitaetsstufe or "", group.aktivitaetsstufe or ""
@@ -1295,9 +1301,15 @@ So bleiben zwei Auswertungen vergleichbar.">Anteil</th><th></th>
 </div>
 
 <div class="filter">
-  <select id="f-stadt"><option value="">Alle Städte</option></select>
-  <select id="f-zielgruppe"><option value="">Alle Zielgruppen</option></select>
-  <select id="f-kategorie"><option value="">Alle Kategorien</option></select>
+  <!-- Stadt, Zielgruppe und Kategorie standen hier bis zum 21.09.2026 und
+       sind mit ihren Spalten entfallen: Der einzige Weg in den Bestand ist
+       die Mitgliederliste, und die traegt in `category` "Unbekannt", in
+       `city` ein Reiseziel (wird verworfen) und keinerlei Zielgruppe. Alle
+       drei waren also in jeder der 17 Zeilen leer - drei Filter, die nichts
+       filtern, und drei Spalten Breite fuer einen Gedankenstrich. Wer die
+       Felder eines Tages pflegt, holt Spalte und Filter mit einer Zeile
+       zurueck; die Daten selbst sind unberuehrt und wirken weiter in Score
+       und Zielklasse. -->
   <select id="f-zielprio"
           title="Gehoert die Gruppe zum Zielmarkt? A wird zuerst bearbeitet, D gar nicht.">
     <option value="">Jede Zielklasse</option>
@@ -1402,14 +1414,13 @@ genau die Liste, die noch zu beurteilen ist.">
     <th class="auswahl"><input type="checkbox" id="alle" title="Alle sichtbaren auswählen"></th>
     <th class="zahl" data-sort="score">Score</th>
     <th data-sort="name">Gruppe</th>
-    <th data-sort="stadt">Stadt</th>
-    <th data-sort="zielgruppen">Zielgruppe</th>
-    <th data-sort="kategorie">Kategorie</th>
-    <th data-sort="prioritaet"
+    <th data-sort="notenrang"
         title="Die Note aus der Mitgliederliste (A++ bis B) und darunter die
-Aktivitaetsstufe. Beides hat ein Mensch vergeben; gerechnet wird daran nichts,
-und in den Score geht es nicht ein. Leer heisst: noch nicht
-eingestuft.">Priorität</th>
+Aktivitaetsstufe - beides von Hand vergeben. Sie entscheidet seit dem
+21.09.2026, wie viel ein Beitrag in dieser Gruppe hergeben muss (A-Noten:
+mittel, B-Noten: hoch) und in welcher Reihenfolge gearbeitet wird. In den
+Score geht sie nicht ein. Leer heisst: noch nicht eingestuft - dann
+entscheidet die gerechnete Zielklasse daneben.">Priorität</th>
     <th data-sort="zielprioritaet"
         title="Gehoert diese Gruppe zum Zielmarkt? A = Reise und Versand nach
 Syrien, B = syrische/arabische Gemeinschaft in Deutschland, C = allgemein,
@@ -1600,7 +1611,7 @@ let seite = 1, proSeite = 25;
 // Sitzung. Wer das Fenster morgen neu oeffnet, will die Uebersicht sehen und
 // nicht den Filter von gestern.
 const MERKER = "fbgroups-uebersicht";
-const MERK_FELDER = ["f-stadt", "f-zielgruppe", "f-kategorie", "f-marketing",
+const MERK_FELDER = ["f-marketing",
                      "f-zielprio", "f-zielregion", "f-beitrag", "f-suche", "f-mitglieder",
                      "f-aktivitaet", "f-konfidenz", "f-note", "f-stufe"];
 const MERK_SCHALTER = ["f-bewertet", "f-bearbeitet"];
@@ -1671,17 +1682,11 @@ function fuelleAuswahl(id, werte) {{
   [...new Set(werte.filter(Boolean))].sort((a, b) => a.localeCompare(b, "de"))
     .forEach((w) => el.add(new Option(w, w)));
 }}
-fuelleAuswahl("f-stadt", zeilen.map((z) => z.stadt));
-fuelleAuswahl("f-zielgruppe", zeilen.flatMap((z) => z.zielgruppen));
-fuelleAuswahl("f-kategorie", zeilen.map((z) => z.kategorie));
 fuelleAuswahl("f-marketing", zeilen.map((z) => z.marketing_label));
 fuelleAuswahl("f-qualifikation", zeilen.map((z) => z.qualifikation_label));
 fuelleSammelKampagnen();
 
 function gefiltert() {{
-  const stadt = document.getElementById("f-stadt").value;
-  const ziel = document.getElementById("f-zielgruppe").value;
-  const kat = document.getElementById("f-kategorie").value;
   const stand = document.getElementById("f-marketing").value;
   const qual = document.getElementById("f-qualifikation").value;
   const zielprio = document.getElementById("f-zielprio").value;
@@ -1749,9 +1754,6 @@ function gefiltert() {{
     passtMitglieder(z) &&
     passtAktivitaet(z) &&
     passtKonfidenz(z) &&
-    (!stadt || z.stadt === stadt) &&
-    (!ziel || z.zielgruppen.includes(ziel)) &&
-    (!kat || z.kategorie === kat) &&
     (!stand || z.marketing_label === stand) &&
     (!qual || z.qualifikation_label === qual) &&
     (!zielprio || z.zielprioritaet === zielprio) &&
@@ -1781,7 +1783,6 @@ function sortiert(liste) {{
 // verschwunden. Die Zeile nennt deshalb den Grund und bietet den Weg zurueck.
 function aktiveFilter() {{
   const felder = [
-    ["f-stadt", "Stadt"], ["f-zielgruppe", "Zielgruppe"], ["f-kategorie", "Kategorie"],
     ["f-zielprio", "Ziel"], ["f-zielregion", "Land"], ["f-marketing", "Stand"],
     ["f-qualifikation", "Darf"], ["f-beitrag", "Beitrag"], ["f-mitglieder", "Groesse"],
     ["f-aktivitaet", "Aktivitaet"], ["f-konfidenz", "Datenqualitaet"],
@@ -1803,7 +1804,7 @@ function aktiveFilter() {{
 }}
 
 function filterZuruecksetzen() {{
-  for (const id of ["f-stadt", "f-zielgruppe", "f-kategorie", "f-zielprio",
+  for (const id of ["f-zielprio",
                     "f-zielregion", "f-marketing", "f-qualifikation", "f-beitrag",
                     "f-mitglieder", "f-aktivitaet", "f-konfidenz",
                     "f-note", "f-stufe"]) {{
@@ -1857,7 +1858,7 @@ function zeichne() {{
   zeichneBlaetterleiste(alle.length, seiten);
 
   document.getElementById("zeilen").innerHTML = alle.length === 0
-    ? "<tr><td colspan='16' class='leer'>Keine Gruppe passt zu diesem Filter.</td></tr>"
+    ? "<tr><td colspan='15' class='leer'>Keine Gruppe passt zu diesem Filter.</td></tr>"
     : liste.map((z) => {{
         const klasse = z.score === null ? "keine" : z.score >= 90 ? "hoch"
                      : z.score >= 70 ? "mittel" : "";
@@ -1879,9 +1880,6 @@ function zeichne() {{
             <a href="${{esc(z.url)}}" target="_blank"
                rel="noopener noreferrer">${{esc(z.name)}}</a>${{codes}}${{ausGrund}}
           </td>
-          <td>${{esc(z.stadt) || "–"}}</td>
-          <td>${{esc(z.zielgruppen.join(", ")) || "–"}}</td>
-          <td>${{esc(z.kategorie) || "–"}}</td>
           <td>${{noteZelle(z)}}</td>
           <td>${{zielZelle(z)}}</td>
           <td class="kampagnen-zelle">${{kampagnenZelle(z)}}</td>

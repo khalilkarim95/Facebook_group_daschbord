@@ -372,6 +372,32 @@ marketing:
     #
     # Wer es wieder abstellen will, loescht die Zeile "d:" - ohne sie gilt
     # die Vorgabe des Codes, und die kennt D nicht.
+    # --- Die GEPFLEGTE Note geht der gerechneten Klasse vor (21.09.2026) --
+    #
+    # Die Mitgliederliste traegt je Gruppe eine Note: A++, A+, A, B+, B. Ein
+    # Mensch hat die Gruppe angesehen und sie eingestuft - das ist eine
+    # bessere Auskunft als jede Worterkennung an einem Namen. Steht sie da,
+    # entscheidet SIE, wie viel ein Beitrag hergeben muss; die Tabelle
+    # darunter (a/b/c/d) gilt dann nur noch fuer Gruppen ohne Note.
+    #
+    # A-Noten sind der Zielmarkt: dort genuegt "mittel". B-Noten sind die
+    # Randgruppen: dort ist "hoch" noetig. Die ausgeschriebene Strecke wird
+    # bei keiner Note verlangt - genau diese Zusatzforderung war es, die im
+    # Betrieb jeden Kommentar verhindert hat, und sie ergibt keinen Sinn, wo
+    # ein Mensch die Gruppe bereits beurteilt hat.
+    #
+    # Eine Gruppe MIT Note wird immer bearbeitet: Sie steht auf einer Liste,
+    # die jemand von Hand gefuehrt hat. Die Klasse D schliesst nur noch
+    # Gruppen ohne Note aus.
+    mindestrelevanz_note:
+      "A++": mittel
+      "A+": mittel
+      "A": mittel
+      "B+": hoch
+      "B": hoch
+
+    # Fuer Gruppen OHNE Note - die gerechnete Klasse aus Name, Kategorie,
+    # Zielgruppe und Stadt.
     mindestrelevanz:
       a: mittel
       b: hoch

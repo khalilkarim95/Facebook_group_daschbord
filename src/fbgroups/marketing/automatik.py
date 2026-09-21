@@ -1480,6 +1480,12 @@ def anspruch_fuer(config: AppConfig, group_id: str):  # noqa: ANN201
     Eine Gruppe, die es im Bestand nicht gibt, bekommt die Vorgabe - nicht
     den strengsten Wert: Eine fehlende Angabe ist kein Urteil, und der
     strengste Wert waere hier eines.
+
+    **Gefragt wird zuerst die gepflegte Note** ("A++" bis "B" aus der
+    Mitgliederliste), danach erst die gerechnete Klasse. Wer die Gruppe
+    angesehen und eingestuft hat, weiss mehr als jede Worterkennung an einem
+    Namen - dieselbe Rangfolge wie zwischen gepflegter Kategorie und
+    ``kategoriebegriffe``.
     """
     from fbgroups.models import Group  # noqa: F401 - nur fuer die Typangabe im Kopf
 
@@ -1491,6 +1497,19 @@ def anspruch_fuer(config: AppConfig, group_id: str):  # noqa: ANN201
     pflicht = anlass_pflicht(config)
     if gruppe is None:
         return entscheidung_modul.Anspruch(anlass_pflicht=pflicht)
+
+    # **Die gepflegte Note geht vor** (21.09.2026). Sie steht am Datensatz,
+    # weil ein Mensch die Gruppe angesehen hat; die Klasse wird aus Namen und
+    # Feldern erschlossen. Bis hierhin entschied die erschlossene Klasse auch
+    # dort, wo eine Note dastand - und weil die Mitgliederliste keine
+    # Kategorie mitbringt, war das fast immer "C: hoch + Strecke", also die
+    # Schwelle, die im Betrieb jeden Kommentar verhindert hat.
+    noten = zielgruppe.anspruch_aus_note(config)
+    if (aus_note := noten.get((gruppe.listenprioritaet or "").strip().upper())) is not None:
+        relevanz, strecke = aus_note
+        return entscheidung_modul.Anspruch(
+            mindestrelevanz=relevanz, verlangt_strecke=strecke, anlass_pflicht=pflicht
+        )
 
     befund = zielgruppe.aus_group(gruppe, zielgruppe.regeln_aus_config(config))
     tabelle = zielgruppe.anspruch_aus_config(config)
