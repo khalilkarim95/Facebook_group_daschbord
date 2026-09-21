@@ -284,9 +284,19 @@ def post_to_group(
             create_post_trigger.wait_for(state="visible", timeout=10000)
             create_post_trigger.click(delay=random.randint(100, 300))
         except PlaywrightTimeoutError:
+            # Die Frage aus der Meldung selbst beantworten, statt sie zu
+            # stellen: "Bist du angemeldet?" stand hier seit jeher im
+            # Klartext - und blieb folgenlos, weil der Ausgang derselbe war
+            # wie bei einer gesperrten Gruppe. Jetzt entscheidet sie, ob die
+            # Gruppe einen Vermerk bekommt oder der Lauf anhaelt.
+            if hinweis := _seitenhinweis(page, ANMELDEWAND):
+                console.print(f"[red]Nicht bei Facebook angemeldet: {hinweis}[/red]")
+                return Beitragsausgang(
+                    erfolg=False, hinweis=f"{NICHT_ANGEMELDET}: {hinweis}"
+                )
             console.print(
                 "[red]Could not find the 'Write something' button. "
-                "Are you logged in and a member of the group?[/red]"
+                "Are you a member of the group?[/red]"
             )
             return Beitragsausgang(
                 erfolg=False, hinweis="Beitragsformular nicht gefunden oder blockiert"
@@ -436,6 +446,35 @@ BEITRAG_WEG = (
 )
 
 
+#: Woran die **Anmeldewand** zu erkennen ist - Facebook zeigt sie jeder
+#: Sitzung, die nicht angemeldet ist.
+#:
+#: **Sie sagt nichts ueber die Gruppe, sondern alles ueber uns**, und genau
+#: darin lag die Gefahr: Ohne diese Erkennung endete sie als "Kommentarfeld
+#: nicht gefunden" bzw. "Beitragsformular nicht gefunden" - also als
+#: technischer Fehlschlag, und der nimmt seit dem 20.09.2026 die Gruppe aus
+#: der Kampagne. Ein abgemeldeter Browser haette damit eine Kampagne nach der
+#: anderen leergeraeumt, Gruppe fuer Gruppe, ohne dass an einer einzigen
+#: etwas gewesen waere.
+#:
+#: Der Text beginnt mit "nicht angemeldet", und das ist kein Schmuck:
+#: ``automatik.ist_sitzungsfehler`` erkennt ihn daran und haelt den Lauf
+#: **sofort** an - dieselbe Behandlung wie bei einem geschlossenen
+#: Browserfenster. Dort hilft keine naechste Gruppe.
+ANMELDEWAND = (
+    "log in to facebook", "log into facebook", "you must log in",
+    "bei facebook anmelden", "in facebook einloggen", "du musst dich anmelden",
+    "passwort vergessen", "forgot password", "forgotten password",
+    "create new account", "neues konto erstellen",
+    "تسجيل الدخول إلى فيسبوك", "تسجيل الدخول الى فيسبوك",
+    "إنشاء حساب جديد", "نسيت كلمة السر", "نسيت كلمة المرور",
+)
+
+#: Der Vorspann jeder Meldung ueber eine Anmeldewand. Er ist die Schnittstelle
+#: zu ``automatik._SITZUNG`` - wer ihn aendert, muss dort nachsehen.
+NICHT_ANGEMELDET = "nicht angemeldet"
+
+
 @dataclass(frozen=True)
 class Kommentarausgang:
     """Was aus einem abgeschickten Kommentar geworden ist.
@@ -487,6 +526,38 @@ def _seitenhinweis(page, muster: tuple[str, ...]) -> str:
     return ""
 
 
+def ist_angemeldet(context: BrowserContext) -> tuple[bool, str]:
+    """Ist diese Browsersitzung bei Facebook angemeldet? Returns: ``(ja, Hinweis)``.
+
+    **Die Frage vor dem Lauf** (21.09.2026). Sie kostet einen Seitenabruf und
+    beantwortet die einzige Vorbedingung, ohne die nichts von dem funktioniert,
+    was danach kommt: Eine abgemeldete Sitzung findet kein Kommentarfeld und
+    kein Beitragsformular - in **jeder** Gruppe. Jeder dieser Fehlschlaege
+    gilt als technisch, und ein technischer Fehlschlag nimmt die Gruppe aus
+    der Kampagne. Ohne diese Pruefung raeumte ein abgelaufener Anmeldestand
+    eine Kampagne leer, und im Protokoll staende an jeder Gruppe ein Grund,
+    an dem nichts liegt.
+
+    Gefragt wird die Startseite und nicht eine Gruppe: Eine Gruppenseite kann
+    aus vielen Gruenden nicht laden, die Startseite nur aus einem.
+
+    Bei einem Abruffehler gilt **nicht** "abgemeldet": Ein Netzfehler ist kein
+    Beleg fuer eine abgelaufene Sitzung - dieselbe Zurueckhaltung wie bei
+    ``merke_regeln``, das aus einer ungelesenen Seite keine Regel macht.
+    """
+    page = context.new_page()
+    try:
+        page.goto("https://www.facebook.com/", wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(1500)
+        if hinweis := _seitenhinweis(page, ANMELDEWAND):
+            return False, f"{NICHT_ANGEMELDET}: {hinweis}"
+        return True, ""
+    except Exception as exc:  # noqa: BLE001 - ein Netzfehler ist kein Urteil
+        return True, str(exc).splitlines()[0][:120]
+    finally:
+        page.close()
+
+
 def comment_on_post(context: BrowserContext, post_url: str, text: str) -> Kommentarausgang:
     """Automates commenting on a specific Facebook post.
 
@@ -523,6 +594,15 @@ def comment_on_post(context: BrowserContext, post_url: str, text: str) -> Kommen
         # Scroll down a bit more to ensure comment box is loaded
         page.evaluate("window.scrollBy(0, 500)")
         page.wait_for_timeout(random.randint(1000, 2000))
+
+        # **Noch davor: Sind wir ueberhaupt angemeldet?** Die Anmeldewand
+        # steht vor jeder Adresse und sagt nichts ueber diese eine aus. Als
+        # "kein Kommentarfeld" gelesen waere sie ein technischer Fehlschlag,
+        # und der nimmt die Gruppe aus der Kampagne - fuer etwas, das an uns
+        # liegt und in der naechsten Gruppe genauso waere.
+        if hinweis := _seitenhinweis(page, ANMELDEWAND):
+            console.print(f"[red]Nicht bei Facebook angemeldet: {hinweis}[/red]")
+            return Kommentarausgang(False, hinweis=f"{NICHT_ANGEMELDET}: {hinweis}")
 
         # **Zuerst: Gibt es den Beitrag ueberhaupt noch?** Sonst endet ein
         # geloeschter Beitrag als "Kommentarfeld nicht gefunden" - eine

@@ -1863,10 +1863,15 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                             automatik.ruhe_minuten(cfg) if meldung.beitrag_weg else 0
                         ),
                     )
-                # **Nicht bei einer toten Adresse.** Dieselbe Bedingung wie
-                # oertlich: Was fehlt, ist ein Beitrag, den es nicht mehr
-                # gibt - die Gruppe kann voellig in Ordnung sein.
-                if not meldung.beitrag_weg:
+                # **Nicht bei einer toten Adresse und nicht bei einer
+                # Anmeldewand.** Dieselbe Bedingung wie oertlich: Das eine
+                # ist ein Beitrag, den es nicht mehr gibt, das andere unsere
+                # eigene Sitzung - die Gruppe kann in beiden Faellen voellig
+                # in Ordnung sein. Eine abgemeldete Sitzung haette sonst eine
+                # Kampagne Gruppe fuer Gruppe leergeraeumt.
+                if not meldung.beitrag_weg and not automatik.ist_sitzungsfehler(
+                    meldung.fehler
+                ):
                     store.schliesse_gruppe_aus(
                         meldung.group_id, f"automatisch: {meldung.fehler}"
                     )

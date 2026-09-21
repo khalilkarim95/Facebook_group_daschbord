@@ -1508,6 +1508,42 @@ def campaign_watchdog(
                       "[dim]Ein laufender campaign automatik laeuft weiter.[/dim]")
 
 
+#: Was auf dem Schirm steht, wenn die Sitzung nicht angemeldet ist.
+#:
+#: Der Weg zurueck steht **im Text**, nicht in der Dokumentation: Wer das
+#: hier liest, hat gerade einen Lauf starten wollen.
+NICHT_ANGEMELDET_TEXT = (
+    "Diese Browsersitzung ist bei Facebook nicht angemeldet.\n\n"
+    "Es wurde nichts versucht und nichts vermerkt - eine abgemeldete Sitzung\n"
+    "findet in jeder Gruppe kein Kommentarfeld, und jeder dieser Fehlschlaege\n"
+    "gilt als technisch. Technische Fehlschlaege nehmen die Gruppe aus der\n"
+    "Kampagne; ein Lauf ohne Anmeldung haette sie also leergeraeumt.\n\n"
+    "Anmelden mit:  fbgroups auth login\n"
+    "Die Sitzung bleibt danach im Browserprofil (data/browser_state) stehen."
+)
+
+
+def _sitzung_pruefen(context) -> None:  # noqa: ANN001 - BrowserContext
+    """Vor dem Lauf einmal nachsehen - und sonst gar nicht erst anfangen.
+
+    Ein Seitenabruf gegen die Startseite. Er beantwortet die einzige
+    Vorbedingung, ohne die nichts funktioniert, was danach kommt, und er tut
+    es **bevor** die erste Gruppe angefasst wird.
+    """
+    from fbgroups.automation.actions import ist_angemeldet
+
+    angemeldet, hinweis = ist_angemeldet(context)
+    if angemeldet:
+        if hinweis:
+            # Kein Urteil, nur eine Auskunft: Die Startseite liess sich nicht
+            # lesen. Ein Netzfehler ist kein Beleg fuer eine abgelaufene
+            # Sitzung, also laeuft es weiter.
+            console.print(f"[dim]Anmeldung nicht pruefbar ({hinweis}) - es wird versucht.[/dim]")
+        return
+    console.print(Panel(NICHT_ANGEMELDET_TEXT, title="Keine Anmeldung", style="red"))
+    raise typer.Exit(code=2)
+
+
 @campaign_app.command("automatik")
 def campaign_automatik(
     dry_run: bool = typer.Option(False, "--dry-run", help="Nur zeigen, was liefe."),
@@ -1624,6 +1660,12 @@ def campaign_automatik(
             )
 
         with get_browser_context(config, headless=False) as context:
+            # **Die Anmeldung vor dem ersten Schritt** (21.09.2026). Sonst
+            # holt der Lauf seine Gruppe vom Server, findet kein
+            # Kommentarfeld, meldet einen technischen Fehlschlag - und der
+            # Server nimmt die Gruppe aus der Kampagne. Gruppe fuer Gruppe,
+            # bis keine mehr uebrig ist.
+            _sitzung_pruefen(context)
 
             def fern(
                 gruppen_url: str,
@@ -1865,6 +1907,9 @@ def campaign_automatik(
 
     # Ein Browser fuer den ganzen Lauf, nicht einer je Kommentar.
     with get_browser_context(config, headless=False) as context:
+        # Dieselbe Frage wie im Fernbetrieb, und aus demselben Grund: Eine
+        # abgemeldete Sitzung findet in jeder Gruppe kein Kommentarfeld.
+        _sitzung_pruefen(context)
 
         def schritt(
             gruppen_url: str,

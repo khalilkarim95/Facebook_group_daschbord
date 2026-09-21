@@ -1124,8 +1124,19 @@ def _text_schritt(
             # gibt. Sie dafuer auszuschliessen hiesse, die falsche Stelle zu
             # bestrafen - dieselbe Verwechslung wie "Technik ist kein
             # Urteil", nur eine Ebene tiefer.
-            if not ergebnis.beitrag_weg and store.schliesse_gruppe_aus(
-                schritt.group_id, f"automatisch: {ergebnis.fehler}"
+            # **Und nicht bei einem Sitzungsfehler** (21.09.2026). Eine
+            # abgemeldete Sitzung findet in **jeder** Gruppe kein
+            # Kommentarfeld; jeder dieser Fehlschlaege gilt als technisch,
+            # und technisch heisst hier: raus aus der Kampagne. Ein
+            # abgelaufener Anmeldestand haette so eine Kampagne nach der
+            # anderen leergeraeumt - mit einem Grund an jeder Gruppe, an dem
+            # nichts liegt. Der Lauf haelt stattdessen gleich darunter an.
+            if (
+                not ergebnis.beitrag_weg
+                and not ist_sitzungsfehler(ergebnis.fehler)
+                and store.schliesse_gruppe_aus(
+                    schritt.group_id, f"automatisch: {ergebnis.fehler}"
+                )
             ):
                 console.print(
                     f"[yellow]  {schritt.gruppe_name}: aus der Bearbeitung genommen "

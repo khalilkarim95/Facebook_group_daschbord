@@ -427,8 +427,11 @@ def test_der_fernbetrieb_meldet_beitrag_weg_mit() -> None:
 
     assert '"beitrag_weg": ergebnis.beitrag_weg,' in quelltext, "gemeldet"
     assert "beitrag_weg: bool = False" in web, "und angenommen"
-    endpunkt = web.split("def automatik_ergebnis(", 1)[1]
-    assert "if not meldung.beitrag_weg:" in endpunkt.split("@app.post", 1)[0], "und gelesen"
+    endpunkt = web.split("def automatik_ergebnis(", 1)[1].split("@app.post", 1)[0]
+    assert "not meldung.beitrag_weg" in endpunkt, "und gelesen"
+    assert "schliesse_gruppe_aus" in endpunkt.split("not meldung.beitrag_weg", 1)[1], (
+        "die Bedingung steht vor dem Ausschluss"
+    )
 
 
 def test_der_ausschluss_lieset_beitrag_weg() -> None:
@@ -441,7 +444,13 @@ def test_der_ausschluss_lieset_beitrag_weg() -> None:
 
     quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
 
-    assert "if not ergebnis.beitrag_weg and store.schliesse_gruppe_aus(" in quelltext
+    ausschluss = quelltext.split("if ergebnis.gruppe_beiseite:", 1)[1].split(
+        "store.schliesse_gruppe_aus(", 1
+    )[0]
+    assert "not ergebnis.beitrag_weg" in ausschluss
+    # Seit dem 21.09.2026 steht dieselbe Zurueckhaltung daneben: Eine
+    # Anmeldewand ist erst recht kein Urteil ueber die Gruppe.
+    assert "not ist_sitzungsfehler(ergebnis.fehler)" in ausschluss
     # Und der Technikwaechter zaehlt ihn nicht mit: Eine tote Adresse sagt
     # nichts ueber den Rechner.
     assert "if not ergebnis.beitrag_weg and technik.melde(ergebnis):" in quelltext

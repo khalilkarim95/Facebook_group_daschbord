@@ -2226,6 +2226,57 @@ nie eine zweite Gruppe gab.
   `COALESCE(gm.bearbeiten, 1) = 1` filtert: Die Gruppe faellt aus der
   Arbeitsliste der Kampagne, und der naechste Schritt greift zur naechsten.
 
+### Die Anmeldung wird vor dem Lauf geprüft (21.09.2026)
+
+```
+Lauf startet  ->  facebook.com laden  ->  Anmeldewand?
+                                            ja   -> nichts tun, Exit 2
+                                            nein -> erster Schritt
+Anmeldewand mitten im Lauf -> Sitzungsfehler -> Lauf haelt an, kein Ausschluss
+```
+
+Der Anlass ist eine Frage des Nutzers nach einem Lauf, der nichts tat —
+und dahinter stand eine Lücke, die teurer ist als dieser eine Lauf: Eine
+**abgemeldete** Browsersitzung findet in *jeder* Gruppe kein Kommentarfeld
+und kein Beitragsformular. Beides endete als „nicht gefunden", also als
+technischer Fehlschlag — und der nimmt seit dem 20.09.2026 die Gruppe aus
+der Kampagne. Ein abgelaufener Anmeldestand hätte damit eine Kampagne nach
+der anderen leergeräumt, mit einem Grund an jeder Gruppe, an dem nichts
+liegt.
+
+- **Die Vorbedingung wird vorher gefragt, nicht hinterher gelernt**
+  (`actions.ist_angemeldet`, `cli._sitzung_pruefen`). Ein Seitenabruf gegen
+  die **Startseite** — eine Gruppenseite kann aus vielen Gründen nicht
+  laden, die Startseite nur aus einem. Beide Treiber fragen sie, örtlich wie
+  fern, und zwar **vor** dem ersten Schritt: Danach wäre es zu spät, denn
+  der erste Fehlschlag trägt die Gruppe schon aus der Kampagne.
+- **Ein Abruffehler heißt nicht „abgemeldet".** Ein Netzfehler ist kein
+  Beleg für eine abgelaufene Sitzung; es wird gesagt und trotzdem versucht —
+  dieselbe Zurückhaltung wie bei `merke_regeln`, das aus einer ungelesenen
+  Seite keine Regel macht.
+- **`ANMELDEWAND` steht in `actions.py` neben `BEITRAG_WEG`** und wird in
+  beiden Wegen **zuerst** geprüft: Sie sagt nichts über diese eine Adresse
+  und nichts über die Gruppe, sondern alles über uns. Die Muster sind so
+  gewählt, dass sie nur abgemeldet vorkommen („Neues Konto erstellen",
+  „Passwort vergessen", „إنشاء حساب جديد") — ein Fehlalarm hielte den Lauf
+  mitten in der Arbeit an.
+- **Der Text beginnt mit `NICHT_ANGEMELDET`, und das ist die Schnittstelle.**
+  `automatik._SITZUNG` erkennt ihn (`nicht angemeldet`), damit die Wand als
+  **Sitzungsfehler** gilt: Der Lauf hält sofort an, statt sich durch die
+  Kampagne zu arbeiten. Wer die Konstante ändert, muss dort nachsehen —
+  deshalb ist es eine Konstante und kein Satz im Code.
+- **Kein Ausschluss bei einem Sitzungsfehler.** `_fuehre_schritt_aus` und
+  `POST /automatik/ergebnis` prüfen es beide, neben `beitrag_weg`. Zwei
+  Fassungen wären zwei Regeln, und die zweite fände man erst an einer
+  leergeräumten Kampagne.
+- **Die Meldung nennt den Weg zurück** (`fbgroups auth login`) und sagt
+  ausdrücklich, dass nichts versucht und nichts vermerkt wurde. Die Sitzung
+  liegt im Browserprofil (`data/browser_state`) und überlebt den Neustart —
+  angemeldet wird einmal, nicht je Lauf.
+- Festgehalten in `tests/test_anmeldung.py`: Erkennung in drei Sprachen,
+  kein Fehlalarm auf einer gewöhnlichen Gruppenseite, Anhalten statt
+  Weitermachen, kein Ausschluss, und beide Treiber fragen vorher.
+
 ### Kein technischer Fehlschlag beendet den Lauf mehr (20.09.2026)
 
 ```
