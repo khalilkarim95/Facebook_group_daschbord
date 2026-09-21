@@ -1583,6 +1583,59 @@ Seitenabruf ist keine Handlung in der Gruppe, und der Takt der Kommentare
 (`delays.comment`) bleibt davon unberührt — was steigt, ist allein die Zahl
 der Abrufe.
 
+### Ein Beitrag nur einmal — und der Weg zu 100 in 12 Stunden (21.09.2026)
+
+```
+Gruppe oeffnen → bereits kommentierte Beitraege herausfiltern
+   → starker Treffer?  ja → kommentieren → naechste Gruppe
+   → schwacher, aber relevanter Treffer? ja → kommentieren → naechste Gruppe
+   → nichts?  → Gruppe fuer diese Runde beiseite → naechste Gruppe
+```
+
+Die Anforderung des Nutzers in einem Satz: *nicht auf eine Gruppe warten,
+sondern rotieren* — und **nie zweimal unter denselben Beitrag**. Beides war
+zum größten Teil schon so gebaut; was fehlte, waren die Zusicherungen und
+die Zahlen. Was hier steht, ist deshalb vor allem eine Festschreibung.
+
+- **Die Sperre hängt am Beitrag, nicht an der Kampagne**
+  (`store.bisherige_post_urls`): `SELECT post_url FROM post_versuche WHERE
+  group_id = ? AND erfolg = 1` — ohne `campaign_id`. Ein Leser der Gruppe
+  sieht nicht, aus welcher Kampagne ein Kommentar stammt; zwei Kommentare
+  von uns unter einem Beitrag sind zwei Kommentare von uns.
+- **Nur der Erfolg sperrt.** `_ausgang` setzt `post_url` ausschließlich bei
+  `erfolg`, und `beende_versuch` schreibt genau das in die Zeile. Ein
+  Fehlschlag steht im Protokoll und nicht in der Sperre — der Beitrag darf
+  im nächsten Durchgang wieder angesehen werden (Punkt 23 der Anforderung).
+- **Der Schlüssel ist die Adresse, nicht der Text.** `canonical_post_url`
+  schneidet `__cft__` und `__tn__` ab; ohne das sähe derselbe Beitrag in
+  jedem Durchgang neu aus, und die Sperre liefe ins Leere.
+- **Stark vor schwach steht in `Gelegenheit.rang`**: erst die Nähe der
+  Antwortart (App-Nennung 3, privater Hinweis 2, bloße Hilfe 1), dann
+  Reaktionen + Kommentare. `waehle_gelegenheit` nimmt daraus das Maximum
+  **unter den noch nicht kommentierten** — damit ist „Beitrag A schon
+  kommentiert, B neu" automatisch B und nicht nichts.
+- **Kein Treffer heißt nicht warten.** Der Schritt endet mit `kein_anlass`,
+  die Gruppe ruht (`automatik.ruhe_minuten`, 2) und der Lauf nimmt sofort
+  die nächste. Gewartet wird erst, wenn **alle** Gruppen ruhen — und dann
+  höchstens bis zur nächsten Rückkehr.
+- Tests: `tests/test_kommentierte_beitraege.py`, fünf Stück, je einer für
+  die fünf Fälle der Anforderung.
+
+**Die Zahlen für 12 Stunden.** Drei Schranken wirken zusammen, und nur alle
+drei zusammen ergeben hundert:
+
+| Schraube | Wert | Rechnung |
+|---|---|---|
+| `delays.comment` | 5–8 Min | 720 Min / 6,5 = **110 Plätze** |
+| `limits.comments.daily` | 100 | die harte Obergrenze |
+| `limits.comments.je_gruppe_taeglich` | 10 | 13 Gruppen × 10 = 130 |
+
+Bei 5–12 Minuten (Mittel 8,5) wären es 85 Plätze gewesen — hundert Erfolge
+damit rechnerisch unmöglich, gleich wie gut die Auswahl trifft. Und
+`je_gruppe_taeglich` ist der stillste Engpass: Bei 13 zugeordneten Gruppen
+und `1` wären 13 das Tagesmaximum. Der eigentliche Hebel bleibt die Zahl
+der **geeigneten Gruppen** (`campaign sync`), nicht diese Datei.
+
 ### Link-Modus: kein Link ist die Vorgabe (`entscheidung.Linkmodus`)
 
 ```

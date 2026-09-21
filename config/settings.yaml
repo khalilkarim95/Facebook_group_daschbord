@@ -726,8 +726,24 @@ delays:
     # 14.09.2026 hatte die Kampagne 24 - damit waren 24 das Maximum, und kein
     # Takt haette daran etwas geaendert. Der Hebel ist `campaign sync` (mehr
     # A-Gruppen zuordnen), nicht diese Datei.
+    #
+    # --- Die Rechnung zum Ziel "100 in 12 Stunden" (21.09.2026) ---------
+    #
+    # Der Takt gilt zwischen zwei **veroeffentlichten** Kommentaren; ein
+    # Fehlschlag kostet seit dem 20.09.2026 keine Wartezeit mehr. Damit ist
+    # der Mittelwert die ganze Rechnung:
+    #
+    #     12 h = 720 Min    720 / 6,5 Min = 110 Plaetze
+    #
+    # Hundert Erfolge brauchen also eine Erfolgsquote von rund 90 % - oder
+    # etwas Luft. Bei 5-12 Minuten (Mittel 8,5) waeren es nur 85 Plaetze,
+    # und hundert Erfolge damit rechnerisch unmoeglich.
+    #
+    # Fuenf Minuten sind zugleich die Untergrenze aus der Anforderung
+    # ("Kommentar erfolgreich -> 5 Minuten warten"). Die Streuung nach oben
+    # bleibt: Ein exakter Takt ist das auffaelligste Muster ueberhaupt.
     min_minutes: 5
-    max_minutes: 12
+    max_minutes: 8
 
   post:
     min_minutes: 15
