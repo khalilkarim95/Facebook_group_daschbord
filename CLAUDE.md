@@ -2570,6 +2570,42 @@ gehen, bis jede ihre zehn Kommentare hat, und niemals aufhören.
   den Unterschied im Betrieb: Mit „kein Anlass" kommt die erste Gruppe ein
   zweites Mal dran, mit „kein Kommentarfeld" nicht.
 
+### Eine volle Runde wechselt die Kampagne nicht (21.09.2026)
+
+```
+Kampagne A: Gruppe 1 … 13  →  alle ruhen (2 Min)
+   vorher:  A gibt gerade nichts her  →  Kampagne B uebernimmt
+   jetzt:   A behaelt ihren Platz     →  der Lauf wartet auf die Rueckkehr
+```
+
+Der Wechsel kam aus `naechste_kampagne`: `hat_arbeit` fragte nur, ob die
+Kampagne **in diesem Augenblick** eine Gruppe hergibt. Liegen am Ende einer
+Runde alle dreizehn für zwei Minuten beiseite, ist die Antwort nein — und
+die Schleife nahm die nächste Kampagne, obwohl die erste nicht fertig war.
+Nachgestellt mit `Kampagnenfortschritt.gruppen_ruhend = 0` liefert dieselbe
+Lage `b`; mit der Zeile `a`.
+
+- **`Gruppenfortschritt.ruht` steht neben `uebersprungen`, nicht darin.**
+  Beide fallen gerade aus; nur bei einem ist der Ausfall eine Frage der Uhr.
+  Gespeist wird es aus `store.ruhende_gruppen(lauf_id)` — dieselbe Spalte
+  `wiederholen_ab`, die schon über das Ende des Laufs entscheidet, nur als
+  Menge von Paaren statt als Zeitpunkt.
+- **Eine ruhende Gruppe ist Arbeit, die gleich wiederkommt.** `hat_arbeit`
+  zählt sie mit; gewartet wird dann über `naechste_rueckkehr`, gewechselt
+  nicht.
+- **Der Gegenfall bleibt:** Eine Kampagne **ohne** Gruppen (gelöscht, nie
+  zugeordnet) kommt nie wieder und gibt ihren Platz frei — sonst hinge der
+  Lauf an ihr. Nur wer ruht, kommt zurück.
+- **Was „erreicht" heißt, ändert sich dadurch nicht.** Nicht „hundert
+  Kommentare" — das ist die Tagesmenge über alle Kampagnen. Erreicht ist
+  eine Kampagne, wenn **jede** ihrer Gruppen ihre zehn Fassungen
+  veröffentlicht hat; erst dann setzt `_stand_fortschreiben` sie auf
+  `completed`, und erst dann ist die nächste an der Reihe.
+- Tests: `tests/test_kampagnenrotation.py` — volle Runde (kein Wechsel),
+  eine einzelne ruhende Gruppe (genügt schon), die vorletzte Fassung (A
+  bleibt aktiv, und zwar in genau der Gruppe, der sie fehlt), die letzte
+  (B kommt), und die leere Kampagne.
+
 ### Kampagnenzustände: „gerade geht nichts" ist nicht „fertig"
 
 - **`Kampagnenfortschritt.abgeschlossen` steht neben `fertig`.** `fertig`

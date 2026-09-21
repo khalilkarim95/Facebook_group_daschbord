@@ -243,6 +243,14 @@ class Gruppenfortschritt:
     """
 
     uebersprungen: bool = False
+    ruht: bool = False
+    """Beiseite **auf Zeit** - die Gruppe kommt von selbst zurueck.
+
+    Steht neben ``uebersprungen`` und nicht darin: Beide fallen gerade aus,
+    aber nur bei diesem hier ist der Ausfall eine Frage der Uhr. Der
+    Unterschied entscheidet ueber den Kampagnenwechsel - siehe
+    ``Lauffortschritt.naechste_kampagne``.
+    """
     """In **diesem** Lauf beiseitegelegt - meist nach einem Fehlschlag.
 
     Die Fehlerisolierung je Gruppe. Ein Browser, der mitten im Schritt
@@ -555,6 +563,16 @@ class Kampagnenfortschritt:
     @property
     def gruppen_gesamt(self) -> int:
         return len(self.gruppen)
+
+    @property
+    def gruppen_ruhend(self) -> int:
+        """Wie viele Gruppen gerade **auf Zeit** beiseite liegen.
+
+        Sie sind der Grund, warum eine Kampagne ihren Platz behaelt, obwohl
+        sie in diesem Augenblick nichts hergibt: Sie kommen von selbst
+        zurueck (``automatik.ruhe_minuten``).
+        """
+        return sum(1 for g in self.gruppen if g.ruht)
 
     @property
     def gruppen_fertig(self) -> int:
@@ -1033,6 +1051,19 @@ class Lauffortschritt:
 
         def hat_arbeit(k: Kampagnenfortschritt) -> bool:
             if k.naechste_gruppe is not None:
+                return True
+            # **Eine ruhende Gruppe ist Arbeit, die gleich wiederkommt**
+            # (21.09.2026). Ohne diese Zeile loeste ein vollstaendiger
+            # Durchlauf den Kampagnenwechsel aus: Liegen am Ende einer Runde
+            # alle dreizehn Gruppen fuer zwei Minuten beiseite, gibt die
+            # Kampagne in genau diesem Augenblick nichts her - und die
+            # naechste uebernahm, obwohl die erste nicht fertig war.
+            #
+            # Verlangt ist das Gegenteil (Anforderung vom 21.09.2026):
+            # Kampagne A, Runde um Runde, bis sie **erreicht** ist; erst
+            # dann B. Gewartet wird dann auf die Rueckkehr
+            # (``store.naechste_rueckkehr``), nicht gewechselt.
+            if k.gruppen_ruhend:
                 return True
             if not k.bewertet and not k.leer:
                 return True
@@ -1634,6 +1665,14 @@ def lies_fortschritt(
     # werden uebersprungen, nicht verurteilt - mit dem naechsten Lauf ist der
     # Vermerk weg.
     uebersprungen = store.uebersprungene_gruppen(lauf_id)
+    # **Wer ruht, kommt wieder** - und haelt damit den Platz seiner Kampagne.
+    # Ein aelterer Speicher kennt die Frage nicht; dann ruht eben niemand,
+    # und es gilt das Verhalten von vorher.
+    ruhend = (
+        store.ruhende_gruppen(lauf_id)
+        if hasattr(store, "ruhende_gruppen")
+        else set()
+    )
     kampagnen: list[Kampagnenfortschritt] = []
 
     for zeile in store.lauf_kampagnen(lauf_id):
@@ -1650,6 +1689,7 @@ def lies_fortschritt(
                     beobachtet=beobachtet,
                     regeln_je_gruppe=regeln_je_gruppe,
                     uebersprungen=uebersprungen,
+                    ruhend=ruhend,
                     mitgliedschaft_pflicht=mitgliedschaft_pflicht,
                     qualifikation_pflicht=qualifikation_pflicht,
                     zielbefunde=zielbefunde or {},
@@ -1695,6 +1735,7 @@ def _lies_kampagne(
     beobachtet: dict,
     regeln_je_gruppe: dict,
     uebersprungen: dict,
+    ruhend: set,
     mitgliedschaft_pflicht: bool,
     qualifikation_pflicht: bool,
     zielbefunde: dict,
@@ -1762,6 +1803,7 @@ def _lies_kampagne(
             beitritt_noetig=gid in beitritt_noetig,
             uebersprungen=(campaign_id, gid) in uebersprungen,
             uebersprungen_grund=uebersprungen.get((campaign_id, gid), ""),
+            ruht=(campaign_id, gid) in ruhend,
             zielprioritaet=(
                 zielbefunde[gid].prioritaet
                 if gid in zielbefunde

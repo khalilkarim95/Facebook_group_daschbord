@@ -2578,6 +2578,22 @@ class MarketingStore:
         ).fetchall()
         return {(row["campaign_id"], row["group_id"]): row["grund"] for row in rows}
 
+    def ruhende_gruppen(self, lauf_id: int) -> set[tuple[str, str]]:
+        """Welche Paare **auf Zeit** beiseite liegen - nicht fuer den Lauf.
+
+        Der Unterschied zu ``uebersprungene_gruppen`` ist die Frage, die
+        daran haengt: Jenes beantwortet "wer faellt gerade aus?", dieses
+        "kommt hier noch etwas von selbst?". Nur das Zweite entscheidet, ob
+        die Kampagne ihren Platz behaelt - eine Kampagne, deren Gruppen alle
+        ruhen, ist nicht fertig, sondern wartet.
+        """
+        rows = self.conn.execute(
+            "SELECT campaign_id, group_id FROM automatik_lauf_uebersprungen "
+            "WHERE lauf_id = ? AND wiederholen_ab IS NOT NULL AND wiederholen_ab > ?",
+            (lauf_id, _iso(datetime.now(UTC))),
+        ).fetchall()
+        return {(str(r["campaign_id"]), str(r["group_id"])) for r in rows}
+
     def naechste_rueckkehr(self, lauf_id: int) -> tuple[int, str] | None:
         """Wie viele Gruppen ruhen und wann die erste zurueckkommt.
 
