@@ -33,6 +33,11 @@ data/*.bak-*
 *.bak
 test_results.txt
 
+# Die von Hand gesammelten Mitgliederlisten. Sie sind Bestandsdaten und
+# gehoeren wie alles unter data/ nicht ins Repository - `ausrollen.sh
+# --mitglieder` traegt sie eigens hinueber.
+data/from_lokal/
+
 # Seeds: Beispieldatei bleibt versioniert, echte Seeds nicht
 data/seeds/*
 !data/seeds/example_seeds.csv
