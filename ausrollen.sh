@@ -6,6 +6,12 @@
 #   ./ausrollen.sh --plan       nur zeigen, was liefe - nichts anfassen
 #   ./ausrollen.sh --pip        zusaetzlich die Abhaengigkeiten erneuern
 #   ./ausrollen.sh --test       vorher die Testreihe laufen lassen
+#   ./ausrollen.sh --mitglieder [datei ...]
+#                               danach die Mitgliederlisten aus
+#                               data/from_lokal hinueberkopieren und dort
+#                               einlesen (erst Trockenlauf, dann Rueckfrage)
+#   ./ausrollen.sh --mitglieder --ja
+#                               dasselbe ohne Rueckfrage
 #
 # GIT BASH, NICHT POWERSHELL. Der Kern ist `tar czf - | ssh` - ein binaerer
 # Strom durch eine Rohrleitung. PowerShell 5.1 reicht zwischen zwei nativen
@@ -22,6 +28,14 @@
 # einzige gueltige Fassung (siehe docs/plan-go-subdomain.md, Abschnitt 2) -
 # ein Ausrollen, das ihn ueberschreibt, kostet jeden Klick seit der letzten
 # Sicherung.
+#
+# DIE EINZIGE AUSNAHME IST `--mitglieder`, und sie ist deshalb ein eigener
+# Schalter (21.09.2026): Eine Mitgliederliste **fuegt hinzu**, sie
+# ueberschreibt nichts - `import-mitglieder` dreht keinen erreichten Stand
+# zurueck und laesst `review_status` und `notes` unangetastet. Trotzdem
+# laeuft sie nicht bei jedem Ausrollen mit: Ein Ausrollen ist eine Aussage
+# ueber den Code, kein Schreiblauf auf den Bestand. Wer die Liste meint,
+# sagt es.
 #
 # DIE UEBERSICHT ERREICHT MAN UEBER EINEN SSH-TUNNEL. Der Dienst horcht auf
 # 127.0.0.1:8090 und ist von aussen nur lesend zu haben:
@@ -51,20 +65,41 @@ NEU="/tmp/fbgroups-neu"
 VORHER="/opt/fbgroups/vorher"
 DIENST="fbgroups"
 
-plan=0; mit_pip=0; mit_test=0
+plan=0; mit_pip=0; mit_test=0; mit_mitgliedern=0; ohne_rueckfrage=0
+listen=()
 for arg in "$@"; do
     case "$arg" in
         --plan)  plan=1 ;;
         --pip)   mit_pip=1 ;;
         --test)  mit_test=1 ;;
-        -h|--help) sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        *) echo "Unbekannte Option: $arg" >&2; exit 2 ;;
+        --mitglieder) mit_mitgliedern=1 ;;
+        --ja)    ohne_rueckfrage=1 ;;
+        -h|--help) sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -*) echo "Unbekannte Option: $arg" >&2; exit 2 ;;
+        # Alles ohne Strich ist eine Datei fuer --mitglieder. Ohne Angabe
+        # gilt, was in data/from_lokal liegt.
+        *) listen+=("$arg"); mit_mitgliedern=1 ;;
     esac
 done
 
 cd "$(dirname "$0")"
 
 schritt() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+
+# Ohne Dateiangabe gilt, was in data/from_lokal liegt. Aufgeloest wird es
+# **hier** und nicht erst beim Kopieren: `--plan` soll die Dateien nennen,
+# die hinuebergingen, und nicht das Sternchen, das sie meint.
+if [ "$mit_mitgliedern" = 1 ] && [ ${#listen[@]} -eq 0 ]; then
+    # `nullglob`, damit aus einem leeren Ordner kein Dateiname mit Sternchen
+    # wird - sonst stuende "data/from_lokal/*.csv" im scp.
+    shopt -s nullglob
+    listen=(data/from_lokal/*.csv)
+    shopt -u nullglob
+fi
+if [ "$mit_mitgliedern" = 1 ] && [ ${#listen[@]} -eq 0 ]; then
+    echo "Keine Mitgliederliste in data/from_lokal - nichts einzulesen." >&2
+    exit 2
+fi
 
 # --- 0. Was geht hinaus? ---------------------------------------------------
 schritt "Stand"
@@ -83,6 +118,11 @@ if [ "$plan" = 1 ]; then
     echo "Ziel:    $ZIEL:$APP"
     echo "Danach:  systemctl restart $DIENST"
     [ "$mit_pip" = 1 ] && echo "Ausserdem: pip install -e '$APP[web]'"
+    if [ "$mit_mitgliedern" = 1 ]; then
+        echo "Mitgliederlisten:"
+        for datei in "${listen[@]}"; do echo "  $datei"; done
+        echo "  -> $APP/data/, dann import-mitglieder (erst --dry-run)"
+    fi
     exit 0
 fi
 
@@ -158,6 +198,46 @@ schritt "3/4  Antwortet der Dienst?"
 ssh -i "$SCHLUESSEL" "$ZIEL" \
     "curl -s -o /dev/null -w 'healthz: %{http_code}\n' http://127.0.0.1:8090/healthz"
 
+# --- 3b. Mitgliederlisten (nur auf Ansage) --------------------------------
+# **Nach** dem Einsetzen, nicht davor: Eingelesen wird mit dem Code, der
+# gerade ausgerollt wurde - sonst liest eine alte Fassung eine neue Liste,
+# und die Regel, die heute dazugekommen ist, greift erst beim naechsten Mal.
+if [ "$mit_mitgliedern" = 1 ]; then
+    for datei in "${listen[@]}"; do
+        [ -f "$datei" ] || { echo "Datei fehlt: $datei" >&2; exit 2; }
+        name="$(basename "$datei")"
+        fern="$APP/data/$name"
+
+        schritt "Mitgliederliste: $name"
+        # Die Datei gehoert dem Dienst, nicht root: Gelesen wird sie gleich
+        # als `fbgroups`, und eine Datei, die er nicht lesen kann, ist der
+        # unnoetigste aller Fehlschlaege.
+        scp -i "$SCHLUESSEL" "$datei" "$ZIEL:$fern"
+        ssh -i "$SCHLUESSEL" "$ZIEL" "chown fbgroups:fbgroups '$fern'"
+
+        # **Erst der Trockenlauf.** Er nennt, wie viele der Zeilen schon im
+        # Bestand stehen - oertlich sind es zwangslaeufig lauter neue, weil
+        # dort kein Bestand liegt. Nur diese Zahl beantwortet die Frage, ob
+        # die Liste ist, was man glaubt.
+        ssh -i "$SCHLUESSEL" "$ZIEL" \
+            "sudo -u fbgroups /opt/fbgroups/venv/bin/python -m fbgroups.cli \
+             import-mitglieder '$fern' --dry-run"
+
+        if [ "$ohne_rueckfrage" != 1 ]; then
+            printf '\nDiese Liste wirklich einlesen? [j/N] '
+            read -r antwort
+            case "$antwort" in
+                j|J|ja|Ja) ;;
+                *) echo "Uebersprungen: $name"; continue ;;
+            esac
+        fi
+
+        ssh -i "$SCHLUESSEL" "$ZIEL" \
+            "sudo -u fbgroups /opt/fbgroups/venv/bin/python -m fbgroups.cli \
+             import-mitglieder '$fern'"
+    done
+fi
+
 schritt "4/4  Letzte Zeilen aus dem Protokoll"
 ssh -i "$SCHLUESSEL" "$ZIEL" "sudo journalctl -u $DIENST -n 15 --no-pager"
 
@@ -175,4 +255,12 @@ Zurueck geht es mit dem beiseitegelegten Stand:
 Nach Aenderungen an den Score-Gewichten bewertet der naechste Kampagnenlauf
 den Bestand selbst neu (rescoring.bewerte_neu). Einen eigenen Befehl dafuer
 gibt es seit dem 20.09.2026 nicht mehr.
+
+Neue Gruppen aus data/from_lokal gehen so hinueber:
+  bash ./ausrollen.sh --mitglieder
+
+Zugeordnet werden sie damit noch nicht - dafuer:
+  ssh -i ~/.ssh/b-tarikak_vps_new root@159.195.216.246 \
+    "sudo -u fbgroups /opt/fbgroups/venv/bin/python -m fbgroups.cli \
+     campaign sync <kampagne> --dry-run"
 ENDE

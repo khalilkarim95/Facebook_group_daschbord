@@ -374,10 +374,33 @@ bereits Mitglied sind.
   (`automation/actions.py`), dieses Modul aus einer CSV-Spalte. Zwei Parser
   wären zwei Wahrheiten über dieselbe Zahl, und ein CSV-Leser soll dafür nicht
   Playwright laden müssen.
-- **Der Import trägt keine Daten auf den Server.** `ausrollen.sh` überträgt
-  ausschließlich `src config pyproject.toml`. Wer den Bestand des Servers
-  füllen will, kopiert die Datei dorthin und lässt den Befehl **dort** laufen
-  — nach der Regel, dass alles, was den Bestand ändert, auf den VPS gehört.
+- **Der Import trägt keine Daten auf den Server — außer auf Ansage.**
+  `ausrollen.sh` überträgt weiterhin ausschließlich `src config
+  pyproject.toml`; `data/` und `.env` bleiben unangetastet. Seit dem
+  21.09.2026 gibt es dafür einen eigenen Schalter:
+
+  ```bash
+  bash ./ausrollen.sh --mitglieder            # alle data/from_lokal/*.csv
+  bash ./ausrollen.sh --mitglieder liste.csv  # eine bestimmte
+  bash ./ausrollen.sh --mitglieder --ja       # ohne Rückfrage
+  ```
+
+  Er kopiert die Liste nach `$APP/data/`, setzt sie auf `fbgroups:fbgroups`
+  und liest sie **dort** ein — nach der Regel, dass alles, was den Bestand
+  ändert, auf dem VPS läuft. Vier Entscheidungen stecken darin:
+
+  * **Ein eigener Schalter, kein Teil jedes Ausrollens.** Ein Ausrollen ist
+    eine Aussage über den Code, kein Schreiblauf auf den Bestand. Wer die
+    Liste meint, sagt es.
+  * **Erst der Trockenlauf, dann die Rückfrage.** Die interessante Zahl
+    steht nur dort: Wie viele der Zeilen stehen schon im Bestand? Örtlich
+    sind es zwangsläufig lauter neue, weil dort kein Bestand liegt. `--ja`
+    überspringt die Frage, nicht den Trockenlauf.
+  * **Nach dem Einsetzen, nicht davor.** Eingelesen wird mit dem Code, der
+    gerade ausgerollt wurde — sonst läse eine alte Fassung eine neue Liste.
+  * **Zugeordnet wird dabei nichts.** Neue Gruppen bekommen ihren
+    Tracking-Code erst über `campaign sync` (erst `--dry-run`); der
+    Schlusstext des Skripts nennt den Befehl.
 
 ## Marketing-Erweiterung (`marketing/`)
 
