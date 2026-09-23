@@ -2091,7 +2091,8 @@ def test_der_server_gibt_den_naechsten_schritt_heraus(bestand: Path) -> None:
     assert schritt["gruppen_url"].startswith("https://www.facebook.com/groups/")
     assert "{link}" not in schritt["text"], "kein offener Platzhalter"
     assert "FB-TST-BER" not in schritt["text"]
-    assert schritt["link_url"] == ""
+    # Beim Kommentar die freie Adresse ohne Tracking (23.09.2026).
+    assert schritt["link_url"] == "https://b-tarikak.de/home"
     with MarketingStore(bestand) as store:
         link = store.link_for(KAMPAGNE, schritt["group_id"])
         assert link is not None

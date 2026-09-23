@@ -204,15 +204,45 @@ _ADRESSE_IM_TEXT = re.compile(
 _CODE_IM_TEXT = re.compile(r"\b[A-Z]{2,4}(?:-[A-Z0-9]{2,4}){1,3}-\d{2,4}\b")
 
 
-def adresse_im_text(text: str) -> str:
-    """Die erste Adresse oder der erste Tracking-Code im Text - sonst ``""``.
+#: Was eine Adresse zur **Tracking**-Adresse macht: ein ``/r/``- oder
+#: ``/t/``-Pfad (``go.b-tarikak.de/r/wr4s9xw``, ``b-tarikak.de/t/safar-sham-12``)
+#: oder ein Tracking-Parameter (``?ref=``, ``referrer=``).
+_TRACKING_IM_TEXT = re.compile(
+    r"\b[\w.-]+\.[a-z]{2,}(?::\d+)?/(?:r|t)/[\w-]+|[?&](?:ref|referrer)=\S+",
+    re.IGNORECASE,
+)
 
-    **Ein Kommentar traegt keine Adresse** (23.09.2026, Anweisung des Nutzers:
-    "Tracking-Link vollstaendig aus Kommentaren entfernen"). Rein und ohne
-    Browser, damit dieselbe Pruefung an zwei Stellen gilt: im Lauf, bevor ein
-    Beitrag ueberhaupt angesteuert wird (``automatik``), und unmittelbar vor
-    dem Absenden (``actions.comment_on_post``) - dort, wo jeder Kommentar
-    durchkommt, gleich auf welchem Weg er entstand.
+#: Satzzeichen, die an einer Adresse im Fliesstext haengen koennen.
+_ANGEHAENGT = ".,;:!?؟)\"'»”"
+
+
+def tracking_adresse_im_text(text: str) -> str:
+    """Die erste **Tracking**-Adresse oder der erste Code im Text - sonst ``""``.
+
+    **Kein Kommentar traegt einen Tracking-Link** (23.09.2026, Anweisung des
+    Nutzers). Eine schlichte Adresse wie ``https://b-tarikak.de/home`` ist
+    dagegen erlaubt (``marketing.kommentar_adresse``) - sie zaehlt nichts und
+    nennt keinen Code. Geprueft wird unmittelbar vor dem Absenden
+    (``actions.comment_on_post``), dort, wo jeder Kommentar durchkommt.
     """
-    treffer = _ADRESSE_IM_TEXT.search(text) or _CODE_IM_TEXT.search(text)
+    treffer = _TRACKING_IM_TEXT.search(text) or _CODE_IM_TEXT.search(text)
     return treffer.group(0) if treffer else ""
+
+
+def adresse_im_text(text: str, erlaubt: Iterable[str] = ()) -> str:
+    """Die erste Adresse oder der erste Code im Text, die **nicht** erlaubt ist.
+
+    Strenger als ``tracking_adresse_im_text``: Jede ausgeschriebene Adresse
+    zaehlt, ausser genau den erlaubten (``marketing.kommentar_adresse``) - und
+    eine Tracking-Adresse ist nie erlaubt, auch wenn sie dort stuende. So
+    kommt im Lauf in einen Kommentar genau die eine freie Adresse und nichts
+    sonst (``automatik.entscheide_und_kommentiere``).
+    """
+    frei = {a.strip() for a in erlaubt if a.strip() and not tracking_adresse_im_text(a)}
+    if treffer := _CODE_IM_TEXT.search(text):
+        return treffer.group(0)
+    for treffer in _ADRESSE_IM_TEXT.finditer(text):
+        adresse = treffer.group(0).rstrip(_ANGEHAENGT)
+        if adresse not in frei or tracking_adresse_im_text(adresse):
+            return adresse
+    return ""

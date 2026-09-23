@@ -1346,7 +1346,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             grenzen,
             lauf,
         )
-        from fbgroups.marketing.beitrag import mit_link
+        from fbgroups.marketing.beitrag import kommentar_adresse, mit_link
         from fbgroups.marketing.entscheidung import Erlaubnis
 
         with SqliteStore(pfad) as gruppen_store:
@@ -1701,10 +1701,13 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     # vorbereiteten, traegt jener wieder ``{link}`` - und
                     # braucht dieselbe Adresse. Ohne dieses Feld stand am
                     # 14.09.2026 "{link}" woertlich in einem Kommentar.
-                    # Nur fuer den Beitrag: Ein Kommentar traegt seit dem
-                    # 23.09.2026 keinen Link, also reist auch keine Adresse mit.
+                    # Beim Beitrag der Tracking-Link, beim Kommentar seit dem
+                    # 23.09.2026 die **freie** Adresse ohne Tracking
+                    # (``marketing.kommentar_adresse``).
                     "link_url": (
-                        link.url_fuer(ziel) if schritt.texttyp is Texttyp.POST else ""
+                        link.url_fuer(ziel)
+                        if schritt.texttyp is Texttyp.POST
+                        else kommentar_adresse(cfg)
                     ),
                     "bisherige_post_urls": bisherige,
                     "vorgaben": vorgaben,

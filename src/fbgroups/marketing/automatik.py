@@ -903,7 +903,7 @@ def _text_schritt(
     technik: _Technikwaechter,
 ) -> bool:
     """Schritt 5: ein Beitrag oder ein Kommentar - in der besten Gruppe zuerst."""
-    from fbgroups.marketing.beitrag import mit_link
+    from fbgroups.marketing.beitrag import kommentar_adresse, mit_link
 
     with MarketingStore(pfad) as store:
         vorschlag = texte_sicherstellen(store, schritt, gruppen, config)
@@ -935,7 +935,13 @@ def _text_schritt(
         # fuer den Beitrag. **Ein Kommentar traegt keinen Link** (Anweisung
         # des Nutzers); ``mit_link`` nimmt ihn samt Hinfuehrung heraus, und
         # eine Adresse, die hier mitreiste, koennte ihn nur zurueckbringen.
-        link_url = link.url_fuer(ziel) if schritt.texttyp is Texttyp.POST else ""
+        link_url = (
+            link.url_fuer(ziel)
+            if schritt.texttyp is Texttyp.POST
+            # Fuer den Kommentar die **freie** Adresse ohne Tracking
+            # (``marketing.kommentar_adresse``, 23.09.2026).
+            else kommentar_adresse(config)
+        )
         # **Ohne Kurzcode geht die Buchhaltung hinaus.** ``url_fuer`` faellt
         # auf den inneren Code zurueck, und der nennt jedem Leser Kanal,
         # Zielgruppe, Stadt und laufende Nummer ("FB-SYR-BER-010-B"). Das ist
@@ -1560,7 +1566,7 @@ def _entscheide_und_kommentiere(
     # nichts ueber die Beitraege, nicht "sie passen nicht".
     if not any(p.get("text", "").strip() for p in unkommentiert):
         return _ohne_urteil_kommentieren(
-            context, unkommentiert, text, kommentieren=kommentieren
+            context, unkommentiert, text, kommentieren=kommentieren, link_url=link_url
         )
 
     # **Erst das Urteil, dann die Wahl.** Jeder gelesene Beitrag bekommt
@@ -1568,7 +1574,11 @@ def _entscheide_und_kommentiere(
     # (welche Form einer Antwort passt, mit oder ohne Link) - und zwar
     # bevor irgendetwas geschrieben wird.
     gelegenheiten = beurteile_beitraege(unkommentiert, erlaubnis, anspruch)
-    from fbgroups.marketing.beitrag import offene_platzhalter, ohne_link
+    from fbgroups.marketing.beitrag import (
+        mit_kommentaradresse,
+        offene_platzhalter,
+        ohne_link,
+    )
     from fbgroups.urls import adresse_im_text
 
     verbraucht = set(verbrauchte_vorlagen or ())
@@ -1630,15 +1640,17 @@ def _entscheide_und_kommentiere(
             )
             return Schrittergebnis(erfolg=False, fehler=grund, kein_anlass=True)
 
-        # **Ein Kommentar traegt keinen Link** (23.09.2026, Anweisung des
-        # Nutzers). Bis dahin wurde hier ``{link}`` durch die Adresse
-        # ersetzt; jetzt faellt er samt seiner Hinfuehrung weg
-        # (``beitrag.ohne_link``) - auch dann, wenn ein aelterer Server noch
-        # eine ``link_url`` mitschickt. Sie wird hier bewusst nicht benutzt.
-        hinausgehend = ohne_link(gewaehlter_text)
-        if adresse := adresse_im_text(hinausgehend):
-            # Die letzte Pruefung vor dem Browser: Steht trotzdem eine
-            # Adresse im Text (von Hand eingetragen, alter Server), geht der
+        # **Ein Kommentar traegt keinen Tracking-Link** (23.09.2026,
+        # Anweisung des Nutzers). ``{link}`` faellt samt Hinfuehrung weg
+        # (``beitrag.ohne_link``), und ans Ende kommt die **freie** Adresse,
+        # die der Server als ``link_url`` mitschickt
+        # (``marketing.kommentar_adresse``, ``https://b-tarikak.de/home``).
+        # Eine Tracking-Adresse wird dabei nie angehaengt - auch nicht, wenn
+        # ein aelterer Server sie noch schickt.
+        hinausgehend = mit_kommentaradresse(ohne_link(gewaehlter_text), link_url)
+        if adresse := adresse_im_text(hinausgehend, erlaubt=(link_url,)):
+            # Die letzte Pruefung vor dem Browser: Steht eine andere Adresse
+            # im Text (von Hand eingetragen, alter Server), geht der
             # Kommentar nicht hinaus. Ein Fehler bei uns, kein Urteil ueber
             # die Gruppe.
             return Schrittergebnis(
@@ -1719,6 +1731,7 @@ def _ohne_urteil_kommentieren(
     text: str,
     *,
     kommentieren,
+    link_url: str = "",
 ) -> Schrittergebnis:
     """Der Rueckfall, wenn **kein** Beitrag lesbaren Text hat - der Reihe nach.
 
@@ -1747,12 +1760,15 @@ def _ohne_urteil_kommentieren(
     technischer Fehlschlag -> naechster Beitrag, Ablehnung der Gruppe ->
     Gruppe beiseite.
     """
+    from fbgroups.marketing.beitrag import mit_kommentaradresse, ohne_link
     from fbgroups.urls import adresse_im_text
 
-    # **Auch hier keine Adresse** (23.09.2026). ``text`` kommt fertig vom
-    # Server; ein aelterer Server setzte den Link noch ein. Dann geht dieser
-    # Rueckfall lieber gar nicht hinaus.
-    if adresse := adresse_im_text(text):
+    # **Auch hier kein Tracking-Link** (23.09.2026). ``text`` kommt fertig
+    # vom Server und traegt die freie Adresse schon; angehaengt wird sie nur,
+    # wo sie fehlt. Setzte ein aelterer Server noch den Tracking-Link ein,
+    # geht dieser Rueckfall lieber gar nicht hinaus.
+    text = mit_kommentaradresse(ohne_link(text), link_url)
+    if adresse := adresse_im_text(text, erlaubt=(link_url,)):
         return Schrittergebnis(
             erfolg=False,
             fehler=f"Adresse im Kommentar ({adresse}) - nicht abgesetzt",

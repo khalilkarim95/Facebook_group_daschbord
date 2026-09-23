@@ -477,14 +477,13 @@ def test_ein_text_ohne_link_geht_weiterhin_hinaus(config) -> None:
 
 
 def test_der_server_schickt_die_adresse_getrennt_vom_text() -> None:
-    """Sie steht neben ``text``, nicht darin - und seit dem 23.09.2026 nur fuer
-    den Beitrag. Ein Kommentar bekommt keine Adresse mit.
+    """Sie steht neben ``text``, nicht darin - und seit dem 23.09.2026 ist es
+    beim Kommentar die **freie** Adresse ohne Tracking.
     """
     quelltext = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
 
-    assert (
-        "link.url_fuer(ziel) if schritt.texttyp is Texttyp.POST else " in quelltext
-    )
+    assert "if schritt.texttyp is Texttyp.POST\n" in quelltext
+    assert "else kommentar_adresse(cfg)" in quelltext
 
 
 # --- "Kein Anlass" ist auch im Fernbetrieb kein Fehlschlag -----------------

@@ -208,14 +208,15 @@ def test_der_kommentar_von_hand_geht_ohne_link_und_nie_ins_leere(
 
     Zwei Zusicherungen:
 
-    * **Kein Link.** Auch dieser Weg setzt einen Kommentar ab; er traegt
-      keine Adresse, wie jeder Kommentar seit dem 23.09.2026.
+    * **Kein Tracking-Link.** Auch dieser Weg setzt einen Kommentar ab; er
+      traegt nur die freie Adresse der Landingpage, wie jeder Kommentar seit
+      dem 23.09.2026.
     * **Kein Kommentar ins Leere.** Bis dahin stand ``comment_on_post`` eine
       Einrueckung zu weit links und lief auch dann, wenn alle Beitraege schon
       kommentiert waren - mit leerer Adresse.
     """
     from fbgroups.automation.actions import Kommentarausgang
-    from fbgroups.urls import adresse_im_text
+    from fbgroups.urls import tracking_adresse_im_text
 
     monkeypatch.setitem(config.get("kaltmodus"), "aktiv", False)
     gid = next(iter(GRUPPEN))
@@ -240,7 +241,8 @@ def test_der_kommentar_von_hand_geht_ohne_link_und_nie_ins_leere(
     _, adresse, text = mock_comment.call_args.args
     assert adresse == beitrag
     assert "{link}" not in text
-    assert adresse_im_text(text) == ""
+    assert tracking_adresse_im_text(text) == ""
+    assert text.endswith(" https://b-tarikak.de/home"), "die freie Adresse"
     assert "FB-SYR" not in text
 
     # Derselbe Beitrag ist jetzt kommentiert - ein zweiter Aufruf setzt nichts ab.

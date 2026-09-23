@@ -188,6 +188,13 @@ marketing:
   # (actions.comment_on_post). Der Beitrag und das Klick-Tracking bleiben.
   linkmodus_max: app_name_only
 
+  # Die **freie** Adresse am Ende jedes Kommentars (23.09.2026, Wunsch des
+  # Nutzers: "diese URL in Kommentaren lassen"). Ohne Code und ohne Zaehlung -
+  # sie fuehrt geradewegs auf die Landingpage. Eine Tracking-Adresse (/r/,
+  # /t/, ?ref=) wird hier nicht angenommen und wirkt wie ein leerer Eintrag.
+  # Leer: Kommentare ganz ohne Adresse.
+  kommentar_adresse: https://b-tarikak.de/home
+
   # Braucht ein Kommentar einen erkannten **Anlass**, oder genuegt der blosse
   # Bezug? (13.09.2026)
   #

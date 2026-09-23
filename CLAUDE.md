@@ -503,11 +503,21 @@ Kommentar, 20 Kommentare je Gruppe, das Kampagnenziel aus 12 Stunden und
   2. Wo der Lauf den Text wählt: `entscheide_und_kommentiere` wendet
      `ohne_link` auf jeden Anlasstext an und benutzt `link_url` nicht mehr —
      auch nicht, wenn ein älterer Server sie schickt.
-  3. Vor dem Absenden: `urls.adresse_im_text` in `actions.comment_on_post`
-     (und vorher im Lauf) — eine ausgeschriebene Adresse, ein `/r/`- oder
-     `/t/`-Pfad oder ein innerer Code (`FB-…`) verhindert den Kommentar.
+  3. Vor dem Absenden: ein `/r/`- oder `/t/`-Pfad, ein Tracking-Parameter
+     oder ein innerer Code (`FB-…`) verhindert den Kommentar — im Lauf und in
+     `actions.comment_on_post`.
      Jeder Kommentar kommt hier durch, auch `campaign auto` und die
      Arbeitsseite.
+- **Die freie Adresse am Ende** (`marketing.kommentar_adresse`,
+  `https://b-tarikak.de/home`, Wunsch des Nutzers am selben Tag): ohne Code,
+  sie zählt nichts. `beitrag.mit_kommentaradresse` hängt sie hinter den
+  letzten Satz — „… من سوريا. https://b-tarikak.de/home" — und nie zweimal;
+  Server und örtlicher Lauf schicken sie beim Kommentar als `link_url`. Eine
+  Tracking-Adresse (`/r/`, `/t/`, `?ref=`) wird dort nie angenommen
+  (`kommentar_adresse` → `""`). Die Prüfung vor dem Absenden unterscheidet
+  deshalb: `comment_on_post` sperrt jede **Tracking**-Adresse
+  (`urls.tracking_adresse_im_text`), der Lauf jede Adresse außer genau der
+  freien (`urls.adresse_im_text(..., erlaubt=...)`).
 - **Das Tracking bleibt**: Codes, Kurzcodes, `/r/`, `/t/`, der Beitrag mit
   Link und die Auswertung sind unverändert. Die Vorlagen in
   `textvorlagen.yaml` tragen ihr `{link}` weiter — entfernt wird beim

@@ -115,14 +115,15 @@ def mit_link(
     geschweiften Klammern im Beitrag stehen, und das faellt erst in der Gruppe
     auf.
 
-    **Ein Kommentar bekommt keine Adresse** (``texttyp``, 23.09.2026). Der
-    Platzhalter wird dort samt seiner Hinfuehrung herausgenommen
-    (``ohne_link``), statt ersetzt zu werden - und zwar hier, an derselben
-    einen Stelle, an der er sonst ersetzt wuerde. Der Beitrag behaelt seinen
-    Link; das Tracking selbst bleibt unberuehrt.
+    **Ein Kommentar bekommt keinen Tracking-Link** (``texttyp``,
+    23.09.2026). Der Platzhalter wird dort samt seiner Hinfuehrung
+    herausgenommen (``ohne_link``), und ans Ende kommt die **freie** Adresse
+    ``marketing.kommentar_adresse`` (``https://b-tarikak.de/home``) - ohne
+    Code, sie zaehlt nichts. Der Beitrag behaelt seinen Tracking-Link; das
+    Tracking selbst bleibt unberuehrt.
     """
     if texttyp is Texttyp.KOMMENTAR:
-        text = ohne_link(text)
+        text = mit_kommentaradresse(ohne_link(text), kommentar_adresse(config))
 
     # 1. Erst Spintax aufloesen (z. B. {Hallo|Hi}), Platzhalter bleiben stehen
     text = parse_spintax(text)
@@ -203,6 +204,36 @@ def ohne_link(text: str) -> str:
                 kopf = _ohne_hinfuehrung(kopf[:-1])
             text = kopf + danach
     return "\n".join(z.rstrip() for z in text.splitlines() if z.strip()).strip()
+
+
+def kommentar_adresse(config: AppConfig) -> str:
+    """Die freie Adresse fuer Kommentare - ``""``, wenn keine oder eine mit Tracking.
+
+    ``marketing.kommentar_adresse`` (23.09.2026, Wunsch des Nutzers: "diese
+    URL in Kommentaren lassen"). Eine Tracking-Adresse wird hier gar nicht
+    erst angenommen: ``/r/``, ``/t/`` oder ``?ref=`` ergeben ``""`` - sonst
+    kaeme ueber die Konfiguration zurueck, was aus dem Kommentar heraus soll.
+    """
+    from fbgroups.urls import tracking_adresse_im_text
+
+    adresse = str(config.get("marketing", "kommentar_adresse", default="") or "").strip()
+    return "" if tracking_adresse_im_text(adresse) else adresse
+
+
+def mit_kommentaradresse(text: str, adresse: str) -> str:
+    """Haengt die freie Adresse an einen Kommentar - einmal, und nie eine mit Tracking.
+
+    Hinter den letzten Satz, mit einem Leerzeichen: "... من سوريا.
+    https://b-tarikak.de/home" (das Beispiel des Nutzers). Steht sie schon
+    darin, geschieht nichts; der vorbereitete Text vom Server traegt sie
+    bereits, und der Lauf haengt sie nicht ein zweites Mal an.
+    """
+    from fbgroups.urls import tracking_adresse_im_text
+
+    adresse = (adresse or "").strip()
+    if not adresse or tracking_adresse_im_text(adresse) or adresse in text:
+        return text
+    return f"{text.rstrip()} {adresse}" if text.strip() else adresse
 
 
 def _ohne_hinfuehrung(hinfuehrung: str) -> str:

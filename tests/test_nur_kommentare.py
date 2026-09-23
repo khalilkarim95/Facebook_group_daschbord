@@ -5,9 +5,16 @@ Die Anweisung des Nutzers in fuenf Saetzen:
 1. Kein automatisches Posten mehr - der Lauf verarbeitet nur Kommentare.
 2. Bis zu 20 Kommentare je Gruppe und Tag (die Runde bleibt: einer je Runde).
 3. Das Kampagnenziel folgt aus 12 Stunden und 3 Minuten Abstand: 240.
-4. **Kein Tracking-Link in einem Kommentar** - weder ``/r/<code>`` noch eine
-   andere Adresse als Ersatz. Das Tracking ausserhalb bleibt.
+4. **Kein Tracking-Link in einem Kommentar** - weder ``/r/<code>`` noch
+   ``/t/<name>``. Das Tracking ausserhalb bleibt.
 5. Die bestehenden Kommentarvorlagen funktionieren weiter.
+
+Dazu, noch am selben Tag: Am Ende jedes Kommentars steht die **freie**
+Adresse der Landingpage (``marketing.kommentar_adresse``,
+``https://b-tarikak.de/home``) - ohne Code, sie zaehlt nichts. Das Beispiel
+des Nutzers:
+
+    حبيت شاركها معكم، شفت تطبيق بطريقك ... من سوريا. https://b-tarikak.de/home
 
 Der Link wird an **drei** Stellen ferngehalten, und jede hat ihren Test:
 dort, wo der Text entsteht (``beitrag.mit_link`` mit ``texttyp``), dort, wo
@@ -39,13 +46,14 @@ from fbgroups.marketing.models import (
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.models import Group
 from fbgroups.storage import SqliteStore
-from fbgroups.urls import adresse_im_text
+from fbgroups.urls import adresse_im_text, tracking_adresse_im_text
 
 KAMPAGNE = "nur-kommentare"
 GRUPPEN = ["g1", "g2"]
 TRACKING = "https://go.b-tarikak.de/r/FB-TST-BER-001"
 OEFFENTLICH = "https://b-tarikak.de/t/safar-sham-12"
 APP_NAMEN = ("بطريقك", "B-Tarikak")
+LANDING = "https://b-tarikak.de/home"
 
 
 def _vorlagen() -> dict:
@@ -76,10 +84,17 @@ def _zuordnung(**felder) -> CampaignGroup:
 
 
 def _ist_ohne_adresse(text: str) -> None:
+    """Kein Tracking - und keine Adresse ausser der freien Landingpage."""
     assert "{link}" not in text
     assert "/r/" not in text and "/t/" not in text
     assert "FB-TST" not in text and "safar-sham-12" not in text
-    assert adresse_im_text(text) == "", text
+    assert tracking_adresse_im_text(text) == "", text
+    assert adresse_im_text(text, erlaubt=(LANDING,)) == "", text
+
+
+def _endet_mit_landing(text: str) -> None:
+    assert text.endswith(f" {LANDING}"), text
+    assert text.count(LANDING) == 1, text
 
 
 # --- 1. Die Vorlagen: ohne Link und trotzdem ein ganzer Kommentar -----------
@@ -117,7 +132,7 @@ def test_mit_link_nimmt_den_link_nur_aus_dem_kommentar(config) -> None:
     )
     beitrag = mit_link(kampagne, zuordnung, vorlage, config=config, texttyp=Texttyp.POST)
 
-    assert kommentar == "شفت تطبيق بطريقك."
+    assert kommentar == f"شفت تطبيق بطريقك. {LANDING}"
     _ist_ohne_adresse(kommentar)
     assert OEFFENTLICH in beitrag, "der Beitrag traegt seinen Link unveraendert"
 
@@ -127,9 +142,44 @@ def test_beitragstext_zeigt_den_kommentar_ohne_link(config) -> None:
     kampagne = Campaign(campaign_id=KAMPAGNE, name="K", language="ar")
     zuordnung = _zuordnung(kommentar_text="شفت بطريقك. من هنا: {link}")
 
-    _ist_ohne_adresse(
-        beitragstext(kampagne, zuordnung, Texttyp.KOMMENTAR, config=config)
+    text = beitragstext(kampagne, zuordnung, Texttyp.KOMMENTAR, config=config)
+    _ist_ohne_adresse(text)
+    _endet_mit_landing(text)
+
+
+def test_die_freie_adresse_steht_genau_so_wie_im_beispiel(config) -> None:
+    """Das Beispiel des Nutzers vom 23.09.2026, aus der Vorlage ``sharakta``."""
+    kampagne = Campaign(campaign_id=KAMPAGNE, name="K", language="ar")
+    vorlage = (
+        "حبيت شاركها معكم، شفت تطبيق بطريقك وفكرته إنه يربط اللي بده يبعت غرض "
+        "صغير مع مسافر رايح أو جاي من سوريا. حمّل بطريقك أو زور موقعه من هنا: {link}"
     )
+
+    text = mit_link(kampagne, _zuordnung(), vorlage, config=config, texttyp=Texttyp.KOMMENTAR)
+
+    assert text == (
+        "حبيت شاركها معكم، شفت تطبيق بطريقك وفكرته إنه يربط اللي بده يبعت غرض "
+        f"صغير مع مسافر رايح أو جاي من سوريا. {LANDING}"
+    )
+
+
+def test_eine_tracking_adresse_wird_nie_als_freie_angenommen() -> None:
+    """Stuende ``/t/`` oder ``/r/`` in ``marketing.kommentar_adresse``, gilt sie nicht."""
+    from fbgroups.marketing.beitrag import kommentar_adresse, mit_kommentaradresse
+
+    class _Mit:
+        def __init__(self, wert: str) -> None:
+            self.wert = wert
+
+        def get(self, *_pfad, default=None):
+            return self.wert
+
+    assert kommentar_adresse(_Mit(OEFFENTLICH)) == ""
+    assert kommentar_adresse(_Mit(TRACKING)) == ""
+    assert kommentar_adresse(_Mit(f"{LANDING}?ref=x")) == ""
+    assert kommentar_adresse(_Mit(LANDING)) == LANDING
+    assert mit_kommentaradresse("Text.", TRACKING) == "Text."
+    assert mit_kommentaradresse(f"Text. {LANDING}", LANDING) == f"Text. {LANDING}"
 
 
 # --- 2. Der Lauf: keine Adresse, auch nicht von einem alten Server ----------
@@ -207,6 +257,34 @@ def test_der_lauf_setzt_keine_adresse_ein_auch_nicht_mit_altem_deckel() -> None:
     _ist_ohne_adresse(ergebnis.text)
 
 
+def test_der_lauf_haengt_die_freie_adresse_einmal_an() -> None:
+    """Die freie Adresse kommt als ``link_url`` vom Server - und genau einmal hinaus."""
+    zaehler = _Zaehler()
+    ergebnis = automatik.entscheide_und_kommentiere(
+        None,
+        _Konfig(),
+        [
+            {
+                "post_url": "https://www.facebook.com/groups/g1/posts/3/",
+                "text": "كيف فيني ابعت غرض صغير من ألمانيا لسوريا؟",
+                "interactions": 3,
+                "comments": 0,
+            }
+        ],
+        "g1",
+        f"Rueckfall. {LANDING}",
+        kommentieren=zaehler,
+        bisherige=[],
+        erlaubnis=Erlaubnis(),
+        anspruch=Anspruch(anlass_pflicht=False),
+        link_url=LANDING,
+    )
+
+    assert ergebnis.erfolg, ergebnis.fehler
+    _ist_ohne_adresse(zaehler.texte[0])
+    _endet_mit_landing(zaehler.texte[0])
+
+
 def test_ein_rueckfalltext_mit_adresse_geht_nicht_hinaus() -> None:
     """Ohne lesbaren Beitrag gilt der vorbereitete Text - aber nie mit Adresse."""
     zaehler = _Zaehler()
@@ -236,7 +314,7 @@ def test_comment_on_post_setzt_keinen_kommentar_mit_adresse_ab() -> None:
         f"schau mal {OEFFENTLICH}",
         "go.b-tarikak.de/r/wr4s9xw",
         "Code FB-SYR-BER-010-B",
-        "www.b-tarikak.de",
+        f"{LANDING}?ref=wr4s9xw",
     ):
         ausgang = comment_on_post(None, "https://www.facebook.com/groups/g1/posts/1/", text)
         assert not ausgang.erfolg
@@ -307,8 +385,9 @@ def test_der_server_gibt_den_kommentar_ohne_link_heraus(bestand: Path) -> None:
 
     assert schritt["texttyp"] == "kommentar", "kein Beitrag - der Lauf postet nicht"
     _ist_ohne_adresse(schritt["text"])
+    _endet_mit_landing(schritt["text"])
     assert any(name in schritt["text"] for name in APP_NAMEN)
-    assert schritt["link_url"] == ""
+    assert schritt["link_url"] == LANDING, "die freie Adresse, kein Tracking"
 
     # Das Tracking ausserhalb der Kommentare ist unveraendert.
     antwort = client.get(
@@ -330,7 +409,7 @@ def test_der_lauf_setzt_keinen_beitrag_ab_und_legt_keine_beitragstexte_an(
     def ausfuehren(url, group_id, text, texttyp="kommentar", link_url=""):
         gesehen.append(texttyp)
         _ist_ohne_adresse(text)
-        assert link_url == ""
+        assert link_url == LANDING
         return automatik.Schrittergebnis(
             erfolg=True, post_url=f"https://www.facebook.com/groups/{group_id}/posts/{len(gesehen)}"
         )
