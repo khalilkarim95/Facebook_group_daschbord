@@ -81,7 +81,7 @@ def beitragstext(
         text = link.kommentar_text
     else:
         text = link.post_text or campaign.message_template or ""
-    return mit_link(campaign, link, text, config=config)
+    return mit_link(campaign, link, text, config=config, texttyp=texttyp)
 
 
 def mit_link(
@@ -91,6 +91,7 @@ def mit_link(
     *,
     config: AppConfig,
     ziel: str = "store",
+    texttyp: Texttyp = Texttyp.POST,
 ) -> str:
     """Setzt die spaeten Platzhalter in einen **beliebigen** Text dieser Gruppe.
 
@@ -113,7 +114,16 @@ def mit_link(
     optional: Ein Aufrufer, der es vergessen darf, laesst ``{datum}`` in
     geschweiften Klammern im Beitrag stehen, und das faellt erst in der Gruppe
     auf.
+
+    **Ein Kommentar bekommt keine Adresse** (``texttyp``, 23.09.2026). Der
+    Platzhalter wird dort samt seiner Hinfuehrung herausgenommen
+    (``ohne_link``), statt ersetzt zu werden - und zwar hier, an derselben
+    einen Stelle, an der er sonst ersetzt wuerde. Der Beitrag behaelt seinen
+    Link; das Tracking selbst bleibt unberuehrt.
     """
+    if texttyp is Texttyp.KOMMENTAR:
+        text = ohne_link(text)
+
     # 1. Erst Spintax aufloesen (z. B. {Hallo|Hi}), Platzhalter bleiben stehen
     text = parse_spintax(text)
     
@@ -139,6 +149,82 @@ def mit_link(
 #: Ein Platzhalter, der es bis in die Gruppe schafft, ist kein Schoenheits-
 #: fehler - er ist ein Beitrag, dessen Gruppe nie einen Klick bekommt.
 _OFFENER_PLATZHALTER = re.compile(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}")
+
+
+#: Platzhalter, die in einem Kommentar eine Adresse ergaeben. ``{tracking_code}``
+#: steht dabei: Er ist keine Adresse, aber der Deckname der Adresse.
+_ADRESS_PLATZHALTER = ("{link}", "{landing_page}", "{tracking_code}")
+
+#: Wo ein Satz oder Satzteil vor dem Link endet. Gedankenstrich und Komma
+#: stehen dabei, weil die deutschen Vorlagen den Link so anhaengen ("... im
+#: Koffer haben - App laden oder Website oeffnen: {link}"); die arabischen
+#: tragen ihn in einem eigenen Schlusssatz ("... من هنا: {link}"), und dort
+#: genuegt der Punkt davor. Das arabische Komma "،" steht bewusst nicht darin.
+_SATZGRENZE = re.compile(r"[.!?؟]|\s[-–]\s|,")
+
+#: Der Name der App - er darf nicht mit dem Link verschwinden. In
+#: "أنا كمان شفت هالتطبيق ... تطبيق بطريقك للتحميل ... من هنا: {link}" steht er
+#: nur im Satz des Links; faellt der ganz, bleibt "dieses App" ohne Namen.
+_APP_NAMEN = ("بطريقك", "B-Tarikak")
+
+#: Die Woerter, die auf den Link zeigen ("von hier") - sie gehen mit ihm, auch
+#: wenn der Satz bleibt.
+_ZEIGER = re.compile(r"\s*(?:من\s+هنا|من\s+هون|هون|هنا|hier)\s*$", re.IGNORECASE)
+
+
+def ohne_link(text: str) -> str:
+    """Nimmt die Adress-Platzhalter samt ihrer Hinfuehrung aus einem Kommentar.
+
+    **Ein Kommentar traegt keinen Link** (23.09.2026, Anweisung des Nutzers).
+    Die Vorlagen bleiben, wie sie sind; nur geht der Teil, der auf den Link
+    hinfuehrt, mit ihm: Aus "... بنفس الاتجاه. حمّل تطبيق بطريقك أو زور الموقع
+    من هنا: {link}" wird "... بنفس الاتجاه." - der Satz davor nennt die App
+    bereits. Bloss ``{link}`` zu streichen liesse "من هنا:" ins Leere zeigen.
+
+    Entscheidend ist der **Doppelpunkt davor**, nicht die Zeile:
+
+    * Endet der Text vor dem Platzhalter mit ":", fuehrt er auf den Link hin
+      und faellt ab der letzten Satzgrenze mit weg; ein Gedankenstrich oder
+      Komma wird dabei zum Punkt.
+    * **Ausser, damit ginge der Name der App.** Steht "بطريقك" nur im Satz
+      des Links, bleibt der Satz; es fallen nur die Woerter, die auf den
+      Link zeigen ("من هنا", "hier"), und der Doppelpunkt.
+    * Sonst faellt allein der Platzhalter weg - so haengt
+      ``vorlagen.anlasstext`` ihn an, in eigener Zeile nach einem Satz.
+
+    Mechanisch und ohne Modell - dieselbe Zurueckhaltung wie ``anlasstext``,
+    das den Link ebenso mechanisch anhaengt.
+    """
+    for platzhalter in _ADRESS_PLATZHALTER:
+        while platzhalter in text:
+            stelle = text.index(platzhalter)
+            kopf, danach = text[:stelle].rstrip(), text[stelle + len(platzhalter):]
+            if kopf.endswith(":"):
+                kopf = _ohne_hinfuehrung(kopf[:-1])
+            text = kopf + danach
+    return "\n".join(z.rstrip() for z in text.splitlines() if z.strip()).strip()
+
+
+def _ohne_hinfuehrung(hinfuehrung: str) -> str:
+    """Der Text vor ``:{link}`` - ohne den Teil, der auf den Link hinfuehrt."""
+    grenzen = [
+        m for m in _SATZGRENZE.finditer(hinfuehrung) if hinfuehrung[: m.start()].strip()
+    ]
+    gekuerzt = ""
+    if grenzen:
+        grenze = grenzen[-1]
+        if grenze.group().strip() in (".", "!", "?", "؟"):
+            gekuerzt = hinfuehrung[: grenze.end()]
+        else:
+            gekuerzt = hinfuehrung[: grenze.start()].rstrip() + "."
+    name_da = any(name in hinfuehrung for name in _APP_NAMEN)
+    if gekuerzt and (not name_da or any(name in gekuerzt for name in _APP_NAMEN)):
+        return gekuerzt
+    # Der Satz bleibt - nur das "von hier" geht mit dem Link.
+    rest = _ZEIGER.sub("", hinfuehrung).rstrip()
+    if grenzen or not rest:
+        return rest + ("." if rest and rest[-1] not in ".!?؟" else "")
+    return rest
 
 
 def setze_adresse(text: str, adresse: str) -> str:

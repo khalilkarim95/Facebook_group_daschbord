@@ -114,12 +114,16 @@ def test_niedrig_ist_die_schwaechste_schwelle_und_heisst_mittel(
 
 
 def test_die_kampagne_bleibt_bis_zu_hundert_kommentaren_aktiv() -> None:
-    """Neunundneunzig sind nicht hundert."""
+    """Neunundneunzig sind nicht hundert.
+
+    Gerechnet ueber ``ZIEL`` (seit dem 23.09.2026 zwanzig je Gruppe): Die
+    Regel haengt am Kampagnenziel, nicht an der Zahl je Gruppe.
+    """
     kampagne = Kampagnenfortschritt(
         campaign_id="k1",
         name="K1",
-        gruppen=[_gruppe(str(i), veroeffentlicht=ZIEL) for i in range(9)]
-        + [_gruppe("9", veroeffentlicht=9)],
+        gruppen=[_gruppe(str(i), veroeffentlicht=ZIEL) for i in range(100 // ZIEL - 1)]
+        + [_gruppe("letzte", veroeffentlicht=ZIEL - 1)],
         ziel_kommentare=100,
     )
     assert kampagne.kommentare_veroeffentlicht == 99
@@ -130,7 +134,7 @@ def test_bei_hundert_kommentaren_ist_die_kampagne_erreicht() -> None:
     kampagne = Kampagnenfortschritt(
         campaign_id="k1",
         name="K1",
-        gruppen=[_gruppe(str(i), veroeffentlicht=ZIEL) for i in range(10)],
+        gruppen=[_gruppe(str(i), veroeffentlicht=ZIEL) for i in range(100 // ZIEL)],
         ziel_kommentare=100,
     )
     assert kampagne.kommentare_veroeffentlicht == 100
@@ -156,11 +160,12 @@ def test_eine_volle_kampagne_endet_auch_unter_hundert() -> None:
         gruppen=[_gruppe(str(i), veroeffentlicht=ZIEL) for i in range(3)],
         ziel_kommentare=100,
     )
-    assert kampagne.kommentare_veroeffentlicht == 30
+    assert kampagne.kommentare_veroeffentlicht == 3 * ZIEL
     assert kampagne.abgeschlossen
 
 
 def test_das_ziel_steht_in_der_konfiguration(config: AppConfig) -> None:
     from fbgroups.marketing import automatik
 
-    assert automatik.ziel_kommentare(config) == 100
+    # Seit dem 23.09.2026 240 = 12 Stunden / 3 Minuten Abstand.
+    assert automatik.ziel_kommentare(config) == 240

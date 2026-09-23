@@ -28,6 +28,7 @@ import pytest
 from fbgroups.marketing import automatik
 from fbgroups.marketing.entscheidung import Anspruch, Antwortart, Erlaubnis, Linkmodus
 from fbgroups.marketing.inhalt import Relevanz
+from fbgroups.urls import adresse_im_text
 
 #: Die fertige Adresse der Gruppe - im echten Lauf kommt sie vom Server
 #: (``link_url``). Ohne sie weist der Kern den Text zurueck, statt ihn
@@ -378,10 +379,11 @@ def test_der_ergebnisweg_nimmt_weiterhin_keinen_text_entgegen() -> None:
 
 # --- Der Platzhalter geht nie in eine Gruppe -------------------------------
 
-def test_der_abgesetzte_text_traegt_die_adresse_und_nicht_den_platzhalter(
+def test_der_abgesetzte_text_traegt_weder_adresse_noch_platzhalter(
     config,
 ) -> None:
-    """**Der Fehler vom 14.09.2026, in einer Zusicherung.**
+    """**Der Fehler vom 14.09.2026, in einer Zusicherung** - und seit dem
+    23.09.2026 ohne Link.
 
     In einer Gruppe stand:
 
@@ -390,8 +392,12 @@ def test_der_abgesetzte_text_traegt_die_adresse_und_nicht_den_platzhalter(
 
     Der Anlasstext (seit 13.09.2026) ersetzt den vorbereiteten Text, und der
     vorbereitete war aufgeloest - der neue nicht. Zwischen "Text waehlen" und
-    "Text absenden" fehlte die Ersetzung ganz. Der Kommentar sah richtig aus,
-    und seine Gruppe bekam nie einen Klick gutgeschrieben.
+    "Text absenden" fehlte die Ersetzung ganz.
+
+    Seit dem 23.09.2026 traegt ein Kommentar **keinen** Link (Anweisung des
+    Nutzers): Der Platzhalter faellt samt Hinfuehrung weg, und die
+    mitgeschickte Adresse wird nicht mehr eingesetzt - auch nicht, wenn die
+    Erlaubnis einen Link zuliesse.
     """
     kommentator = _Kommentator()
     ergebnis = automatik.entscheide_und_kommentiere(
@@ -410,21 +416,20 @@ def test_der_abgesetzte_text_traegt_die_adresse_und_nicht_den_platzhalter(
     assert ergebnis.erfolg is True
     _, abgesetzt = kommentator.aufrufe[0]
     assert "{link}" not in abgesetzt
-    assert LINK_URL in abgesetzt
+    assert LINK_URL not in abgesetzt
+    assert adresse_im_text(abgesetzt) == ""
 
-    # **Gespeichert wird die Fassung, nicht ihre Ausfertigung.** Der Text im
-    # Bestand traegt weiterhin den Platzhalter - aufgeloest wird beim Lesen,
-    # nie beim Ablegen. Sonst stuende der Tracking-Code in der Datenbank.
-    assert "{link}" in ergebnis.text
+    # Gespeichert wird, was hinausging - ohne Platzhalter und ohne Adresse.
+    assert "{link}" not in ergebnis.text
     assert LINK_URL not in ergebnis.text
 
 
-def test_ohne_adresse_wird_lieber_nicht_kommentiert(config) -> None:
-    """Lieber kein Kommentar als ein kaputter.
+def test_ohne_adresse_geht_der_kommentar_ohne_link_hinaus(config) -> None:
+    """Keine Adresse ist seit dem 23.09.2026 der Regelfall - kein Fehler.
 
-    Fehlt die Adresse - ein aelterer Server, ein Feld vergessen -, geht
-    nichts hinaus. Ein Text mit ``{link}`` sieht richtig aus und ist
-    trotzdem wertlos; zurueckholen laesst er sich nicht.
+    Bis dahin hiess eine fehlende Adresse "lieber kein Kommentar als einer
+    mit ``{link}``". Jetzt faellt der Platzhalter samt Hinfuehrung weg
+    (``beitrag.ohne_link``), und der Kommentar geht ohne Link hinaus.
     """
     kommentator = _Kommentator()
     ergebnis = automatik.entscheide_und_kommentiere(
@@ -440,10 +445,10 @@ def test_ohne_adresse_wird_lieber_nicht_kommentiert(config) -> None:
         link_url="",
     )
 
-    assert ergebnis.erfolg is False
-    assert "Platzhalter nicht aufgeloest" in ergebnis.fehler
-    assert "{link}" in ergebnis.fehler
-    assert kommentator.aufrufe == [], "es darf nichts abgesetzt worden sein"
+    assert ergebnis.erfolg is True
+    _, abgesetzt = kommentator.aufrufe[0]
+    assert "{" not in abgesetzt
+    assert adresse_im_text(abgesetzt) == ""
 
 
 def test_ein_text_ohne_link_geht_weiterhin_hinaus(config) -> None:
@@ -472,15 +477,14 @@ def test_ein_text_ohne_link_geht_weiterhin_hinaus(config) -> None:
 
 
 def test_der_server_schickt_die_adresse_getrennt_vom_text() -> None:
-    """Sie steht neben ``text``, nicht darin.
-
-    Der Arbeitsrechner waehlt seinen Kommentar selbst; der vorbereitete Text
-    ist dann nicht mehr der, der hinausgeht - seine eingesetzte Adresse also
-    auch nicht mehr erreichbar.
+    """Sie steht neben ``text``, nicht darin - und seit dem 23.09.2026 nur fuer
+    den Beitrag. Ein Kommentar bekommt keine Adresse mit.
     """
     quelltext = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
 
-    assert '"link_url": link.url_fuer(ziel)' in quelltext
+    assert (
+        "link.url_fuer(ziel) if schritt.texttyp is Texttyp.POST else " in quelltext
+    )
 
 
 # --- "Kein Anlass" ist auch im Fernbetrieb kein Fehlschlag -----------------

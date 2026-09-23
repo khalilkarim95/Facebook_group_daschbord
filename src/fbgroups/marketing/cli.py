@@ -1846,6 +1846,7 @@ def campaign_automatik(
                 aktionen=lagen,
                 bezuege=store.gruppenbezuege(gruppen),
                 ziel_kommentare=automatik.ziel_kommentare(config),
+                beitraege=automatik.beitraege_automatisch(config),
             )
         console.print(Panel(lauf.fortschrittstext(fortschritt), title="Automatik"))
 
@@ -1966,6 +1967,7 @@ def campaign_automatik(
                 aktionen=lagen,
                 bezuege=store.gruppenbezuege(gruppen),
                 ziel_kommentare=automatik.ziel_kommentare(config),
+                beitraege=automatik.beitraege_automatisch(config),
             )
             schritt = lauf.naechster_schritt(fortschritt)
         console.print(Panel(lauf.fortschrittstext(fortschritt), title="Automatik (dry-run)"))
@@ -2136,6 +2138,7 @@ def campaign_auto(
         text = mit_link(
             campaign, link, vorschlag.text, config=config,
             ziel=ziel_zu_nummer(vorschlag.nummer),
+            texttyp=texttyp,
         )
 
     with SqliteStore(config.path("sqlite_path")) as gruppen_store:

@@ -391,16 +391,19 @@ Reihenfolge selbst.
   Gruppenregeln (`Schrittart.REGELN`, `marketing regeln`), die Neubewertung im
   Lauf (`Schrittart.BEWERTEN`, `rescoring.py`) und die ganze Qualifikation
   (`qualifikation.py`, `campaign qualifikation`, Spalte „Darf", Sperre nach
-  wiederholter Ablehnung). Jede Gruppe bekommt dieselbe `Erlaubnis()` —
-  **mit Link**. Die Spalten `regel_*`, `regeln_gelesen_am`, `bewertet_am`
+  wiederholter Ablehnung). Jede Gruppe bekommt dieselbe `Erlaubnis()`; ein
+  Kommentar trägt trotzdem **keinen Link** (siehe „Nur Kommentare, ohne
+  Link"). Die Spalten `regel_*`, `regeln_gelesen_am`, `bewertet_am`
   bleiben (Migrationen additiv), werden aber nicht mehr geschrieben.
 - `automatik.kommentare_zuerst: true` (Vorgabe im Code: erst Beitrag). Zwei
   **Kandidaten** (`_beitragsschritt`, `_kommentarschritt`): gibt der erste
-  nichts her, wird der zweite gefragt.
-- **Zehn Kommentare je Gruppe aus fünf Vorlagen** (`ZIEL_JE_GRUPPE`,
-  `VORLAGEN_JE_TOPF`); das Ziel wird beim Start eingefroren. Fortschritt wird aus
-  `campaign_group_texte.status` **gelesen**, nicht geführt.
-- **Eine Kampagne ist erreicht** bei `marketing.kampagne.ziel_kommentare` (100)
+  nichts her, wird der zweite gefragt. Seit dem 23.09.2026 postet der Lauf
+  gar nicht (`automatik.beitraege: false`) — siehe „Nur Kommentare".
+- **Zwanzig Kommentare je Gruppe aus fünf Vorlagen** (`ZIEL_JE_GRUPPE` = 20
+  seit 23.09.2026, `VORLAGEN_JE_TOPF`); das Ziel wird beim Start eingefroren —
+  ein offener Lauf behält seine Zahl bis `campaign automatik --neu`.
+  Fortschritt wird aus `campaign_group_texte.status` **gelesen**, nicht geführt.
+- **Eine Kampagne ist erreicht** bei `marketing.kampagne.ziel_kommentare` (240)
   erfolgreichen Kommentaren oder wenn jede Gruppe voll ist. `abgeschlossen`
   (erreicht → `completed`) ≠ `fertig` (Lauf versucht nichts mehr); eine leere
   Kampagne beendet den Lauf, wird aber nicht `completed`.
@@ -472,6 +475,47 @@ selbst wird gerechnet.
   jede Bremse einzeln, die kürzeste gewinnt; `Lage.nur_takt` trennt eigenen
   Takt (abwarten) von fremder Bremse (Lauf endet).
 
+### Nur Kommentare, ohne Link (23.09.2026)
+
+Anweisung des Nutzers: kein automatisches Posten, kein Tracking-Link in einem
+Kommentar, 20 Kommentare je Gruppe, das Kampagnenziel aus 12 Stunden und
+3 Minuten Abstand gerechnet.
+
+```
+12 h = 720 Min / 3 Min Abstand = 240 Kommentare   (ziel_kommentare, comments.daily)
+240 / 20 je Gruppe             =  12 Gruppen      (bei 11 Gruppen: 220, "alle voll")
+```
+
+- **Kein automatischer Beitrag** (`automatik.beitraege: false`, Vorgabe im
+  Code ebenfalls aus). `lies_fortschritt(beitraege=False)` gibt keiner Gruppe
+  einen offenen Beitrag — keine Gruppe bleibt seinetwegen offen, keine
+  Kampagne wartet auf ihn, `naechster_schritt` liefert nur Kommentare.
+  `texte_sicherstellen` legt für einen Kommentarschritt keine Beitragstexte
+  an (`stelle_texte_bereit(nur=...)`). Der Weg bleibt erhalten (`true`
+  schaltet ihn ein); von Hand (Arbeitsseite) ist der Beitrag unberührt.
+- **Kein Link in einem Kommentar — an drei Stellen gehalten:**
+  1. Wo der Text entsteht: `beitrag.mit_link(..., texttyp=KOMMENTAR)` nimmt
+     `{link}`, `{landing_page}` und `{tracking_code}` **samt Hinführung**
+     heraus (`ohne_link`: „… بنفس الاتجاه. حمّل … من هنا: {link}" → „…
+     بنفس الاتجاه."). Steht der App-Name nur im Satz des Links, bleibt der
+     Satz und nur „من هنا:" fällt. Server und örtlicher Lauf schicken für
+     Kommentare keine `link_url` mehr.
+  2. Wo der Lauf den Text wählt: `entscheide_und_kommentiere` wendet
+     `ohne_link` auf jeden Anlasstext an und benutzt `link_url` nicht mehr —
+     auch nicht, wenn ein älterer Server sie schickt.
+  3. Vor dem Absenden: `urls.adresse_im_text` in `actions.comment_on_post`
+     (und vorher im Lauf) — eine ausgeschriebene Adresse, ein `/r/`- oder
+     `/t/`-Pfad oder ein innerer Code (`FB-…`) verhindert den Kommentar.
+     Jeder Kommentar kommt hier durch, auch `campaign auto` und die
+     Arbeitsseite.
+- **Das Tracking bleibt**: Codes, Kurzcodes, `/r/`, `/t/`, der Beitrag mit
+  Link und die Auswertung sind unverändert. Die Vorlagen in
+  `textvorlagen.yaml` tragen ihr `{link}` weiter — entfernt wird beim
+  Ausfertigen, nicht in der Vorlage.
+- **Die Runde bleibt** (eine Gruppe je Runde einmal), `je_gruppe_taeglich:
+  20` ist die Tagesgrenze je Gruppe.
+- Festgehalten in `tests/test_nur_kommentare.py`.
+
 ### Grenzen je Aktion (`grenzen.py`)
 
 Beitritt, Beitrag und Kommentar haben je eigene Tagesmenge, eigenen Takt und
@@ -480,8 +524,8 @@ eigene Sperre; eine Antwort zählt als Kommentar. `limits`/`delays` in
 
 | | Tagesmenge | je Gruppe | Takt |
 |---|---:|---:|---|
-| Kommentar | 100 | 10 | 5–8 Min |
-| Beitrag | 10 | – | 15–30 Min |
+| Kommentar | 240 | 20 | 3 Min |
+| Beitrag | 10 (im Lauf aus) | – | 15–30 Min |
 | Beitritt | **0** | – | 3–8 Min |
 
 `je_gruppe_taeglich` gilt dem Kommentar, nicht der Gruppe (der Beitrag bleibt
@@ -516,13 +560,14 @@ Beitrag -> Thema + Absicht + Ziel/Herkunft/Strecke -> Anlass -> Relevanz
   Anlass hinausgehen, sobald die Relevanz reicht.
 - **Linkmodus ist die Kehrseite der Antwortart.** `NO_LINK` hat bewusst
   **keinen** Textvorrat (er wäre erfunden) — dort wird nicht kommentiert.
-  Wo die App genannt wird, geht der Link mit (`Erlaubnis().links` ist wahr,
-  für jede Gruppe). Die Werbungslogik (`Erlaubnis.werbung`) ist entfernt.
+  Der Deckel `marketing.linkmodus_max` steht seit dem 23.09.2026 auf
+  `app_name_only`: Die App wird genannt, nie verlinkt. Die Werbungslogik
+  (`Erlaubnis.werbung`) ist entfernt.
 - **Anlasstexte** (`anlaesse:` in `textvorlagen.yaml`): kein Vorrat zu einem
-  Anlass heißt kein Kommentar. `{link}` wird unmittelbar vor dem Absenden
-  aufgelöst (`beitrag.setze_adresse`; die Adresse reist getrennt als
-  `link_url`); ein offener Platzhalter verhindert den Kommentar. Der wirklich
-  abgesetzte Text wird vor `melde_vorschlag` zurückgeschrieben.
+  Anlass heißt kein Kommentar. Ein Kommentar trägt **keine Adresse**
+  (`beitrag.ohne_link`, siehe „Nur Kommentare, ohne Link"); ein offener
+  Platzhalter verhindert den Kommentar. Der wirklich abgesetzte Text wird vor
+  `melde_vorschlag` zurückgeschrieben.
 - **Stark vor schwach**: `Gelegenheit.rang` = Nähe der Antwortart, dann
   Reaktionen + Kommentare. Ohne einen lesbaren Text gilt der Rückfall
   (belebtester Beitrag).

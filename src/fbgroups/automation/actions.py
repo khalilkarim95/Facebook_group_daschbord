@@ -563,7 +563,21 @@ def comment_on_post(context: BrowserContext, post_url: str, text: str) -> Kommen
     **Nach dem Absenden wird die Seite gelesen.** Ohne das meldete die
     Funktion jeden Versuch als Erfolg, bei dem das Feld beschreibbar war -
     auch den, den die Gruppe gar nicht angenommen hat.
+
+    **Ein Kommentar mit Adresse geht nicht hinaus** (23.09.2026). Jeder
+    Kommentar kommt hier durch, gleich ob aus dem Lauf, aus ``campaign auto``
+    oder von der Arbeitsseite - deshalb steht die Pruefung hier und nicht nur
+    dort, wo der Text entsteht. Geprueft wird, bevor eine Seite geoeffnet
+    wird.
     """
+    from fbgroups.urls import adresse_im_text
+
+    if adresse := adresse_im_text(text):
+        console.print(f"[red]Kommentar enthaelt eine Adresse ({adresse}) - nicht abgesetzt.[/red]")
+        return Kommentarausgang(
+            erfolg=False, hinweis=f"Adresse im Kommentar ({adresse}) - nicht abgesetzt"
+        )
+
     page = context.new_page()
     try:
         console.print(f"Navigating to post {post_url}...")

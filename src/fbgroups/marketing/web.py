@@ -1209,6 +1209,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 aktionen=lagen,
                 bezuege=store.gruppenbezuege(gruppen),
                 ziel_kommentare=automatik.ziel_kommentare(cfg),
+                beitraege=automatik.beitraege_automatisch(cfg),
             )
 
         aktuell = fortschritt.naechste_kampagne
@@ -1410,6 +1411,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 .fuer(grenzen.Aktion.KOMMENTAR)
                 .je_gruppe_taeglich,
                 ziel_kommentare=automatik.ziel_kommentare(cfg),
+                beitraege=automatik.beitraege_automatisch(cfg),
             )
             schritt = lauf.naechster_schritt(fortschritt)
 
@@ -1619,11 +1621,15 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 if not link.public_code:
                     link = store.vergib_kurzcodes(schritt.campaign_id, schritt.group_id) or link
 
-                # Der fertige Text mit eingesetztem Tracking-Link. Er entsteht
-                # hier und nur hier - ``beitrag.mit_link`` bleibt die einzige
-                # Stelle, an der {link} aufgeloest wird. Der Arbeitsrechner
-                # bekommt ihn zum Einfuegen und baut ihn nie selbst.
-                text = mit_link(campaign, link, vorschlag.text, config=cfg, ziel=ziel)
+                # Der fertige Text. Er entsteht hier und nur hier -
+                # ``beitrag.mit_link`` bleibt die einzige Stelle, an der {link}
+                # behandelt wird. Der Arbeitsrechner bekommt ihn zum Einfuegen
+                # und baut ihn nie selbst. **Ein Kommentar bekommt keinen Link**
+                # (23.09.2026): ``texttyp`` nimmt ihn dort samt Hinfuehrung heraus.
+                text = mit_link(
+                    campaign, link, vorschlag.text, config=cfg, ziel=ziel,
+                    texttyp=schritt.texttyp,
+                )
                 bisherige = sorted(store.bisherige_post_urls(schritt.group_id))
 
                 # **Die Entscheidungsgrundlagen gehen mit** (14.09.2026).
@@ -1695,7 +1701,11 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     # vorbereiteten, traegt jener wieder ``{link}`` - und
                     # braucht dieselbe Adresse. Ohne dieses Feld stand am
                     # 14.09.2026 "{link}" woertlich in einem Kommentar.
-                    "link_url": link.url_fuer(ziel),
+                    # Nur fuer den Beitrag: Ein Kommentar traegt seit dem
+                    # 23.09.2026 keinen Link, also reist auch keine Adresse mit.
+                    "link_url": (
+                        link.url_fuer(ziel) if schritt.texttyp is Texttyp.POST else ""
+                    ),
                     "bisherige_post_urls": bisherige,
                     "vorgaben": vorgaben,
                 },
@@ -2141,6 +2151,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     "angezeigt": mit_link(
                         campaign, link, vorschlag.text, config=cfg,
                         ziel=lauf_ziel(vorschlag.nummer),
+                        texttyp=meldung.texttyp,
                     ),
                     "stand": vorschlag.status.value,
                 }
@@ -2187,6 +2198,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     "angezeigt": mit_link(
                         campaign, link, vorschlag.text, config=cfg,
                         ziel=lauf_ziel(vorschlag.nummer),
+                        texttyp=meldung.texttyp,
                     ),
                     "stand": vorschlag.status.value,
                 }
@@ -2301,6 +2313,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             text = mit_link(
                 campaign, link, vorschlag.text, config=cfg,
                 ziel=lauf_ziel(meldung.nummer),
+                texttyp=meldung.texttyp,
             )
 
         with SqliteStore(pfad) as gruppen_store:
@@ -2359,13 +2372,13 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                             best_post = max(offene_posts, key=lambda p: p.interactions + p.comments)
                             used_post_url = best_post.post_url
                             # ``comment_on_post`` liefert seit dem 12.09.2026
-                        # einen Ausgang statt eines ``bool``: Er sagt auch,
-                        # ob die Gruppe gerade nichts mehr annimmt oder der
-                        # Kommentar auf eine Freigabe wartet.
-                        ausgang = comment_on_post(context, used_post_url, text)
-                        erfolg = ausgang.erfolg
-                        if ausgang.hinweis:
-                            fehler_text = ausgang.hinweis[:100]
+                            # einen Ausgang statt eines ``bool``: Er sagt auch,
+                            # ob die Gruppe gerade nichts mehr annimmt oder der
+                            # Kommentar auf eine Freigabe wartet.
+                            ausgang = comment_on_post(context, used_post_url, text)
+                            erfolg = ausgang.erfolg
+                            if ausgang.hinweis:
+                                fehler_text = ausgang.hinweis[:100]
                         else:
                             fehler_text = "Alle aktuellen Beiträge wurden bereits kommentiert."
                     else:

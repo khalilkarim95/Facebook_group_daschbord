@@ -188,3 +188,31 @@ def beitragslinks(hrefs: Iterable[str | None], group_id: str) -> list[str]:
         gesehen.add(url)
         heraus.append(url)
     return heraus
+
+
+#: Eine ausgeschriebene Adresse: mit Schema, mit ``www.`` oder als Pfad auf
+#: ``/r/`` bzw. ``/t/`` - die beiden Formen unserer Tracking-Adressen
+#: (``go.b-tarikak.de/r/wr4s9xw``, ``b-tarikak.de/t/safar-sham-12``), auch ohne
+#: Schema geschrieben.
+_ADRESSE_IM_TEXT = re.compile(
+    r"(?:https?://|\bwww\.)\S+|\b[\w.-]+\.[a-z]{2,}(?::\d+)?/(?:r|t)/[\w-]+",
+    re.IGNORECASE,
+)
+
+#: Ein innerer Tracking-Code (``FB-SYR-BER-010``) - dasselbe Muster wie in
+#: ``vorlagen.pruefe_platzhalter``.
+_CODE_IM_TEXT = re.compile(r"\b[A-Z]{2,4}(?:-[A-Z0-9]{2,4}){1,3}-\d{2,4}\b")
+
+
+def adresse_im_text(text: str) -> str:
+    """Die erste Adresse oder der erste Tracking-Code im Text - sonst ``""``.
+
+    **Ein Kommentar traegt keine Adresse** (23.09.2026, Anweisung des Nutzers:
+    "Tracking-Link vollstaendig aus Kommentaren entfernen"). Rein und ohne
+    Browser, damit dieselbe Pruefung an zwei Stellen gilt: im Lauf, bevor ein
+    Beitrag ueberhaupt angesteuert wird (``automatik``), und unmittelbar vor
+    dem Absenden (``actions.comment_on_post``) - dort, wo jeder Kommentar
+    durchkommt, gleich auf welchem Weg er entstand.
+    """
+    treffer = _ADRESSE_IM_TEXT.search(text) or _CODE_IM_TEXT.search(text)
+    return treffer.group(0) if treffer else ""

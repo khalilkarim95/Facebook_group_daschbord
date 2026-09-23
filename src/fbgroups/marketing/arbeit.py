@@ -308,6 +308,7 @@ def stelle_texte_bereit(
     config: AppConfig,
     *,
     ueberschreiben: bool = False,
+    nur: Texttyp | None = None,
 ) -> dict[Texttyp, int]:
     """Fuellt die Fassungen **einer** Gruppe. Returns: wie viele je Zweck neu sind.
 
@@ -341,10 +342,14 @@ def stelle_texte_bereit(
     in keiner beantwortet werden. Wer in einer Gruppe postet, kommentiert dort
     auch - und ein Kommentar zu viel kostet einen Blick, ein fehlender einen
     Handgriff.
+
+    ``nur`` beschraenkt auf einen Zweck (23.09.2026): Der Lauf postet nicht
+    mehr und legt fuer einen Kommentarschritt keine Beitragstexte an. Von
+    Hand (Kommandozeile, Arbeitsseite) entstehen weiterhin beide.
     """
     from fbgroups.marketing import vorlagen
 
-    zwecke = list(Texttyp)
+    zwecke = [nur] if nur is not None else list(Texttyp)
 
     from fbgroups.marketing.lauf import ZIEL_JE_GRUPPE
     from fbgroups.marketing.tracking import app_base_url
@@ -613,6 +618,7 @@ def _fassungen(
                 vorschlag.text,
                 config=config,
                 ziel=ziel_zu_nummer(vorschlag.nummer),
+                texttyp=texttyp,
             ),
             post_url=store.letzte_post_url(
                 campaign.campaign_id, link.group_id, texttyp.value, vorschlag.nummer

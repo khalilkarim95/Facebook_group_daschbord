@@ -117,8 +117,16 @@ marketing:
   # deren Vorrat vor der Hundert endet, liefe sonst fuer immer.
   #
   # 0 heisst: kein eigenes Ziel, es gilt allein die alte Bedingung.
+  #
+  # **Seit dem 23.09.2026 240** - gerechnet aus den Vorgaben des Nutzers:
+  #
+  #     Zeitfenster 12 h = 720 Min,  Abstand 3 Min   ->  240 Kommentare
+  #     je Gruppe 20 (Ziel und Tagesmenge)           ->  240 / 20 = 12 Gruppen
+  #
+  # Mit weniger als zwoelf zugeordneten Gruppen ist die Kampagne ueber die
+  # zweite Bedingung erreicht (jede Gruppe hat ihre 20), bei elf also mit 220.
   kampagne:
-    ziel_kommentare: 100
+    ziel_kommentare: 240
 
   # --- Beitrags-Warteschlange -----------------------------------------
   # Alle Stellschrauben des Postens stehen hier und nirgends sonst. Verteilt
@@ -171,7 +179,14 @@ marketing:
   # bewusste Entscheidung mit Preis: Ein Kommentar ohne Link bekommt nie einen
   # Klick gutgeschrieben, und die Zuordnung haengt dann allein am eigenen
   # Beitrag daneben (der traegt seinen Link immer).
-  linkmodus_max: tracking_link
+  #
+  # **Seit dem 23.09.2026 app_name_only** (Anweisung des Nutzers: "Tracking-
+  # Link vollstaendig aus Kommentaren entfernen"). Der Deckel ist dabei nur
+  # die Auskunft im Protokoll; entfernt wird der Link unabhaengig davon an
+  # der Stelle, an der ein Kommentar entsteht (beitrag.mit_link mit texttyp
+  # "kommentar", beitrag.ohne_link) und geprueft unmittelbar vor dem Absenden
+  # (actions.comment_on_post). Der Beitrag und das Klick-Tracking bleiben.
+  linkmodus_max: app_name_only
 
   # Braucht ein Kommentar einen erkannten **Anlass**, oder genuegt der blosse
   # Bezug? (13.09.2026)
@@ -494,7 +509,11 @@ limits:
     # ist `delays.comment` - bei 20-60 Minuten Abstand passen 36 Kommentare in
     # einen Tag, gleich was hier steht. Die beiden Werte gehoeren zusammen
     # gelesen; wer nur einen aendert, aendert nichts.
-    daily: 100
+    #
+    # **Seit dem 23.09.2026 240** = 12 h / 3 Min (siehe `delays.comment` und
+    # `marketing.kampagne.ziel_kommentare`). Die Zahl gilt dem Konto ueber
+    # alle Kampagnen; die Kampagnen laufen nacheinander.
+    daily: 240
 
     # Hoechstens so viele Kommentare in **derselben** Gruppe an einem Tag.
     # Die Tagesmenge darueber schuetzt das Konto, diese Zahl die Gruppe: Fuenf
@@ -520,7 +539,9 @@ limits:
     # Gezaehlt werden Versuche, aber **keine technischen Fehlschlaege**
     # (14.09.2026): Bei 1 je Gruppe kostete sonst ein einziges geschlossenes
     # Browserfenster die Gruppe den ganzen Tag.
-    je_gruppe_taeglich: 10
+    # **Seit dem 23.09.2026 20** (Anweisung des Nutzers). Die Runde bleibt:
+    # je Runde ein Kommentar je Gruppe, die 20 ist die Obergrenze am Tag.
+    je_gruppe_taeglich: 20
 
   posts:
     daily: 10
@@ -602,8 +623,16 @@ delays:
     # Fuenf Minuten sind zugleich die Untergrenze aus der Anforderung
     # ("Kommentar erfolgreich -> 5 Minuten warten"). Die Streuung nach oben
     # bleibt: Ein exakter Takt ist das auffaelligste Muster ueberhaupt.
-    min_minutes: 5
-    max_minutes: 8
+    #
+    # --- Seit dem 23.09.2026: 3 Minuten (Anweisung des Nutzers) ---------
+    #
+    #     12 h = 720 Min    720 / 3 Min = 240 Plaetze
+    #
+    # Der Abstand gilt zwischen zwei **veroeffentlichten** Kommentaren. Er ist
+    # damit genau, nicht mehr gestreut - der Preis ist ausgesprochen (siehe
+    # oben); wer wieder streuen will, setzt max_minutes hoeher.
+    min_minutes: 3
+    max_minutes: 3
 
   post:
     min_minutes: 15
@@ -669,6 +698,16 @@ automatik:
   # Kommentar moeglich ist (Takt, Tagesmenge, kein passender Beitrag).
   # Verloren geht er nicht - er steht nur hinten.
   kommentare_zuerst: true
+
+  # Setzt der Lauf auch den eigenen Beitrag einer Gruppe ab?
+  #
+  # **Seit dem 23.09.2026 nein** (Anweisung des Nutzers: "Aktuell brauchen
+  # wir keinen automatischen Post-Workflow mehr"). Der Lauf verarbeitet dann
+  # ausschliesslich Kommentare; kein offener Beitrag haelt eine Gruppe oder
+  # eine Kampagne auf, und fuer einen Kommentarschritt entstehen keine
+  # Beitragstexte. Der Weg bleibt vollstaendig erhalten - "true" schaltet ihn
+  # wieder ein. Von Hand (Arbeitsseite) bleibt der Beitrag unberuehrt.
+  beitraege: false
 
   # Wie lange eine Gruppe ruht, in der gerade nichts Passendes stand.
   #

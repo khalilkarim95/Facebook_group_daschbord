@@ -258,7 +258,17 @@ def texte_sicherstellen(
         return None
 
     try:
-        stelle_texte_bereit(store, campaign, gruppe, config)
+        # Ohne Beitraege im Lauf (23.09.2026) nur die Kommentare: Der Lauf
+        # postet nicht, also legt er auch keine Beitragstexte an. Mit
+        # Beitraegen entstehen beide wie bisher - sonst fehlte dem Beitrag
+        # seine Fassung, und er kaeme nie an die Reihe.
+        stelle_texte_bereit(
+            store,
+            campaign,
+            gruppe,
+            config,
+            nur=None if beitraege_automatisch(config) else Texttyp.KOMMENTAR,
+        )
     except VorlageFehlt:
         # Eine Luecke in ``textvorlagen.yaml`` - fuer *diese* Gruppe entsteht
         # kein Text, und der Grund steht im Bericht. ``config-check`` nennt
@@ -571,6 +581,7 @@ def fuehre_lauf_aus(
             .je_gruppe_taeglich,
             ziel_kommentare=ziel_kommentare(config),
             kommentare_zuerst=kommentare_zuerst(config),
+            beitraege=beitraege_automatisch(config),
         )
 
     while True:
@@ -698,6 +709,23 @@ def _schlafe(sekunden: float) -> None:
 #: einen neuen Beitrag bekommt - und der ist der einzige Grund, es noch
 #: einmal zu versuchen.
 RUHE_MINUTEN = 30
+
+
+def beitraege_automatisch(config: AppConfig) -> bool:
+    """Setzt der Lauf auch den eigenen **Beitrag** einer Gruppe ab?
+
+    Seit dem 23.09.2026 **nein** (Anweisung des Nutzers: "Aktuell brauchen
+    wir keinen automatischen Post-Workflow mehr"). Der Lauf verarbeitet dann
+    ausschliesslich Kommentare; ein offener Beitrag haelt keine Gruppe offen
+    und keine Kampagne vom Abschluss ab (``lauf.lies_fortschritt``).
+
+    Die Vorgabe **im Code** ist ``False``: Automatisch zu posten ist die
+    auffaelligere Handlung, und sie braucht eine ausdrueckliche Ansage in
+    ``settings.yaml`` (``automatik.beitraege: true``). Der Weg dafuer bleibt
+    vollstaendig erhalten - Einschalten ist eine Zeile, keine Codeaenderung.
+    Von Hand (Arbeitsseite) bleibt der Beitrag unberuehrt.
+    """
+    return bool(config.get("automatik", "beitraege", default=False))
 
 
 def kommentare_zuerst(config: AppConfig) -> bool:
@@ -899,12 +927,15 @@ def _text_schritt(
             return False
 
         ziel = lauf.ziel_zu_nummer(schritt.nummer)
-        text = mit_link(campaign, link, vorschlag.text, config=config, ziel=ziel)
-        # Die **Adresse** getrennt vom Text: Waehlt der Lauf gleich einen
-        # Anlasstext statt dieses vorbereiteten, traegt jener wieder
-        # ``{link}`` - und braucht dieselbe Adresse. Ohne sie stand am
-        # 14.09.2026 "{link}" woertlich in einem Kommentar.
-        link_url = link.url_fuer(ziel)
+        text = mit_link(
+            campaign, link, vorschlag.text, config=config, ziel=ziel,
+            texttyp=schritt.texttyp,
+        )
+        # Die **Adresse** getrennt vom Text - und seit dem 23.09.2026 nur noch
+        # fuer den Beitrag. **Ein Kommentar traegt keinen Link** (Anweisung
+        # des Nutzers); ``mit_link`` nimmt ihn samt Hinfuehrung heraus, und
+        # eine Adresse, die hier mitreiste, koennte ihn nur zurueckbringen.
+        link_url = link.url_fuer(ziel) if schritt.texttyp is Texttyp.POST else ""
         # **Ohne Kurzcode geht die Buchhaltung hinaus.** ``url_fuer`` faellt
         # auf den inneren Code zurueck, und der nennt jedem Leser Kanal,
         # Zielgruppe, Stadt und laufende Nummer ("FB-SYR-BER-010-B"). Das ist
@@ -1537,7 +1568,8 @@ def _entscheide_und_kommentiere(
     # (welche Form einer Antwort passt, mit oder ohne Link) - und zwar
     # bevor irgendetwas geschrieben wird.
     gelegenheiten = beurteile_beitraege(unkommentiert, erlaubnis, anspruch)
-    from fbgroups.marketing.beitrag import offene_platzhalter, setze_adresse
+    from fbgroups.marketing.beitrag import offene_platzhalter, ohne_link
+    from fbgroups.urls import adresse_im_text
 
     verbraucht = set(verbrauchte_vorlagen or ())
     gescheitert: set[str] = set()
@@ -1598,12 +1630,22 @@ def _entscheide_und_kommentiere(
             )
             return Schrittergebnis(erfolg=False, fehler=grund, kein_anlass=True)
 
-        # **Erst jetzt die Adresse.** Der gespeicherte und der
-        # weitergereichte Text tragen ``{link}``; was in die Gruppe geht,
-        # traegt die Adresse.
-        hinausgehend = (
-            setze_adresse(gewaehlter_text, link_url) if link_url else gewaehlter_text
-        )
+        # **Ein Kommentar traegt keinen Link** (23.09.2026, Anweisung des
+        # Nutzers). Bis dahin wurde hier ``{link}`` durch die Adresse
+        # ersetzt; jetzt faellt er samt seiner Hinfuehrung weg
+        # (``beitrag.ohne_link``) - auch dann, wenn ein aelterer Server noch
+        # eine ``link_url`` mitschickt. Sie wird hier bewusst nicht benutzt.
+        hinausgehend = ohne_link(gewaehlter_text)
+        if adresse := adresse_im_text(hinausgehend):
+            # Die letzte Pruefung vor dem Browser: Steht trotzdem eine
+            # Adresse im Text (von Hand eingetragen, alter Server), geht der
+            # Kommentar nicht hinaus. Ein Fehler bei uns, kein Urteil ueber
+            # die Gruppe.
+            return Schrittergebnis(
+                erfolg=False,
+                fehler=f"Adresse im Kommentar ({adresse}) - nicht abgesetzt",
+                kein_anlass=True,
+            )
         if offen := offene_platzhalter(hinausgehend):
             # **Lieber kein Kommentar als ein kaputter.** Ein Text mit
             # ``{link}`` sieht richtig aus, und seine Gruppe bekommt nie
@@ -1618,9 +1660,9 @@ def _entscheide_und_kommentiere(
         ergebnis = _ausgang(
             kommentieren(context, gewaehlt.post_url, hinausgehend), gewaehlt.post_url
         )
-        # Gespeichert wird der Text **mit** dem Platzhalter: Er ist die
-        # Fassung, nicht ihre Ausfertigung.
-        letzter = replace(ergebnis, text=gewaehlter_text, vorlage_key=schluessel)
+        # Gespeichert wird, was wirklich hinausging - ohne Link, wie jeder
+        # Kommentar seit dem 23.09.2026.
+        letzter = replace(ergebnis, text=hinausgehend, vorlage_key=schluessel)
 
         if letzter.beitrag_weg:
             # **Diese Adresse zeigt ins Leere.** Weitergehen zum naechsten
@@ -1705,6 +1747,18 @@ def _ohne_urteil_kommentieren(
     technischer Fehlschlag -> naechster Beitrag, Ablehnung der Gruppe ->
     Gruppe beiseite.
     """
+    from fbgroups.urls import adresse_im_text
+
+    # **Auch hier keine Adresse** (23.09.2026). ``text`` kommt fertig vom
+    # Server; ein aelterer Server setzte den Link noch ein. Dann geht dieser
+    # Rueckfall lieber gar nicht hinaus.
+    if adresse := adresse_im_text(text):
+        return Schrittergebnis(
+            erfolg=False,
+            fehler=f"Adresse im Kommentar ({adresse}) - nicht abgesetzt",
+            kein_anlass=True,
+        )
+
     nach_rang = sorted(
         unkommentiert, key=lambda p: p["interactions"] + p["comments"], reverse=True
     )
@@ -2252,8 +2306,14 @@ def fuehre_lauf_fern_aus(
                     # ergibt mit und ohne zwei verschiedene Texte. Gelesen am
                     # Platzhalter und nicht am Code: Der Arbeitsrechner sieht
                     # den fertigen Text, der Server den gespeicherten.
+                    # Seit dem 23.09.2026 traegt kein Kommentar einen Link;
+                    # ein leerer Code darf dabei nicht "enthalten" heissen.
                     "mit_link": "{link}" in ergebnis.text
-                    or bool(ergebnis.text and s.get("tracking_code", "") in ergebnis.text),
+                    or bool(
+                        ergebnis.text
+                        and s.get("tracking_code")
+                        and s["tracking_code"] in ergebnis.text
+                    ),
                 },
             ):
                 # Ein gebuchter Ausgang ist die Grundlage des naechsten

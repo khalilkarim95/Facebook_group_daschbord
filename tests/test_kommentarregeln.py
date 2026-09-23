@@ -302,10 +302,15 @@ def test_das_tageslimit_ist_eine_harte_obergrenze() -> None:
 
 
 def test_hundert_kommentare_stehen_in_der_konfiguration(config) -> None:
-    """Regel 2. Die Zahl steht in settings.yaml und nicht im Programm."""
+    """Regel 2. Die Zahl steht in settings.yaml und nicht im Programm.
+
+    Seit dem 23.09.2026 240 statt 100 - gerechnet aus 12 Stunden und
+    3 Minuten Abstand (``tests/test_nur_kommentare.py``). Der Name des Tests
+    bleibt: Er haelt fest, **dass** die Zahl aus der Konfiguration kommt.
+    """
     gelesen = grenzen.einstellungen(config).fuer(grenzen.Aktion.KOMMENTAR)
 
-    assert gelesen.pro_tag == 100
+    assert gelesen.pro_tag == 240
 
 
 # --- Regel 1: zehn je Gruppe und Kampagne ---------------------------------
@@ -317,8 +322,11 @@ def test_zehn_kommentare_je_gruppe_und_kampagne() -> None:
     Der Fortschritt wird aus ``campaign_group_texte.status`` gelesen und
     nicht im Lauf gefuehrt - ein Fehlschlag bringt die Gruppe damit nie
     naeher an ihre zehn.
+
+    Seit dem 23.09.2026 zwanzig (Anweisung des Nutzers); die Regel ist
+    dieselbe.
     """
-    assert lauf.ZIEL_JE_GRUPPE == 10
+    assert lauf.ZIEL_JE_GRUPPE == 20
 
     def stand(veroeffentlicht: int) -> lauf.Gruppenfortschritt:
         return lauf.Gruppenfortschritt(
@@ -326,9 +334,9 @@ def test_zehn_kommentare_je_gruppe_und_kampagne() -> None:
             veroeffentlicht=veroeffentlicht,
         )
 
-    assert stand(0).offen == 10
-    assert stand(9).offen == 1
-    assert stand(10).offen == 0
+    assert stand(0).offen == 20
+    assert stand(19).offen == 1
+    assert stand(20).offen == 0
 
 
 # --- Regel 9: eine Gruppe beendet nie den ganzen Lauf ---------------------

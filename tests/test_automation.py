@@ -196,3 +196,58 @@ def test_erfolg_wird_trotz_pause_gespeichert(
         
         assert not isinstance(ergebnis, Exception)
         assert ergebnis.status == VorschlagStatus.VEROEFFENTLICHT
+
+
+@patch("fbgroups.automation.actions.comment_on_post")
+@patch("fbgroups.automation.actions.fetch_top_posts")
+@patch("fbgroups.automation.browser.get_browser_context")
+def test_der_kommentar_von_hand_geht_ohne_link_und_nie_ins_leere(
+    mock_context, mock_fetch, mock_comment, bestand: Path, config, monkeypatch
+) -> None:
+    """``POST /arbeit/{k}/vorschlag/auto`` fuer einen Kommentar (23.09.2026).
+
+    Zwei Zusicherungen:
+
+    * **Kein Link.** Auch dieser Weg setzt einen Kommentar ab; er traegt
+      keine Adresse, wie jeder Kommentar seit dem 23.09.2026.
+    * **Kein Kommentar ins Leere.** Bis dahin stand ``comment_on_post`` eine
+      Einrueckung zu weit links und lief auch dann, wenn alle Beitraege schon
+      kommentiert waren - mit leerer Adresse.
+    """
+    from fbgroups.automation.actions import Kommentarausgang
+    from fbgroups.urls import adresse_im_text
+
+    monkeypatch.setitem(config.get("kaltmodus"), "aktiv", False)
+    gid = next(iter(GRUPPEN))
+    with MarketingStore(bestand) as store:
+        kampagne = store.load_campaign(KAMPAGNE)
+        with SqliteStore(bestand) as g_store:
+            gruppe = next((g for g in g_store.load_groups() if g.group_id == gid), None)
+        stelle_texte_bereit(store, kampagne, gruppe, config)
+
+    beitrag = f"https://www.facebook.com/groups/{gid}/posts/1/"
+    mock_context.return_value.__enter__.return_value = MagicMock()
+    mock_fetch.return_value = [{"post_url": beitrag, "interactions": 1, "comments": 0}]
+    mock_comment.return_value = Kommentarausgang(True)
+
+    client = _client(bestand, config, headers={"Origin": "http://127.0.0.1:8090"})
+    erste = client.post(
+        f"/arbeit/{KAMPAGNE}/vorschlag/auto",
+        json={"group_id": gid, "nummer": 1, "texttyp": "kommentar"},
+    )
+
+    assert erste.json()["ok"] is True, erste.json()
+    _, adresse, text = mock_comment.call_args.args
+    assert adresse == beitrag
+    assert "{link}" not in text
+    assert adresse_im_text(text) == ""
+    assert "FB-SYR" not in text
+
+    # Derselbe Beitrag ist jetzt kommentiert - ein zweiter Aufruf setzt nichts ab.
+    mock_comment.reset_mock()
+    client.post(
+        f"/arbeit/{KAMPAGNE}/vorschlag/auto",
+        json={"group_id": gid, "nummer": 2, "texttyp": "kommentar"},
+    )
+    mock_comment.assert_not_called()
+

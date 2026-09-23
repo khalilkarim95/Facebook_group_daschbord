@@ -66,17 +66,22 @@ from fbgroups.marketing.models import (
     Texttyp,
 )
 
-# Zehn Kommentare je Gruppe, aus fuenf Vorlagen. Die beiden Zahlen sind
+# Zwanzig Kommentare je Gruppe, aus fuenf Vorlagen. Die beiden Zahlen sind
 # **nicht** dasselbe, und genau deshalb stehen sie getrennt:
 #
 #   MAX_VORSCHLAEGE  = 5   die Zahl der *Texte*
-#   ZIEL_JE_GRUPPE   = 10  die Zahl des *Vorhabens*
+#   ZIEL_JE_GRUPPE   = 20  die Zahl des *Vorhabens*
 #
 # Fassung 6 traegt wieder Vorlage 1, Fassung 7 wieder Vorlage 2 und so fort
 # (``vorlage_zu_nummer``). Zwei gleiche Texte gehen dabei nie unter denselben
 # Beitrag: ``bisherige_post_urls`` sorgt dafuer, dass jeder Kommentar einen
 # anderen Beitrag bekommt.
-ZIEL_JE_GRUPPE = 10
+#
+# **Seit dem 23.09.2026 zwanzig** (Anweisung des Nutzers: "Ziel/Limit pro
+# Gruppe: 20 Kommentare"). Eingefroren wird die Zahl beim Start eines Laufs
+# (``automatik_lauf.ziel_je_gruppe``); ein offener Lauf behaelt die alte, bis
+# ``campaign automatik --neu`` einen neuen beginnt.
+ZIEL_JE_GRUPPE = 20
 
 # Wie viele verschiedene Texte im Topf stehen. Aus ihnen wird gedreht.
 VORLAGEN_JE_TOPF = 5
@@ -1349,6 +1354,7 @@ def lies_fortschritt(
     gruppenlimit: int = 0,
     ziel_kommentare: int = 0,
     kommentare_zuerst: bool = False,
+    beitraege: bool = True,
 ) -> Lauffortschritt:
     """Baut den ganzen Stand aus den vorhandenen Tabellen.
 
@@ -1376,6 +1382,12 @@ def lies_fortschritt(
     neben ``aktionen`` und nicht darin, weil ihre Folge eine andere ist: Eine
     erschoepfte Tagesmenge pausiert die Aktion ueberall, eine volle Gruppe
     laesst die naechste sofort drankommen.
+
+    ``beitraege`` sagt, ob der Lauf den eigenen Beitrag einer Gruppe absetzt
+    (``automatik.beitraege``). Ist es aus, gibt es fuer den Lauf keinen
+    offenen Beitrag: Keine Gruppe bleibt seinetwegen offen, keine Kampagne
+    wartet auf ihn, und ``naechster_schritt`` gibt nur Kommentare heraus.
+    Ein bereits veroeffentlichter Beitrag bleibt gezaehlt.
 
     **Eine Kampagne, die sich nicht lesen laesst, haelt den Lauf nicht auf.**
     Sie kommt als leere, gescheiterte Kampagne in die Liste; der Lauf geht
@@ -1440,6 +1452,7 @@ def lies_fortschritt(
                     uebersprungen=uebersprungen,
                     ruhend=ruhend,
                     besuche=besuche,
+                    beitraege=beitraege,
                     mitgliedschaft_pflicht=mitgliedschaft_pflicht,
                     bezuege=bezuege or {},
                     heute_je_gruppe=heute_je_gruppe or {},
@@ -1485,6 +1498,7 @@ def _lies_kampagne(
     mitgliedschaft_pflicht: bool,
     bezuege: dict,
     besuche: dict | None = None,
+    beitraege: bool = True,
     heute_je_gruppe: dict,
     gruppenlimit: int,
     ziel_kommentare: int = 0,
@@ -1538,7 +1552,11 @@ def _lies_kampagne(
             mitglied=gid in ist_mitglied,
             mitgliedschaft_noetig=mitgliedschaft_pflicht,
             post_status=_post_status(je_gruppe.get(gid)),
-            post_fassungen=frozenset(post_texte.get(gid, set())),
+            # Ohne Beitraege im Lauf (23.09.2026) gibt es keine Fassung, die
+            # hinausgehen koennte - also auch keinen offenen Beitrag.
+            post_fassungen=(
+                frozenset(post_texte.get(gid, set())) if beitraege else frozenset()
+            ),
             beitritt_noetig=gid in beitritt_noetig,
             uebersprungen=(campaign_id, gid) in uebersprungen,
             uebersprungen_grund=uebersprungen.get((campaign_id, gid), ""),

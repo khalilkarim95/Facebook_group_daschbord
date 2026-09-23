@@ -81,8 +81,9 @@ def test_die_fassungen_kommen_der_reihe_nach() -> None:
     heraus ist". Dieselbe Folge, aber ohne gespeicherten Stand, der von der
     Wirklichkeit abweichen koennte.
     """
-    folge = [lauf.naechste_nummer(set(range(1, i + 1))) for i in range(0, 11)]
-    assert folge == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, None]
+    ziel = lauf.ZIEL_JE_GRUPPE  # seit dem 23.09.2026 zwanzig
+    folge = [lauf.naechste_nummer(set(range(1, i + 1))) for i in range(0, ziel + 1)]
+    assert folge == [*range(1, ziel + 1), None]
 
     # Und die Vorlage dahinter dreht sich: 1-5, dann wieder 1-5.
     assert [lauf.vorlage_zu_nummer(n) for n in range(1, 11)] == [1, 2, 3, 4, 5, 1, 2, 3, 4, 5]
@@ -746,11 +747,19 @@ class _Konfig:
     beantwortet wurde. Ihre eigenen Tests stehen in ``test_grenzen.py``.
     """
 
-    def __init__(self, pfad: Path, *, kommentare_zuerst: bool = False) -> None:
+    def __init__(
+        self, pfad: Path, *, kommentare_zuerst: bool = False, beitraege: bool = True
+    ) -> None:
         from fbgroups.config import load_config
 
         self._echt = load_config()
         self._pfad = pfad
+        # **Der Beitragsweg ist hier eingeschaltet** (23.09.2026). In
+        # ``settings.yaml`` steht seither ``automatik.beitraege: false`` - der
+        # Lauf postet nicht. Der Weg besteht aber weiter, und diese Tests
+        # pruefen ihn; dass er ausgeschaltet nichts postet, steht in
+        # ``test_nur_kommentare.py``.
+        self._beitraege = beitraege
         # **Der Test sagt, welche Reihenfolge er meint.** Seit dem 21.09.2026
         # steht in ``settings.yaml`` ``kommentare_zuerst: true``; ein Test,
         # der die Vorgabe prueft, darf nicht davon abhaengen, was dort gerade
@@ -768,6 +777,8 @@ class _Konfig:
             return False
         if pfad[:2] == ("automatik", "kommentare_zuerst"):
             return self._kommentare_zuerst
+        if pfad[:2] == ("automatik", "beitraege"):
+            return self._beitraege
         if pfad[:1] == ("limits",) and pfad[-1:] == ("daily",):
             return 1000
         if pfad[-1:] == ("je_gruppe_taeglich",):
@@ -2063,9 +2074,10 @@ def _hole_schritt(client, versuche: int = 6) -> dict:
 def test_der_server_gibt_den_naechsten_schritt_heraus(bestand: Path) -> None:
     """Der Weg, der die zweite Datenbank ueberfluessig macht.
 
-    Er liefert den **fertigen** Text mit eingesetztem Tracking-Link: Der
-    Arbeitsrechner baut ihn nie selbst, also kann er ihn auch nicht anders
-    bauen als der Server.
+    Er liefert den **fertigen** Text: Der Arbeitsrechner baut ihn nie selbst,
+    also kann er ihn auch nicht anders bauen als der Server. Seit dem
+    23.09.2026 traegt ein Kommentar dabei **keinen** Link - weder die
+    oeffentliche Adresse noch den inneren Code (``test_nur_kommentare.py``).
     """
     with MarketingStore(bestand) as store:
         _texte_anlegen(store, KAMPAGNE, list(GRUPPEN))
@@ -2077,15 +2089,15 @@ def test_der_server_gibt_den_naechsten_schritt_heraus(bestand: Path) -> None:
     assert schritt["nummer"] == 1
     assert schritt["group_id"] in GRUPPEN
     assert schritt["gruppen_url"].startswith("https://www.facebook.com/groups/")
-    assert "{link}" not in schritt["text"], "der Link muss eingesetzt sein"
-    # Eingesetzt ist die **oeffentliche** Adresse. Der Tracking-Code steht
-    # nicht darin: Er nennt Kanal, Zielgruppe, Stadt und laufende Nummer, und
-    # das ist unsere Buchhaltung und keine Auskunft fuer einen Leser.
+    assert "{link}" not in schritt["text"], "kein offener Platzhalter"
     assert "FB-TST-BER" not in schritt["text"]
+    assert schritt["link_url"] == ""
     with MarketingStore(bestand) as store:
         link = store.link_for(KAMPAGNE, schritt["group_id"])
         assert link is not None
-        assert link.url_fuer("browser") in schritt["text"]
+        # Die Adresse gibt es weiterhin - sie steht nur nicht im Kommentar.
+        assert link.url_fuer("browser")
+        assert link.url_fuer("browser") not in schritt["text"]
 
 
 def test_die_meldung_bucht_auf_dem_server(bestand: Path) -> None:
