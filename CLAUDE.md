@@ -145,8 +145,10 @@ unberührt). Die Spalten sind eine fremde Tabelle:
 - Aus „sehr aktiv" wird keine Beitragszahl und umgekehrt. „Sehr Aktiv" enthält
   „Aktiv" — die Reihenfolge in `AKTIVITAETSSTUFEN_TEXT` ist der halbe Inhalt.
 - `parse_member_count` steht in `textnorm.py` (ein Parser für CSV und Browser).
-- Auf den Server: `bash ./ausrollen.sh --mitglieder` (erst Trockenlauf, dann
-  Rückfrage; eingelesen nach dem Einsetzen; zugeordnet wird dabei nichts).
+- Auf den Server: **jedes** `bash ./ausrollen.sh` nimmt die CSV-Dateien aus
+  `data/from_lokal/` mit (seit 23.09.2026; erst Trockenlauf, dann Rückfrage,
+  `--ja` ohne Rückfrage, `--ohne-mitglieder` nur Code; eingelesen nach dem
+  Einsetzen; zugeordnet wird dabei nichts).
 
 ### Note und Aktivitätsstufe
 

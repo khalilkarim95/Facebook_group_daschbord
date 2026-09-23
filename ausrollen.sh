@@ -6,12 +6,15 @@
 #   ./ausrollen.sh --plan       nur zeigen, was liefe - nichts anfassen
 #   ./ausrollen.sh --pip        zusaetzlich die Abhaengigkeiten erneuern
 #   ./ausrollen.sh --test       vorher die Testreihe laufen lassen
-#   ./ausrollen.sh --mitglieder [datei ...]
-#                               danach die Mitgliederlisten aus
-#                               data/from_lokal hinueberkopieren und dort
-#                               einlesen (erst Trockenlauf, dann Rueckfrage)
-#   ./ausrollen.sh --mitglieder --ja
-#                               dasselbe ohne Rueckfrage
+#   ./ausrollen.sh --ja         Mitgliederlisten ohne Rueckfrage einlesen
+#   ./ausrollen.sh --ohne-mitglieder
+#                               nur den Code, keine Mitgliederliste
+#   ./ausrollen.sh datei.csv    nur diese Liste statt aller in data/from_lokal
+#
+# Seit dem 23.09.2026 gehoeren die Mitgliederlisten zu **jedem** Ausrollen:
+# Liegt eine CSV in data/from_lokal, geht sie mit hinueber und wird dort
+# eingelesen (erst Trockenlauf, dann Rueckfrage). `--mitglieder` ist damit
+# die Vorgabe und wird weiterhin angenommen.
 #
 # GIT BASH, NICHT POWERSHELL. Der Kern ist `tar czf - | ssh` - ein binaerer
 # Strom durch eine Rohrleitung. PowerShell 5.1 reicht zwischen zwei nativen
@@ -29,13 +32,13 @@
 # ein Ausrollen, das ihn ueberschreibt, kostet jeden Klick seit der letzten
 # Sicherung.
 #
-# DIE EINZIGE AUSNAHME IST `--mitglieder`, und sie ist deshalb ein eigener
-# Schalter (21.09.2026): Eine Mitgliederliste **fuegt hinzu**, sie
-# ueberschreibt nichts - `import-mitglieder` dreht keinen erreichten Stand
-# zurueck und laesst `review_status` und `notes` unangetastet. Trotzdem
-# laeuft sie nicht bei jedem Ausrollen mit: Ein Ausrollen ist eine Aussage
-# ueber den Code, kein Schreiblauf auf den Bestand. Wer die Liste meint,
-# sagt es.
+# DIE EINZIGE AUSNAHME SIND DIE MITGLIEDERLISTEN. Eine Mitgliederliste
+# **fuegt hinzu**, sie ueberschreibt nichts - `import-mitglieder` dreht keinen
+# erreichten Stand zurueck und laesst `review_status` und `notes`
+# unangetastet. Bis zum 22.09.2026 war sie ein eigener Schalter; seit dem
+# 23.09.2026 laeuft sie bei jedem Ausrollen mit (Anweisung des Nutzers).
+# Gefragt wird trotzdem, bevor eingelesen wird - der Trockenlauf steht
+# davor, und `--ja` ueberspringt nur die Frage.
 #
 # DIE UEBERSICHT ERREICHT MAN UEBER EINEN SSH-TUNNEL. Der Dienst horcht auf
 # 127.0.0.1:8090 und ist von aussen nur lesend zu haben:
@@ -65,20 +68,24 @@ NEU="/tmp/fbgroups-neu"
 VORHER="/opt/fbgroups/vorher"
 DIENST="fbgroups"
 
-plan=0; mit_pip=0; mit_test=0; mit_mitgliedern=0; ohne_rueckfrage=0
+plan=0; mit_pip=0; mit_test=0; mit_mitgliedern=1; ohne_rueckfrage=0
+# Ohne ausdrueckliche Angabe sind die Mitgliederlisten nur dabei, wenn welche
+# da sind: Ein Ausrollen ohne CSV soll deswegen nicht scheitern.
+listen_pflicht=0
 listen=()
 for arg in "$@"; do
     case "$arg" in
         --plan)  plan=1 ;;
         --pip)   mit_pip=1 ;;
         --test)  mit_test=1 ;;
-        --mitglieder) mit_mitgliedern=1 ;;
+        --mitglieder) mit_mitgliedern=1; listen_pflicht=1 ;;
+        --ohne-mitglieder) mit_mitgliedern=0 ;;
         --ja)    ohne_rueckfrage=1 ;;
-        -h|--help) sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "Unbekannte Option: $arg" >&2; exit 2 ;;
         # Alles ohne Strich ist eine Datei fuer --mitglieder. Ohne Angabe
         # gilt, was in data/from_lokal liegt.
-        *) listen+=("$arg"); mit_mitgliedern=1 ;;
+        *) listen+=("$arg"); mit_mitgliedern=1; listen_pflicht=1 ;;
     esac
 done
 
@@ -97,8 +104,13 @@ if [ "$mit_mitgliedern" = 1 ] && [ ${#listen[@]} -eq 0 ]; then
     shopt -u nullglob
 fi
 if [ "$mit_mitgliedern" = 1 ] && [ ${#listen[@]} -eq 0 ]; then
-    echo "Keine Mitgliederliste in data/from_lokal - nichts einzulesen." >&2
-    exit 2
+    if [ "$listen_pflicht" = 1 ]; then
+        echo "Keine Mitgliederliste in data/from_lokal - nichts einzulesen." >&2
+        exit 2
+    fi
+    # Die Vorgabe ohne Liste: nur der Code, und das wird gesagt.
+    echo "Keine Mitgliederliste in data/from_lokal - es wird nur der Code ausgerollt."
+    mit_mitgliedern=0
 fi
 
 # --- 0. Was geht hinaus? ---------------------------------------------------
@@ -198,7 +210,7 @@ schritt "3/4  Antwortet der Dienst?"
 ssh -i "$SCHLUESSEL" "$ZIEL" \
     "curl -s -o /dev/null -w 'healthz: %{http_code}\n' http://127.0.0.1:8090/healthz"
 
-# --- 3b. Mitgliederlisten (nur auf Ansage) --------------------------------
+# --- 3b. Mitgliederlisten (bei jedem Ausrollen, wenn welche da sind) -----
 # **Nach** dem Einsetzen, nicht davor: Eingelesen wird mit dem Code, der
 # gerade ausgerollt wurde - sonst liest eine alte Fassung eine neue Liste,
 # und die Regel, die heute dazugekommen ist, greift erst beim naechsten Mal.
@@ -252,14 +264,11 @@ Zurueck geht es mit dem beiseitegelegten Stand:
      && sudo chown -R fbgroups:fbgroups /opt/fbgroups/app \
      && sudo systemctl restart fbgroups'
 
-Nach Aenderungen an den Score-Gewichten bewertet der naechste Kampagnenlauf
-den Bestand selbst neu (rescoring.bewerte_neu). Einen eigenen Befehl dafuer
-gibt es seit dem 20.09.2026 nicht mehr.
+Der Score wird beim Einlesen gerechnet; der Kampagnenlauf bewertet nicht
+neu (seit 23.09.2026).
 
-Neue Gruppen aus data/from_lokal gehen so hinueber:
-  bash ./ausrollen.sh --mitglieder
-
-Zugeordnet werden sie damit noch nicht - dafuer:
+Die Mitgliederlisten aus data/from_lokal gehen bei jedem Ausrollen mit.
+Zugeordnet werden neue Gruppen damit noch nicht - dafuer:
   ssh -i ~/.ssh/b-tarikak_vps_new root@159.195.216.246 \
     "sudo -u fbgroups /opt/fbgroups/venv/bin/python -m fbgroups.cli \
      campaign sync <kampagne> --dry-run"

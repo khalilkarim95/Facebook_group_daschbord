@@ -37,12 +37,15 @@ bash ./ausrollen.sh --plan     # nur zeigen, was liefe
 bash ./ausrollen.sh            # uebertragen, einsetzen, Dienst neu starten
 bash ./ausrollen.sh --pip      # zusaetzlich Abhaengigkeiten erneuern
 bash ./ausrollen.sh --test     # vorher die Tests
-bash ./ausrollen.sh --mitglieder            # alle data/from_lokal/*.csv einlesen
-bash ./ausrollen.sh --mitglieder liste.csv  # eine bestimmte
+bash ./ausrollen.sh --ja                    # Mitgliederlisten ohne Rueckfrage einlesen
+bash ./ausrollen.sh --ohne-mitglieder       # nur den Code
+bash ./ausrollen.sh liste.csv               # nur diese Liste
 ```
 
 Uebertragen werden nur `src`, `config`, `pyproject.toml` - nie `.env` oder
-`data/`. Ausgerollt wird **aus dem Hauptcheckout auf `main`**.
+`data/`. **Ausnahme:** Jedes Ausrollen nimmt die CSV-Dateien aus
+`data/from_lokal/` mit und liest sie auf dem Server ein (erst Trockenlauf,
+dann Rueckfrage). Ausgerollt wird **aus dem Hauptcheckout auf `main`**.
 
 Rueckrollen, wenn ein Ausrollen schiefging:
 
