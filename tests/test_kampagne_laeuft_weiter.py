@@ -294,7 +294,7 @@ def test_drei_versuche_sind_drei_verschiedene_beitraege() -> None:
     quelle = inspect.getsource(automatik._entscheide_und_kommentiere)
 
     assert "gescheitert.add(gewaehlt.post_url)" in quelle
-    assert "waehle_gelegenheit(gelegenheiten, gescheitert)" in quelle
+    assert "waehle_gelegenheit(gelegenheiten, gescheitert | ohne_text)" in quelle
     assert "MAX_BEITRAEGE_JE_SCHRITT" in quelle
 
 

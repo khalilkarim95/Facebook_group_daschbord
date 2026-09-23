@@ -1,5 +1,6 @@
 import random
 import re
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -909,8 +910,21 @@ def _artikel_auswerten(article, group_id: str) -> dict | None:
     }
 
 
+#: Wie viele Scroll-Runden eine Gruppe hoechstens bekommt (23.09.2026: 15,
+#: vorher fest 5). Entspricht ``GROUP_SCROLL_ROUNDS`` aus dem Analyseskript
+#: des Nutzers; im Lauf kommt die Zahl aus ``automatik.scroll_runden``.
+SCROLL_RUNDEN = 15
+
+
 def fetch_top_posts(
-    context: BrowserContext, group_url: str, group_id: str, limit: int = 5
+    context: BrowserContext,
+    group_url: str,
+    group_id: str,
+    limit: int = 5,
+    *,
+    runden: int = SCROLL_RUNDEN,
+    bekannt: Iterable[str] = (),
+    geeignet: Callable[[dict], bool] | None = None,
 ) -> list[dict]:
     """Scrapes recent posts from the group for metrics (NO TEXT/AUTHORS).
 
@@ -925,12 +939,31 @@ def fetch_top_posts(
 
     Deshalb: nach jedem kleinen Schritt lesen, das Gefundene behalten, und
     aufhoeren, sobald genug beisammen ist.
+
+    **Die eine Scroll- und Suchfunktion** (23.09.2026). Das Analyseskript des
+    Nutzers (``GroupPostAnalyzer.scan_and_analyze_current_group``) tat
+    dasselbe - scrollen, ``div[role='article']`` lesen, Text und Bildtexte
+    zusammen auswerten -, aber getrennt vom Lauf. Uebernommen ist sein Kern,
+    nicht eine zweite Schleife: bis zu ``runden`` Runden (15), und **nach
+    jeder Runde** wird geprueft, ob ein geeigneter Beitrag dabei ist.
+
+    * ``bekannt`` - Beitraege, unter denen schon ein Kommentar von uns steht.
+      Sie zaehlen nicht mit und kommen nicht zurueck: Bis dahin fuellten sie
+      die Menge, und die Suche hoerte auf, bevor ein neuer Beitrag in Sicht
+      kam ("Found 1 post(s) ... alle sichtbaren schon kommentiert").
+    * ``geeignet`` - das Urteil des Laufs (Inhalt, Relevanz, Vorlage). Ist es
+      gegeben, wird **nicht** bei ``limit`` aufgehoert, sondern erst, wenn
+      ein Beitrag es besteht, oder nach der letzten Runde. Ein ungeeigneter
+      Beitrag beendet die Suche nicht.
     """
     page = context.new_page()
     gesammelt: dict[str, dict] = {}
+    schon_kommentiert: set[str] = set(bekannt)
+    uebersprungen: set[str] = set()
+    gefunden_in = 0
+    runden_max = max(int(runden), 1)
     runden = 0
     zuletzt = 0
-    RUNDEN_MAX = 5
     try:
         console.print(f"Navigating to {group_url} to fetch posts...")
         page.goto(group_url, wait_until="domcontentloaded", timeout=60000)
@@ -944,7 +977,7 @@ def fetch_top_posts(
                 "[yellow]Keine Artikel im Aufbau gefunden - es wird trotzdem gesucht.[/yellow]"
             )
 
-        while runden < RUNDEN_MAX:
+        while runden < runden_max:
             runden += 1
             articles = page.locator("div[role='article']").all()
             zuletzt = len(articles)
@@ -955,6 +988,9 @@ def fetch_top_posts(
                     console.print(f"Error parsing article: {e}")
                     continue
                 if daten is None:
+                    continue
+                if daten["post_url"] in schon_kommentiert:
+                    uebersprungen.add(daten["post_url"])
                     continue
                 vorher = gesammelt.get(daten["post_url"])
                 # Der reichere Fund gewinnt: Ein Eintrag ohne Kennzahlen
@@ -980,6 +1016,9 @@ def fetch_top_posts(
                         "a[href]", "els => els.map(e => e.getAttribute('href'))"
                     )
                     for url in beitragslinks(hrefs, group_id):
+                        if url in schon_kommentiert:
+                            uebersprungen.add(url)
+                            continue
                         # Ohne Artikel gibt es weder Kennzahlen noch Text -
                         # und eine geratene Zahl waere schlimmer als keine.
                         gesammelt.setdefault(
@@ -994,7 +1033,13 @@ def fetch_top_posts(
                 except Exception as e:  # noqa: BLE001 - der Rueckfall darf ausfallen
                     console.print(f"Seitenweite Suche nicht moeglich: {e}")
 
-            if len(gesammelt) >= limit:
+            if geeignet is not None:
+                # **Nach jeder Runde das Urteil** - sobald ein Beitrag es
+                # besteht, wird kommentiert statt weiter gescrollt.
+                if any(geeignet(p) for p in gesammelt.values()):
+                    gefunden_in = runden
+                    break
+            elif len(gesammelt) >= limit:
                 break
 
             # Kleine Schritte: Wer in einer Gruppe mit drei Beitraegen 4800
@@ -1006,10 +1051,16 @@ def fetch_top_posts(
         console.print(
             f"Found {len(gesammelt)} post(s) in {runden} round(s); "
             f"articles last seen: {zuletzt}."
+            + (f" Already commented: {len(uebersprungen)}." if uebersprungen else "")
+            + (
+                f" Suitable post in round {gefunden_in}."
+                if gefunden_in
+                else (f" No suitable post in {runden} round(s)." if geeignet else "")
+            )
         )
 
     finally:
         page.close()
 
-    posts_data = list(gesammelt.values())[:limit]
-    return posts_data
+    posts_data = list(gesammelt.values())
+    return posts_data if geeignet is not None else posts_data[:limit]

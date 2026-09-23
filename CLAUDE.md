@@ -526,6 +526,36 @@ Kommentar, 20 Kommentare je Gruppe, das Kampagnenziel aus 12 Stunden und
   20` ist die Tagesgrenze je Gruppe.
 - Festgehalten in `tests/test_nur_kommentare.py`.
 
+### Bis zu 15 Scroll-Runden je Gruppe (23.09.2026)
+
+```
+Gruppe öffnen → Runde 1 scrollen + beurteilen → Runde 2 → … → Runde 15
+   → geeigneter Beitrag gefunden?  ja → kommentieren (bestehende Kette)
+                                   nein → Gruppe ruht, nächste Gruppe der Runde
+```
+
+- **Eine Scrollfunktion: `actions.fetch_top_posts`.** Das Analyseskript des
+  Nutzers (`GroupPostAnalyzer.scan_and_analyze_current_group`,
+  `GROUP_SCROLL_ROUNDS`) stand nie im Projekt; sein Kern (scrollen,
+  `div[role='article']`, Text + Bildtexte) steckte schon hier. Ausgebaut,
+  keine zweite Schleife: `runden` (`automatik.scroll_runden`, 15; vorher fest
+  5), `bekannt` (schon kommentierte Beiträge zählen nicht mit — vorher füllten
+  sie die Menge, und die Suche hörte bei „alle sichtbaren schon kommentiert"
+  auf) und `geeignet` (nach **jeder** Runde).
+- **Das Urteil ist dasselbe wie beim Kommentieren** (`automatik.geeignet_fuer`):
+  `beurteile_beitraege` (Relevanz mit der Schwelle aus `Anspruch`, nicht
+  pauschal `hoch`) und `text_zur_gelegenheit`. Ein einzelnes Wort wie „سفر"
+  oder „نقل" genügt nicht — das entscheidet `inhalt.lies`.
+- **Ein ungeeigneter Beitrag beendet nichts.** Weder die Suche (weiter bis
+  Runde 15) noch den Kommentarschritt: Hat der beste Beitrag keinen Text,
+  kommt der nächste dran (vorher endete der Schritt mit „kein Anlass").
+- **Ein Fehler in einer Gruppe hält die anderen nicht auf**: Die Runde hat
+  die Gruppe schon als besucht vermerkt, die nächste ist dran. Im
+  Fernbetrieb meldet der Arbeitsrechner den Fehler als Ausgang; die Gruppe
+  kommt in der nächsten Runde wieder.
+- Die Wege von Hand (`campaign auto`, Arbeitsseite) rufen ohne `geeignet`
+  und behalten ihr `limit`. Festgehalten in `tests/test_scroll_runden.py`.
+
 ### Grenzen je Aktion (`grenzen.py`)
 
 Beitritt, Beitrag und Kommentar haben je eigene Tagesmenge, eigenen Takt und

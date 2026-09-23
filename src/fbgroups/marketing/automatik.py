@@ -728,6 +728,59 @@ def beitraege_automatisch(config: AppConfig) -> bool:
     return bool(config.get("automatik", "beitraege", default=False))
 
 
+def scroll_runden(config: AppConfig) -> int:
+    """Wie viele Scroll-Runden eine Gruppe hoechstens bekommt (``automatik.scroll_runden``).
+
+    Vorgabe 15 (23.09.2026, Anweisung des Nutzers): In jeder Runde wird ein
+    Stueck weiter gescrollt und das Sichtbare beurteilt; findet sich ein
+    geeigneter Beitrag, wird kommentiert, sonst nach der letzten Runde zur
+    naechsten Gruppe gegangen. Zwischen 1 und 30.
+    """
+    from fbgroups.automation.actions import SCROLL_RUNDEN
+
+    wert = config.get("automatik", "scroll_runden", default=SCROLL_RUNDEN)
+    try:
+        return min(max(int(wert), 1), 30)
+    except (TypeError, ValueError):
+        return SCROLL_RUNDEN
+
+
+def geeignet_fuer(
+    config: AppConfig,
+    group_id: str,
+    *,
+    erlaubnis,  # noqa: ANN001 - entscheidung.Erlaubnis
+    anspruch=None,  # noqa: ANN001 - entscheidung.Anspruch
+    verbrauchte_vorlagen=None,
+    rueckfall: str = "",
+) -> Callable[[dict], bool]:
+    """Das Urteil, nach dem die Suche in einer Gruppe aufhoert - **dasselbe** wie beim Kommentieren.
+
+    Ein Beitrag ist geeignet, wenn die bestehende Kette ihn nehmen wuerde:
+    Inhalt und Relevanz (``beurteile_beitraege``, Schwelle aus ``anspruch``
+    - nicht pauschal ``hoch``) und ein Text dafuer (``text_zur_gelegenheit``).
+    Ein einzelnes Wort wie "سفر" oder "نقل" genuegt dafuer nicht; das
+    entscheidet ``inhalt.lies`` und nicht eine Wortliste. Eine zweite Regel
+    daneben koennte abweichen, und die Suche hielte dann bei einem Beitrag
+    an, unter dem nie kommentiert wird.
+    """
+    verbraucht = set(verbrauchte_vorlagen or ())
+
+    def pruefe(post: dict) -> bool:
+        if not str(post.get("text", "")).strip():
+            return False
+        gelegenheit = beurteile_beitraege([post], erlaubnis, anspruch)[0]
+        if not gelegenheit.taugt:
+            return False
+        text, _ = text_zur_gelegenheit(
+            config, group_id, gelegenheit,
+            rueckfall=rueckfall, bisherige=verbraucht, leise=True,
+        )
+        return text is not None
+
+    return pruefe
+
+
 def kommentare_zuerst(config: AppConfig) -> bool:
     """Kommt in einer Gruppe der Kommentar vor dem Beitrag?
 
@@ -1273,7 +1326,28 @@ def browser_schritt(
     """
     from fbgroups.automation.actions import comment_on_post, fetch_top_posts
 
-    roh = fetch_top_posts(context, gruppen_url, group_id, limit=10)
+    # Bis zu ``scroll_runden`` Runden, bis ein geeigneter Beitrag in Sicht
+    # ist (23.09.2026) - beurteilt mit derselben Kette, die gleich
+    # kommentiert. Schon kommentierte Beitraege zaehlen dabei nicht mit.
+    with MarketingStore(config.path("sqlite_path")) as store:
+        bisherige = store.bisherige_post_urls(group_id)
+        verbrauchte = store.verwendete_vorlagen(group_id, Texttyp.KOMMENTAR.value)
+    roh = fetch_top_posts(
+        context,
+        gruppen_url,
+        group_id,
+        limit=10,
+        runden=scroll_runden(config),
+        bekannt=bisherige,
+        geeignet=geeignet_fuer(
+            config,
+            group_id,
+            erlaubnis=entscheidung_modul.Erlaubnis(),
+            anspruch=anspruch_aus_config(config),
+            verbrauchte_vorlagen=verbrauchte,
+            rueckfall=text,
+        ),
+    )
     if not roh:
         # Kein Urteil ueber die Gruppe (23.09.2026): Die Seite hat gerade
         # nichts hergegeben - die Gruppe ruht, die Runde geht weiter.
@@ -1603,15 +1677,17 @@ def _entscheide_und_kommentiere(
     # der Gruppe ist eine Aussage, die fuer den naechsten Beitrag genauso
     # gilt, und sie noch dreimal zu wiederholen hiesse, gegen die Gruppe zu
     # arbeiten.
-    for versuch in range(1, MAX_BEITRAEGE_JE_SCHRITT + 1):
-        gewaehlt = waehle_gelegenheit(gelegenheiten, gescheitert)
+    # **Ein ungeeigneter Beitrag beendet die Suche nicht** (23.09.2026). Fand
+    # sich fuer den besten Beitrag kein Text, endete der Schritt bis dahin
+    # sofort - auch wenn der naechste gepasst haette. Jetzt geht es zum
+    # naechsten; gezaehlt wird nur, was wirklich versucht wurde.
+    ohne_text: set[str] = set()
+    ohne_text_grund = ""
+    versuch = 0
+    while versuch < MAX_BEITRAEGE_JE_SCHRITT:
+        gewaehlt = waehle_gelegenheit(gelegenheiten, gescheitert | ohne_text)
         if gewaehlt is None:
             break
-
-        console.print(
-            f"[dim]  [Versuch {versuch}/{MAX_BEITRAEGE_JE_SCHRITT}] "
-            f"{gewaehlt.entscheidung.art.value}: {gewaehlt.entscheidung.grund}[/dim]"
-        )
 
         gewaehlter_text, schluessel = text_zur_gelegenheit(
             config, group_id, gewaehlt, rueckfall=text, bisherige=verbraucht
@@ -1638,7 +1714,15 @@ def _entscheide_und_kommentiere(
                     f"({gewaehlt.entscheidung.grund})"
                 )
             )
-            return Schrittergebnis(erfolg=False, fehler=grund, kein_anlass=True)
+            ohne_text.add(gewaehlt.post_url)
+            ohne_text_grund = grund
+            continue
+
+        versuch += 1
+        console.print(
+            f"[dim]  [Versuch {versuch}/{MAX_BEITRAEGE_JE_SCHRITT}] "
+            f"{gewaehlt.entscheidung.art.value}: {gewaehlt.entscheidung.grund}[/dim]"
+        )
 
         # **Ein Kommentar traegt keinen Tracking-Link** (23.09.2026,
         # Anweisung des Nutzers). ``{link}`` faellt samt Hinfuehrung weg
@@ -1716,6 +1800,8 @@ def _entscheide_und_kommentiere(
 
     if letzter is not None:
         return _abschluss(letzter, len(gescheitert))
+    if ohne_text_grund:
+        return Schrittergebnis(erfolg=False, fehler=ohne_text_grund, kein_anlass=True)
 
     gruende = ", ".join(sorted({g.entscheidung.grund for g in gelegenheiten})[:2])
     return Schrittergebnis(
@@ -1855,6 +1941,7 @@ def text_zur_gelegenheit(
     *,
     rueckfall: str,
     bisherige: set[str],
+    leise: bool = False,
 ) -> tuple[str | None, str]:
     """Welcher Text unter **diesen** Beitrag gehoert. Returns: ``(text, schluessel)``.
 
@@ -1911,7 +1998,8 @@ def text_zur_gelegenheit(
     )
     if treffer is not None:
         schluessel, fertig = treffer
-        console.print(f"[dim]  Vorlage {schluessel} ({modus.value})[/dim]")
+        if not leise:
+            console.print(f"[dim]  Vorlage {schluessel} ({modus.value})[/dim]")
         return fertig, schluessel
 
     if anlass_pflicht(config):
@@ -2473,22 +2561,41 @@ def browser_schritt_fern(
     """
     from fbgroups.automation.actions import comment_on_post, fetch_top_posts
 
-    roh = fetch_top_posts(context, gruppen_url, group_id, limit=10)
+    erlaubnis, anspruch, verbrauchte = vorgaben_lesen(vorgaben)
+    if not erlaubnis.kommentare:
+        # Der Server hat Kommentare fuer diese Gruppe abgeschaltet. Kein
+        # Fehlschlag und kein Urteil ueber den Beitrag - und kein Seitenabruf.
+        return Schrittergebnis(
+            erfolg=False,
+            fehler="Kommentare fuer diese Gruppe abgeschaltet",
+            kein_anlass=True,
+        )
+
+    # Bis zu ``scroll_runden`` Runden, bis ein geeigneter Beitrag in Sicht
+    # ist (23.09.2026) - beurteilt mit derselben Kette, die gleich
+    # kommentiert. Schon kommentierte Beitraege zaehlen dabei nicht mit.
+    config = _config_fuer_fern()
+    roh = fetch_top_posts(
+        context,
+        gruppen_url,
+        group_id,
+        limit=10,
+        runden=scroll_runden(config),
+        bekannt=bisherige,
+        geeignet=geeignet_fuer(
+            config,
+            group_id,
+            erlaubnis=erlaubnis,
+            anspruch=anspruch,
+            verbrauchte_vorlagen=verbrauchte,
+            rueckfall=text,
+        ),
+    )
     if not roh:
         # Kein Urteil ueber die Gruppe (23.09.2026): Die Seite hat gerade
         # nichts hergegeben - die Gruppe ruht, die Runde geht weiter.
         return Schrittergebnis(
             erfolg=False, fehler="keine Beitraege zum Kommentieren gefunden", kein_anlass=True
-        )
-
-    erlaubnis, anspruch, verbrauchte = vorgaben_lesen(vorgaben)
-    if not erlaubnis.kommentare:
-        # Der Server hat Kommentare fuer diese Gruppe abgeschaltet. Kein
-        # Fehlschlag und kein Urteil ueber den Beitrag.
-        return Schrittergebnis(
-            erfolg=False,
-            fehler="Kommentare fuer diese Gruppe abgeschaltet",
-            kein_anlass=True,
         )
 
     return entscheide_und_kommentiere(
