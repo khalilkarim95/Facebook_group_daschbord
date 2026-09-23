@@ -542,8 +542,7 @@ def ist_angemeldet(context: BrowserContext) -> tuple[bool, str]:
     aus vielen Gruenden nicht laden, die Startseite nur aus einem.
 
     Bei einem Abruffehler gilt **nicht** "abgemeldet": Ein Netzfehler ist kein
-    Beleg fuer eine abgelaufene Sitzung - dieselbe Zurueckhaltung wie bei
-    ``merke_regeln``, das aus einer ungelesenen Seite keine Regel macht.
+    Beleg fuer eine abgelaufene Sitzung.
     """
     page = context.new_page()
     try:
@@ -773,31 +772,6 @@ def request_join(context: BrowserContext, group_url: str) -> tuple[Beitrittsausg
 
     except PlaywrightTimeoutError:
         return Beitrittsausgang.FEHLER, "Zeitablauf"
-    finally:
-        page.close()
-
-
-def fetch_group_html(context: BrowserContext, group_url: str) -> str:
-    """Holt den HTML **einer** Gruppenseite - angemeldet, damit Zahlen dastehen.
-
-    Nur holen, nicht auswerten: Das tut ``gruppenseite.lies_seite``, und zwar
-    dieselbe Funktion wie beim Weg ueber ``httpx``. Zwei Auswertungen koennten
-    andere Zahlen liefern, und der Unterschied fiele erst in einer Rangliste
-    auf, nach der entschieden wird, wo die naechsten dreihundert Beitraege
-    hingehen.
-
-    Gescrollt wird ein Stueck, damit die Beitragsliste nachlaedt - aus ihren
-    **Zeitpunkten** entsteht die Aktivitaet. Beitragstexte und Namen werden
-    nicht angefasst; ``lies_seite`` nimmt sie gar nicht erst entgegen.
-    """
-    page = context.new_page()
-    try:
-        page.goto(group_url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(random.randint(2000, 3500))
-        for _ in range(3):
-            page.evaluate("window.scrollBy(0, 1200)")
-            page.wait_for_timeout(random.randint(900, 1600))
-        return page.content()
     finally:
         page.close()
 

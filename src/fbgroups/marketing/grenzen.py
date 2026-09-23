@@ -9,7 +9,7 @@ waren:
 * **Wie lange** muss zwischen zwei davon liegen?
 * **Was gilt**, wenn die Gegenseite bremst - und fuer welche Aktion?
 
-Rein wie ``kaltmodus.py``, ``beitritt.py`` und ``qualifikation.py``: kein
+Rein wie ``kaltmodus.py`` und ``beitritt.py``: kein
 Netz, keine Datenbank, kein Playwright. Der Aufrufer reicht Zaehlerstaende
 herein und bekommt ein Urteil.
 

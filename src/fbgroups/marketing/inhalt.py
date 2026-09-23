@@ -8,7 +8,7 @@ die Person will (``Absicht``) und ob es einen echten Bezug zu unserem Angebot
 gibt (``bezug``). Es entscheidet **nicht**, ob geantwortet wird - das tut
 ``entscheidung.py``.
 
-Rein wie ``qualifikation.py``, ``kaltmodus.py`` und ``beitritt.py``: kein
+Rein wie ``kaltmodus.py`` und ``beitritt.py``: kein
 Netz, keine Datenbank, kein Playwright. Der Aufrufer reicht den Text herein
 und bekommt einen Befund zurueck. Damit ist jede Regel dieses Moduls ohne
 Browser pruefbar.
@@ -440,7 +440,7 @@ class Inhaltsbefund:
     hat.
 
     ``treffer`` traegt die Begriffe, die zum Urteil gefuehrt haben - dieselbe
-    Regel wie bei ``Group.score_reason`` und ``qualifikation.Befund.grund``:
+    Regel wie bei ``Group.score_reason``:
     Eine Einstufung, deren Begruendung man nicht nachlesen kann, wird nicht
     nachgeschlagen, sondern geglaubt.
     """
@@ -491,7 +491,7 @@ def lies(text: str) -> Inhaltsbefund:
     ein Urteil aus Schlagwoertern. Ein leerer oder zu kurzer Text ergibt
     ``UNLESBAR`` - und das ist eine Aussage ueber **unsere** Lesbarkeit, nicht
     ueber den Beitrag. Sie fuehrt zu ``NO_REPLY``, nicht zu einem geratenen
-    Thema; dieselbe Regel wie bei ``Regelbefund.gelesen``.
+    Thema.
     """
     roh = (text or "").strip()
     # Drei Zeichen sind kein Beitrag, sondern ein Bild mit einem Smiley

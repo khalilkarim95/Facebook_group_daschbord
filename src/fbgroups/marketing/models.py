@@ -141,7 +141,11 @@ class GroupMarketing(BaseModel):
     bearbeiten: bool = True
     ausschlussgrund: str = ""
     notes: str = ""
-    # --- Was die Regeln DIESER Gruppe erlauben --------------------------
+    # --- Was die Regeln DIESER Gruppe erlaubten --------------------------
+    #
+    # **Seit dem 23.09.2026 nicht mehr gelesen und nicht mehr geschrieben**
+    # (Qualifikation entfernt, Anweisung des Nutzers). Die Felder bleiben,
+    # weil die Spalten bleiben - Migrationen sind hier additiv.
     #
     # Nur das Ergebnis eines Abrufs der Gruppenseite, nicht das Urteil
     # darueber: Die Qualifikation wird bei jedem Lesen aus Mitgliedschaft,

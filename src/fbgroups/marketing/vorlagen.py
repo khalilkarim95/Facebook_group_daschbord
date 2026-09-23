@@ -606,8 +606,7 @@ def anlasstext_zu(config: AppConfig, schluessel: str, *, mit_link: bool) -> str:
     dafuer die **Kennung** und baut den Text daraus neu - beide fahren
     dieselbe ``textvorlagen.yaml``.
 
-    Dieselbe Sparsamkeit wie beim Regelbefund: Hinueber geht das Urteil, nie
-    die Seite. Und dieselbe Zusicherung wie ueberall: Der Text traegt
+    Hinueber geht das Urteil, nie die Seite. Und dieselbe Zusicherung wie ueberall: Der Text traegt
     ``{link}``, nie den Code - aufgeloest wird er erst in
     ``beitrag.mit_link``.
 

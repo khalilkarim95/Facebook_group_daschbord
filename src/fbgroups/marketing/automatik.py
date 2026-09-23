@@ -40,8 +40,8 @@ from fbgroups.marketing import (
     inhalt,
     kaltmodus,
     lauf,
-    qualifikation,
 )
+from fbgroups.marketing.ausgang import Ausgangsart, klassifiziere
 from fbgroups.marketing.models import (
     CampaignStatus,
     KampagnenLaufStatus,
@@ -135,22 +135,6 @@ def mitgliedschaft_pflicht(config: AppConfig) -> bool:
     auf ``beitritt_angefragt`` stand.
     """
     return bool(config.get("automatik", "mitgliedschaft_pflicht", default=True))
-
-
-def regeln_zuerst(config: AppConfig) -> bool:
-    """Muessen die Regeln einer Gruppe gelesen sein, bevor eine Anfrage geht?
-
-    Vorgabe hier **wahr** - die Anforderung vom 13.09.2026 nennt die
-    Reihenfolge ausdruecklich: finden, bewerten, einstufen, Regeln lesen,
-    dann erst anfragen. Abgeschaltet wird auf Ansage in ``settings.yaml``
-    (``beitritt.regeln_zuerst``), und dafuer gibt es einen echten Fall:
-    Laesst sich eine Gruppenseite nicht lesen - Anmeldewand, geschlossene
-    Gruppe -, ginge die Anfrage sonst nie hinaus.
-
-    Dieselbe Aufteilung wie bei ``mitgliedschaft_pflicht``: Der Code behaelt
-    den Schutz fuer den Fall, dass niemand etwas gesagt hat.
-    """
-    return bool(config.get("beitritt", "regeln_zuerst", default=True))
 
 
 def aktive_kampagnen(store: MarketingStore) -> list[str]:
@@ -440,8 +424,6 @@ class _Technikwaechter:
 
 def ist_technisch(fehler: str) -> bool:
     """Ein Fehlschlag der Technik - und damit kein Urteil ueber die Gruppe."""
-    from fbgroups.marketing.qualifikation import Ausgangsart, klassifiziere
-
     return klassifiziere(fehler or "") is Ausgangsart.TECHNISCH
 
 
@@ -492,7 +474,6 @@ def fuehre_lauf_aus(
     *,
     ausfuehren: Callable[[str, str, str, str], Schrittergebnis],
     beitreten: Callable[[str], tuple[str, str]] | None = None,
-    regeln_lesen: Callable[[str], str] | None = None,
     max_schritte: int = 0,
     trocken: bool = False,
     warte: Callable[[float], None] | None = None,
@@ -501,8 +482,8 @@ def fuehre_lauf_aus(
 ) -> lauf.Lauffortschritt:
     """Arbeitet den Lauf ab - in der Reihenfolge des Kampagnenablaufs.
 
-    Kampagne waehlen, Beitrittsanfragen, Neubewertung, beste Gruppen zuerst,
-    Beitrag und Kommentare, dann die naechste Kampagne. Entschieden wird das
+    Kampagne waehlen, Beitrittsanfragen, Beitrag und Kommentare, dann die
+    naechste Kampagne. Entschieden wird das
     nicht hier, sondern in ``lauf.naechster_schritt``; dieses Modul fuehrt
     aus, was dort ansteht, und kennt die Reihenfolge nicht.
 
@@ -515,12 +496,6 @@ def fuehre_lauf_aus(
     wie ``actions.request_join``. **Fehlt es, entstehen keine
     Beitrittsschritte** - ein Treiber ohne Browser soll nicht so tun, als
     koennte er beitreten.
-
-    ``regeln_lesen`` bekommt die Gruppen-URL und liefert den Seitentext wie
-    ``actions.fetch_group_html``. Fehlt es, wird die Gruppe fuer diesen Lauf
-    uebersprungen statt beigetreten: Ohne gelesene Regeln geht keine Anfrage
-    hinaus (``beitritt.regeln_zuerst``), und so zu tun, als waeren sie
-    gelesen, waere die Erlaubnis aus dem Nichts.
 
     Der **Browserkontext gehoert dem Aufrufer**: Er oeffnet ihn einmal fuer
     den ganzen Lauf und bindet ihn in diese Funktion ein. Dadurch steht in
@@ -539,10 +514,6 @@ def fuehre_lauf_aus(
     pfad = config.path("sqlite_path")
     aktiv, _pro_tag, abstand = kaltmodus.einstellungen(config)
     pflicht = mitgliedschaft_pflicht(config)
-    # Beobachtet und angezeigt wird immer, gesperrt nur auf Ansage - siehe
-    # ``qualifikation.pflicht``. Was die Gruppe selbst verbietet, bindet
-    # unabhaengig davon (``qualifikation.darf_nach_regeln``).
-    qual_pflicht = qualifikation.pflicht(config)
     schlafen = warte if warte is not None else _schlafe
 
     with MarketingStore(pfad) as store:
@@ -582,20 +553,12 @@ def fuehre_lauf_aus(
             lauf_id,
             gruppen,
             mitgliedschaft_pflicht=pflicht,
-            qualifikation_pflicht=qual_pflicht,
             aktionen=lagen,
             # Die Bezuege der Gruppen (23.09.2026) - bei jedem Durchgang neu
             # gelesen, denn jeder Kommentarschritt liest Beitraege und legt
             # ihre Bezuege ab. Sie entscheiden noch nichts; siehe
             # ``lauf.Gruppenfortschritt.bezuege``.
             bezuege=store.gruppenbezuege(gruppen),
-            # Ohne Leser keine Regelschritte - dieselbe Ueberlegung wie bei
-            # ``beitreten is None``: Ein Treiber ohne Browser soll nicht so
-            # tun, als koennte er nachsehen. Wuerde die Pflicht trotzdem
-            # gelten, bliebe jede Gruppe mit ungelesenen Regeln liegen, und
-            # der Lauf taete gar nichts - obwohl an ihm nichts fehlt ausser
-            # einer Faehigkeit, die er nie hatte.
-            regeln_pflicht=regeln_zuerst(config) and regeln_lesen is not None,
             heute_je_gruppe=store.versuche_heute_je_gruppe(
                 heute, Texttyp.KOMMENTAR.value
             ),
@@ -674,7 +637,6 @@ def fuehre_lauf_aus(
                 gruppen,
                 ausfuehren=ausfuehren,
                 beitreten=beitreten,
-                regeln_lesen=regeln_lesen,
                 trocken=trocken,
                 kaltmodus_aktiv=aktiv,
                 abstand=abstand,
@@ -693,13 +655,6 @@ def fuehre_lauf_aus(
 
         if fertig:
             break
-
-        # Die Neubewertung zaehlt nicht mit: ``--limit`` begrenzt, was **nach
-        # aussen** geht, nicht die Buchfuehrung. Sonst kostete ein Lauf mit
-        # ``--limit 5`` in fuenf Kampagnen fuenf Bewertungen und keinen
-        # einzigen Beitrag.
-        if schritt.art is lauf.Schrittart.BEWERTEN:
-            continue
 
         getan += 1
         if max_schritte and getan >= max_schritte:
@@ -799,14 +754,7 @@ def _ueberspringen(
 
     ``ruhe`` in Minuten macht daraus eine **Ruhezeit**: Die Gruppe kommt von
     selbst zurueck. Ohne sie gilt der Uebersprung fuer den ganzen Lauf.
-
-    Bei einem Schritt ohne Gruppe (der Neubewertung) wird stattdessen die
-    Bewertung als erledigt vermerkt: Sonst stuende die Kampagne bei jedem
-    Durchgang wieder davor, und der Lauf kaeme nie zur Arbeit.
     """
-    if not schritt.group_id:
-        store.merke_bewertung(lauf_id, schritt.campaign_id)
-        return
     store.ueberspringe_gruppe(
         lauf_id, schritt.campaign_id, schritt.group_id, grund, ruhe_minuten=ruhe
     )
@@ -826,7 +774,6 @@ def _fuehre_schritt_aus(
     *,
     ausfuehren: Callable[[str, str, str, str], Schrittergebnis],
     beitreten: Callable[[str], tuple[str, str]] | None,
-    regeln_lesen: Callable[[str], str] | None,
     trocken: bool,
     kaltmodus_aktiv: bool,
     abstand: int,
@@ -834,14 +781,10 @@ def _fuehre_schritt_aus(
 ) -> bool:
     """Genau einen Schritt ausfuehren. Returns: ob der Lauf enden soll.
 
-    Die vier Arten stehen hier nebeneinander, weil sie denselben Rahmen
+    Die beiden Arten stehen hier nebeneinander, weil sie denselben Rahmen
     teilen: lesen, handeln (ohne offene Datenbank), buchen. Was sie
     unterscheidet, ist allein die Handlung in der Mitte.
     """
-    if schritt.art is lauf.Schrittart.REGELN:
-        return _regeln_schritt(pfad, lauf_id, schritt, gruppen, regeln_lesen, trocken=trocken)
-    if schritt.art is lauf.Schrittart.BEWERTEN:
-        return _bewerten(config, pfad, lauf_id, schritt, gruppen, trocken=trocken)
     if schritt.art is lauf.Schrittart.BEITRITT:
         return _beitritt_schritt(pfad, lauf_id, schritt, gruppen, beitreten, trocken=trocken)
     return _text_schritt(
@@ -856,99 +799,6 @@ def _fuehre_schritt_aus(
         abstand=abstand,
         technik=technik,
     )
-
-
-def _bewerten(
-    config: AppConfig,
-    pfad: Path,
-    lauf_id: int,
-    schritt: lauf.Schritt,
-    gruppen: dict,
-    *,
-    trocken: bool,
-) -> bool:
-    """Schritt 3: die Gruppen dieser Kampagne neu bewerten.
-
-    Kein Browser, kein Netz - gerechnet wird aus dem, was inzwischen bekannt
-    ist: Mitgliederzahl aus ``enrich``, Resonanz aus den Klicks, Aktivitaet
-    aus der Beitragsliste. Erst danach steht die Rangfolge fest, nach der
-    gearbeitet wird; ohne diesen Schritt arbeitete der Lauf nach den Zahlen
-    von vorgestern.
-
-    Der Vermerk wird **auch nach einem Fehlschlag** gesetzt (der Aufrufer tut
-    das ueber ``_ueberspringen``): Eine Bewertung, die jedes Mal scheitert,
-    hielte die Kampagne sonst fuer immer vor der Arbeit fest.
-    """
-    from fbgroups.rescoring import bewerte_neu
-
-    console.print(f"[bold]{schritt.gruppe_name}[/bold] - Neubewertung")
-    if trocken:
-        console.print("[dim]  --dry-run: es wird nichts geschrieben[/dim]")
-        return True
-
-    with MarketingStore(pfad) as store:
-        nur = {link.group_id for link in store.links_for_campaign(schritt.campaign_id)}
-
-    ergebnis = bewerte_neu(config, nur=nur)
-    console.print(
-        f"[dim]  {ergebnis.bewertet} Gruppen bewertet, "
-        f"{ergebnis.geaendert} mit geaendertem Score[/dim]"
-    )
-    # Der Lauf haelt die Gruppen im Gedaechtnis; ohne diese Zeile sortierte
-    # der naechste Durchgang nach den Scores von vor der Bewertung.
-    gruppen.update({g.group_id: g for g in ergebnis.gruppen})
-
-    with MarketingStore(pfad) as store:
-        store.merke_bewertung(lauf_id, schritt.campaign_id)
-    return False
-
-
-def _regeln_schritt(
-    pfad: Path,
-    lauf_id: int,
-    schritt: lauf.Schritt,
-    gruppen: dict,
-    regeln_lesen: Callable[[str], str] | None,
-    *,
-    trocken: bool,
-) -> bool:
-    """Schritt 1: nachsehen, was diese Gruppe erlaubt - **vor** der Anfrage.
-
-    Ein Seitenabruf, keine Handlung in der Gruppe: Niemand sieht ihn, nichts
-    wird geschrieben, kein Kontingent verbraucht. Genau deshalb steht er vor
-    der Beitrittsanfrage und nicht danach - er kostet am wenigsten und
-    entscheidet am meisten.
-
-    **Ein nicht gelesener Befund schreibt nichts** (``store.merke_regeln``).
-    Eine Anmeldewand ist kein Beleg dafuer, dass eine frueher gelesene Regel
-    weg ist - dieselbe Ueberlegung wie bei ``upsert_groups`` mit COALESCE.
-    Damit dieselbe Gruppe trotzdem nicht bei jedem Durchgang wiederkommt,
-    wird sie fuer **diesen** Lauf beiseitegelegt: ein Uebersprung, kein
-    Urteil.
-    """
-    from fbgroups.marketing.qualifikation import lies_regeln
-
-    gruppe = gruppen.get(schritt.group_id)
-    if regeln_lesen is None or gruppe is None or not gruppe.url_canonical:
-        with MarketingStore(pfad) as store:
-            _ueberspringen(store, lauf_id, schritt, "Regeln nicht lesbar")
-        return False
-
-    console.print(f"[bold]{schritt.gruppe_name}[/bold] - Gruppenregeln lesen")
-    if trocken:
-        console.print("[dim]  --dry-run: es wird nichts abgerufen[/dim]")
-        return True
-
-    befund = lies_regeln(regeln_lesen(gruppe.url_canonical))
-
-    with MarketingStore(pfad) as store:
-        if not befund.gelesen:
-            console.print("[yellow]  Seite nicht lesbar - in diesem Lauf uebersprungen[/yellow]")
-            _ueberspringen(store, lauf_id, schritt, "Gruppenseite nicht lesbar")
-            return False
-        store.merke_regeln(schritt.group_id, befund)
-        console.print(f"[green]  gelesen:[/green] {befund.zusammenfassung() or 'nichts verboten'}")
-    return False
 
 
 def _beitritt_schritt(
@@ -1273,15 +1123,15 @@ def _buche(store: MarketingStore, campaign, link, schritt: lauf.Schritt, ergebni
         store.loesche_sperre(aktion.value)
     else:
         console.print(f"[red]  fehlgeschlagen: {ergebnis.fehler}[/red]")
-        art = qualifikation.klassifiziere(ergebnis.fehler)
-        if art is qualifikation.Ausgangsart.GRUPPENLIMIT:
+        art = klassifiziere(ergebnis.fehler)
+        if art is Ausgangsart.GRUPPENLIMIT:
             # Nur **diese** Gruppe nimmt nichts mehr an. Die Aktion laeuft
             # weiter; in der naechsten Gruppe geht es sofort los.
             console.print(
                 "[yellow]  Diese Gruppe nimmt gerade nichts mehr an - "
                 "andere Gruppen laufen weiter.[/yellow]"
             )
-        elif art is qualifikation.Ausgangsart.RATE_LIMIT:
+        elif art is Ausgangsart.RATE_LIMIT:
             stufe = merke_bremse(store, aktion.value)
             console.print(
                 f"[yellow]  Die Gegenseite bremst: {aktion.value} pausiert "
@@ -1544,7 +1394,7 @@ def waehle_und_kommentiere(
             group_id, Texttyp.KOMMENTAR.value
         )
         if erlaubnis is None:
-            erlaubnis = erlaubnis_fuer(store, group_id)
+            erlaubnis = entscheidung_modul.Erlaubnis()
 
     return entscheide_und_kommentiere(
         context,
@@ -1616,16 +1466,16 @@ def _entscheide_und_kommentiere(
     wird** - und sie kennt keine Datenbank. Das ist der Punkt (14.09.2026):
     Bis dahin stand diese Kette nur im oertlichen Lauf. Der Fernbetrieb
     (``campaign automatik --server``) nahm stattdessen den **lautesten**
-    Beitrag und setzte den vorbereiteten Text darunter - ohne Inhaltspruefung,
-    ohne die Regeln der Gruppe, ohne Anspruch. Wer den Fernbetrieb faehrt -
+    Beitrag und setzte den vorbereiteten Text darunter - ohne Inhaltspruefung
+    und ohne Anspruch. Wer den Fernbetrieb faehrt -
     und das ist der Regelfall -, hatte damit einen Runner, der genau die
     Pruefungen ausliess, die ``campaign pruefe-inhalt`` vorfuehrt.
 
     Alles, was sonst aus dem Bestand kaeme, wird hereingereicht:
 
     * ``bisherige`` - unter welchen Beitraegen schon etwas von uns steht.
-    * ``erlaubnis`` - was die Gruppe laut ihren **gelesenen** Regeln zulaesst
-      (``qualifikation.beurteile`` → ``Erlaubnis.aus_regeln``).
+    * ``erlaubnis`` - was die Gruppe zulaesst (seit dem 23.09.2026 fuer jede
+      Gruppe dasselbe: ``entscheidung.Erlaubnis()``).
     * ``anspruch`` - wie viel ein Beitrag **an dieser Stelle** hergeben muss
       (``automatik.anspruch_aus_config``, fuer jede Gruppe gleich).
     * ``verbrauchte_vorlagen`` - damit derselbe Satz nicht zweimal in
@@ -1634,8 +1484,7 @@ def _entscheide_und_kommentiere(
       traegt ``{link}`` als Platzhalter; aufgeloest wird er hier, unmittelbar
       bevor er hinausgeht (``beitrag.setze_adresse``).
 
-    Dieselbe Aufteilung wie bei ``lies_regeln``: Die reine Regel laeuft auf
-    dem Rechner, der den Browser hat; der Bestand liegt dort, wo gezaehlt
+    Die reine Regel laeuft auf dem Rechner, der den Browser hat; der Bestand liegt dort, wo gezaehlt
     wird. Zwei Auswertungen koennten auseinanderlaufen - eine kann es nicht.
     """
     bisherige = set(bisherige or ())
@@ -2124,31 +1973,6 @@ MITGLIEDSCHAFT = frozenset(
 )
 
 
-def erlaubnis_fuer(store: MarketingStore, group_id: str):  # noqa: ANN201
-    """Was diese Gruppe zulaesst - aus ihren gelesenen Regeln und der Beobachtung.
-
-    Uebersetzt, nicht neu entschieden: Die Rangfolge (Regeln binden,
-    Beobachtung schraenkt ein) steht in ``qualifikation.beurteile``.
-    """
-    stand = store.load_marketing(group_id)
-    regeln = qualifikation.Regelbefund(
-        gelesen=bool(stand and stand.regeln_gelesen_am),
-        keine_links=bool(stand and stand.regel_keine_links),
-        keine_werbung=bool(stand and stand.regel_keine_werbung),
-        freigabe_noetig=bool(stand and stand.regel_freigabe_noetig),
-        neue_ohne_links=bool(stand and stand.regel_neue_ohne_links),
-    )
-    befund = qualifikation.beurteile(
-        mitglied=bool(stand and stand.marketing_status in MITGLIEDSCHAFT),
-        beitritt_angefragt=bool(
-            stand and stand.marketing_status is MarketingStatus.JOIN_REQUESTED
-        ),
-        regeln=regeln,
-        beobachtung=store.beobachtungen().get(group_id),
-    )
-    return entscheidung_modul.Erlaubnis.aus_regeln(regeln, befund.qualifikation)
-
-
 #: Wie viele Netzfehler hintereinander der Fernbetrieb hinnimmt, bevor er
 #: aufgibt. Ein einzelner Aussetzer ist ein Schluckauf des Tunnels; fuenf
 #: hintereinander heissen, dass der Dienst nicht mehr da ist - und dann
@@ -2163,7 +1987,6 @@ def fuehre_lauf_fern_aus(
     *,
     ausfuehren: Callable[[str, str, str, list[str], str, dict, str], Schrittergebnis],
     beitreten: Callable[[str], tuple[str, str]] | None = None,
-    regeln_lesen: Callable[[str], str] | None = None,
     max_schritte: int = 0,
     zeitlimit: float = 300.0,
     nur: list[str] | None = None,
@@ -2184,16 +2007,13 @@ def fuehre_lauf_fern_aus(
     Browser und meldet zurueck. Eine Wahrheit, und sie liegt dort, wo auch
     die Klicks gezaehlt werden.
 
-    Auch die **Reihenfolge** liegt dort: Beitrittsanfragen vor Neubewertung
-    vor Arbeit, beste Gruppen zuerst. Dieser Rechner sieht nur ``art`` und
-    tut, was dort steht - er kann die Reihenfolge deshalb nicht anders
-    auslegen als der oertliche Lauf.
+    Auch die **Reihenfolge** liegt dort: Beitrittsanfragen vor Arbeit.
+    Dieser Rechner sieht nur ``art`` und tut, was dort steht - er kann die
+    Reihenfolge deshalb nicht anders auslegen als der oertliche Lauf.
 
     ``beitreten`` fuehrt einen Beitrittsschritt aus; fehlt es, wird ein
     solcher Schritt als Fehlschlag gemeldet und die Gruppe vom Server fuer
-    diesen Lauf beiseitegelegt. ``regeln_lesen`` holt eine Gruppenseite;
-    fehlt es, gilt sie als nicht lesbar - und ohne gelesene Regeln geht keine
-    Beitrittsanfrage hinaus. **Ein Fehler bei einer Gruppe beendet den
+    diesen Lauf beiseitegelegt. **Ein Fehler bei einer Gruppe beendet den
     Lauf nicht**: Er wird gemeldet, gebucht und der naechste Schritt geholt.
 
     Returns: die Abschlussmeldung des Servers.
@@ -2273,48 +2093,6 @@ def fuehre_lauf_fern_aus(
 
             s = daten["schritt"]
             art = s.get("art", "text")
-
-            if art == "regeln":
-                # Schritt 1: die Gruppenseite lesen. Der Browser steht hier,
-                # der Bestand dort - ausgewertet wird mit derselben reinen
-                # Funktion wie oertlich, und hinueber geht nur der Befund.
-                from fbgroups.marketing.qualifikation import lies_regeln
-
-                console.print(f"[bold]{s['gruppe_name']}[/bold] - Gruppenregeln lesen")
-                seite = regeln_lesen(s["gruppen_url"]) if regeln_lesen is not None else ""
-                befund = lies_regeln(seite)
-                if not _melde(
-                    klient,
-                    f"{basis}/automatik/regeln/ergebnis",
-                    {
-                        "group_id": s["group_id"],
-                        "campaign_id": s["campaign_id"],
-                        "gelesen": befund.gelesen,
-                        "keine_links": befund.keine_links,
-                        "keine_werbung": befund.keine_werbung,
-                        "freigabe_noetig": befund.freigabe_noetig,
-                        "neue_ohne_links": befund.neue_ohne_links,
-                    },
-                ):
-                    # Nicht gebucht heisst: Der naechste Schritt ist derselbe.
-                    # Weiterzumachen hiesse, dieselbe Seite erneut zu holen -
-                    # und zwar bis zum Schleifenwaechter.
-                    return (
-                        "Abgebrochen: Ein Regelbefund liess sich nicht buchen. "
-                        "Ein zweiter Anlauf laese dieselbe Seite noch einmal."
-                    )
-                if befund.gelesen:
-                    console.print(
-                        f"[green]  gelesen:[/green] "
-                        f"{befund.zusammenfassung() or 'nichts verboten'}"
-                    )
-                else:
-                    console.print("[yellow]  Seite nicht lesbar - uebersprungen[/yellow]")
-                getan += 1
-                if max_schritte and getan >= max_schritte:
-                    console.print(f"[dim]Grenze von {max_schritte} Schritten erreicht.[/dim]")
-                    return f"{getan} Schritt(e) ausgefuehrt, Grenze erreicht."
-                continue
 
             if art == "beitritt":
                 ausgang, bemerkung = (
@@ -2519,13 +2297,10 @@ def vorgaben_lesen(vorgaben: dict | None):  # noqa: ANN201 - (Erlaubnis, Anspruc
 
     Die Gegenseite von ``web``: Dort werden sie aus dem Bestand gerechnet,
     hier wieder zusammengesetzt. Uebertragen werden **Wahrheitswerte und
-    Kennungen**, kein Datensatz - dieselbe Sparsamkeit wie beim Regelbefund.
+    Kennungen**, kein Datensatz.
 
-    **Fehlt die Angabe, gilt die vorsichtige Vorgabe.** Ein aelterer Server,
-    der ``vorgaben`` noch nicht mitschickt, fuehrt damit zu ``links=False``:
-    Aus nichts entsteht keine Link-Erlaubnis. Kommentiert wird trotzdem, nur
-    ohne Adresse - das ist der Unterschied zum Stand vor dem 21.09.2026, an
-    dem ein fehlendes ``werbung`` den Kommentar ganz ausfallen liess.
+    **Fehlt die Angabe, gilt ``Erlaubnis()``** - seit dem 23.09.2026 mit
+    Link, wie fuer jede Gruppe.
     """
     from fbgroups.marketing.inhalt import Relevanz
 
@@ -2534,11 +2309,10 @@ def vorgaben_lesen(vorgaben: dict | None):  # noqa: ANN201 - (Erlaubnis, Anspruc
     erlaubnis = entscheidung_modul.Erlaubnis(
         kommentare=bool(roh_erlaubnis.get("kommentare", True)),
         beitraege=bool(roh_erlaubnis.get("beitraege", True)),
-        links=bool(roh_erlaubnis.get("links", False)),
+        links=bool(roh_erlaubnis.get("links", True)),
         # ``werbung`` stand hier bis zum 21.09.2026. Ein aelterer Server
         # schickt es weiterhin mit; es wird schlicht uebergangen.
         privatkontakt=bool(roh_erlaubnis.get("privatkontakt", True)),
-        regeln_gelesen=bool(roh_erlaubnis.get("regeln_gelesen", False)),
     )
 
     roh_anspruch = vorgaben.get("anspruch") or {}
@@ -2579,7 +2353,7 @@ def browser_schritt_fern(
         return _ausgang(comment_on_post(context, bester["post_url"], text), ...)
 
     Der **lauteste** Beitrag, der vorbereitete Text, kein Blick auf den
-    Inhalt und keiner auf die Regeln der Gruppe. Wer den Fernbetrieb faehrt -
+    Inhalt. Wer den Fernbetrieb faehrt -
     und das ist der Regelfall - hatte damit einen Runner, der genau die
     Pruefungen ausliess, die ``campaign pruefe-inhalt`` vorfuehrt: Der
     Kommentar ueber Paketmitnahme landete unter dem Wohnungsgesuch mit
@@ -2595,12 +2369,11 @@ def browser_schritt_fern(
 
     erlaubnis, anspruch, verbrauchte = vorgaben_lesen(vorgaben)
     if not erlaubnis.kommentare:
-        # Die Gruppe laesst laut ihren gelesenen Regeln keine Kommentare zu.
-        # Das ist kein Fehlschlag und kein Urteil ueber den Beitrag - es ist
-        # die Regel der Gruppe, und sie bindet ohne Schalter.
+        # Der Server hat Kommentare fuer diese Gruppe abgeschaltet. Kein
+        # Fehlschlag und kein Urteil ueber den Beitrag.
         return Schrittergebnis(
             erfolg=False,
-            fehler="die Gruppe laesst keine Kommentare zu (gelesene Regeln)",
+            fehler="Kommentare fuer diese Gruppe abgeschaltet",
             kein_anlass=True,
         )
 

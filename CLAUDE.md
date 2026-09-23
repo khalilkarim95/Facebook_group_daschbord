@@ -70,13 +70,13 @@ Hauptcheckout editierbar installiert und liefe sonst mit dessen Code.
 ```
 config/settings.yaml, textvorlagen.yaml, rewards.yaml
         │
-mitglieder.py ──► storage/sqlite_store (groups) ──► scoring, rescoring
+mitglieder.py ──► scoring ──► storage/sqlite_store (groups)
                                 │
                   marketing/store (Kampagnen, Codes, Texte, Versuche, Ereignisse)
                                 │
    Text:     vorlagen, beitrag, kurzcode
    Urteil:   inhalt (Thema/Anlass/Relevanz), bezug (Bezüge), entscheidung,
-             qualifikation (Regeln/Beobachtung), grenzen (Tagesmengen/Takt)
+             ausgang (Antwort von Facebook), grenzen (Tagesmengen/Takt)
    Ablauf:   lauf (Reihenfolge), automatik (Treiber), arbeit (Arbeitsseite),
              watchdog
    Dienst:   web (FastAPI), dashboard, arbeitsseite, tracking, referral, rewards
@@ -84,7 +84,7 @@ mitglieder.py ──► storage/sqlite_store (groups) ──► scoring, rescori
                   automation/ (Playwright, sichtbar: actions, browser)
 ```
 
-Die reinen Module (`inhalt`, `bezug`, `entscheidung`, `qualifikation`,
+Die reinen Module (`inhalt`, `bezug`, `entscheidung`, `ausgang`,
 `grenzen`, `kaltmodus`, `lauf`) kennen weder Netz noch Datenbank noch
 Playwright — der Aufrufer reicht die Angaben herein. So ist jede Regel ohne
 Browser prüfbar.
@@ -105,7 +105,7 @@ Browser prüfbar.
   unbekannter Wert in einer Liste wird gemeldet, nicht geraten.
 - **Zwei Wahrheiten vermeiden.** Eine Regel, eine Rangfolge, eine Zählweise
   steht an **einer** Stelle; wer eine zweite Fassung baut, bekommt zwei
-  Ergebnisse. Gerechnete Urteile (Qualifikation, Lauffortschritt) werden
+  Ergebnisse. Gerechnete Urteile (Lauffortschritt) werden
   **nicht gespeichert**, sondern bei jedem Lesen aus ihren Grundlagen gerechnet.
 - **Migrationen sind ausschließlich additiv** (`user_version`, Schritte in
   `storage/sqlite_store._MIGRATIONS`, aktuell Version 27). Kein `DROP`, kein
@@ -185,8 +185,9 @@ Wahl. Geprüft wird gegen die Aufzählung, nicht gegen den Bestand.
 - `data_confidence` steht **neben** dem Score, nie darin. `data_quality`
   zählt nur erhobene Felder.
 - Sortiert wird über `scoring.sort_by_rank` (Punkte, bei Gleichstand der Anteil
-  an `score_max`). Neu bewertet wird im Lauf (`rescoring.bewerte_neu`), das
-  **nicht klassifiziert** — Kategorie, Zielgruppe, Stadt werden gepflegt.
+  an `score_max`). Gerechnet wird der Score beim Einlesen
+  (`import-mitglieder`); **der Lauf bewertet nicht neu** (seit 23.09.2026).
+  Kategorie, Zielgruppe, Stadt werden gepflegt, nie abgeleitet.
 - Statusachsen: `validation_status` (URL, rein strukturell — `test_data` ist
   ein Verdacht, markiert statt gelöscht), `data_quality`, `status`.
 
@@ -360,16 +361,21 @@ anlaesse: <sprache>: <anlass>: [Fassungen]
 ### Die Reihenfolge steht an einer Stelle: `lauf.naechster_schritt`
 
 ```
-Kampagne (sequentiell) → Gruppenregeln lesen → Beitrittsanfragen (derzeit 0)
-   → Neubewertung (einmal je Kampagne und Lauf) → Arbeitsliste
+Kampagne (sequentiell) → Beitrittsanfragen (derzeit 0) → Arbeitsliste
    → je Gruppe: Kommentare und Beitrag → nächste Gruppe → nächste Kampagne
 ```
 
 Kommandozeile, Dienst und Fernbetrieb fragen alle dort; keiner kennt die
 Reihenfolge selbst.
 
-- **Arbeitsliste**: stabil nach `vorrang` (Beitrag **und** Kommentare möglich
-  vor einem von beiden vor nichts), darin Score-Reihenfolge.
+- **Arbeitsliste**: die Score-Reihenfolge (`sort_by_rank`).
+- **Entfernt am 23.09.2026** (Anweisung des Nutzers): das Lesen der
+  Gruppenregeln (`Schrittart.REGELN`, `marketing regeln`), die Neubewertung im
+  Lauf (`Schrittart.BEWERTEN`, `rescoring.py`) und die ganze Qualifikation
+  (`qualifikation.py`, `campaign qualifikation`, Spalte „Darf", Sperre nach
+  wiederholter Ablehnung). Jede Gruppe bekommt dieselbe `Erlaubnis()` —
+  **mit Link**. Die Spalten `regel_*`, `regeln_gelesen_am`, `bewertet_am`
+  bleiben (Migrationen additiv), werden aber nicht mehr geschrieben.
 - `automatik.kommentare_zuerst: true` (Vorgabe im Code: erst Beitrag). Zwei
   **Kandidaten** (`_beitragsschritt`, `_kommentarschritt`): gibt der erste
   nichts her, wird der zweite gefragt.
@@ -385,10 +391,6 @@ Reihenfolge selbst.
   nie eingefroren. Eine Kampagne, deren Gruppen alle ruhen, behält ihren Platz.
 - `automatik.mitgliedschaft_pflicht: false` — Gruppen ohne vermerkte
   Mitgliedschaft werden versucht (der Vermerk ist unser Arbeitsstand).
-- **Gruppenregeln vor Anfrage und Arbeit** (`Schrittart.REGELN`,
-  `beitritt.regeln_zuerst`): `regeln_offen` nennt höchstens die nächste
-  Beitritts-, Arbeits- **und** Kommentargruppe. Ein ungelesener Befund schreibt
-  nichts. Ungelesene Regeln kosten den **Link**, nicht den Kommentar.
 
 ### Ausgänge und was sie kosten
 
@@ -398,7 +400,7 @@ Reihenfolge selbst.
 | kein Anlass (`kein_anlass`) | nichts gebucht, Gruppe **ruht** (`automatik.ruhe_minuten`, 2) |
 | tote Beitragsadresse (`beitrag_weg`) | nächster Beitrag im selben Schritt, dann Ruhe |
 | technischer Fehlschlag | bis zu drei Beiträge im Schritt (`MAX_BEITRAEGE_JE_SCHRITT`), dann Ruhe — **kein Ausschluss** |
-| Ablehnung durch die Gruppe | Gruppe beiseite für diesen Lauf; zählt in `qualifikation.Beobachtung` |
+| Ablehnung durch die Gruppe | Gruppe beiseite für diesen Lauf (keine dauerhafte Sperre) |
 | `GRUPPENLIMIT` (Freigabe-Warteschlange voll) | nächste Gruppe, verbraucht keine Fassung |
 | `RATE_LIMIT` (Facebook bremst) | nur diese Aktion pausiert; Backoff verdoppelt sich (60 Min … 24 h), überlebt den Neustart |
 | Sitzungsfehler / Anmeldewand | Lauf hält **sofort** an — der einzige Grund dafür |
@@ -406,7 +408,7 @@ Reihenfolge selbst.
 - **Nur SUCCESS zählt** (`versuche_heute*`, `letzter_versuch` fragen
   `erfolg = 1`). Ein Fehlschlag verbraucht keine Tagesmenge und keinen Takt.
 - **Ein technischer Fehlschlag zählt nicht gegen eine Fassung**
-  (`gescheiterte_kommentarfassungen` fragt `qualifikation.klassifiziere`, im
+  (`gescheiterte_kommentarfassungen` fragt `ausgang.klassifiziere`, im
   Zweifel `TECHNISCH`). `MAX_VERSUCHE_JE_FASSUNG` = 3, danach `erschoepft`.
 - **Ruhezeit statt Schlussstrich** (`automatik_lauf_uebersprungen.wiederholen_ab`).
   Ruht eine Gruppe, wartet der Lauf (`naechste_rueckkehr`), statt sich fertig zu
@@ -467,8 +469,8 @@ Beitrag -> Thema + Absicht + Ziel/Herkunft/Strecke -> Anlass -> Relevanz
   Anlass hinausgehen, sobald die Relevanz reicht.
 - **Linkmodus ist die Kehrseite der Antwortart.** `NO_LINK` hat bewusst
   **keinen** Textvorrat (er wäre erfunden) — dort wird nicht kommentiert.
-  Link nur mit gelesener Regel ohne Linkverbot und ohne `OHNE_LINKS`-Beobachtung.
-  Die Werbungslogik (`Erlaubnis.werbung`) ist entfernt.
+  Wo die App genannt wird, geht der Link mit (`Erlaubnis().links` ist wahr,
+  für jede Gruppe). Die Werbungslogik (`Erlaubnis.werbung`) ist entfernt.
 - **Anlasstexte** (`anlaesse:` in `textvorlagen.yaml`): kein Vorrat zu einem
   Anlass heißt kein Kommentar. `{link}` wird unmittelbar vor dem Absenden
   aufgelöst (`beitrag.setze_adresse`; die Adresse reist getrennt als
@@ -482,17 +484,12 @@ Beitrag -> Thema + Absicht + Ziel/Herkunft/Strecke -> Anlass -> Relevanz
   (`alt`) gehen mit (`actions.mit_bildtexten`).
 - `campaign pruefe-inhalt "<text>"` zeigt Befund und Entscheidung ohne Netz.
 
-### Qualifikation (`qualifikation.py`)
+### Die Antwort von Facebook (`ausgang.py`)
 
-Gerechnet aus Mitgliedschaft, gelesenen Gruppenregeln
-(`group_marketing.regeln_gelesen_am` + Flags) und Versuchsprotokoll. **Die
-Regeln der Gruppe binden** (`darf_nach_regeln`, ohne Schalter), die
-Beobachtung schränkt nur ein. `OHNE_LINKS`/`OHNE_KOMMENTARE`/`OHNE_BEITRAEGE`
-lassen jeweils das andere zu; `UNGEEIGNET` nur aus Beobachtung. „Nicht
-gelesen" ist nicht „nichts verboten". `qualifikation.pflicht: false` betrifft
-nur die Beitrittsstufen. `Ablehnungsgrund` (in `post_versuche.grund`,
-gerechnet in `beende_versuch`) beantwortet die Frage des Menschen,
-`Ausgangsart` die des Laufs.
+`Ausgangsart` beantwortet die Frage des Laufs (`RATE_LIMIT` pausiert die
+Aktion, `GRUPPENLIMIT` die Gruppe, `TECHNISCH` zählt nirgends — im Zweifel
+technisch), `Ablehnungsgrund` die des Menschen in der Übersicht
+(`post_versuche.grund`, gerechnet in `beende_versuch`).
 
 ### Was aus einem abgeschickten Beitrag/Kommentar wird (`automation/actions.py`)
 

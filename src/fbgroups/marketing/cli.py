@@ -1770,9 +1770,8 @@ def campaign_automatik(
                         # Text neu und braucht deshalb die Adresse.
                         return automatik.browser_schritt_post(context, gruppen_url, text)
                     # ``vorgaben`` traegt, was dieser Rechner nicht
-                    # nachschlagen kann: die gelesenen Gruppenregeln, die
-                    # Schwelle der Gruppenklasse und die schon benutzten
-                    # Vorlagen. Ohne sie nahm der Fernbetrieb bis zum
+                    # nachschlagen kann: die Erlaubnis, die Schwelle und die
+                    # schon benutzten Vorlagen. Ohne sie nahm der Fernbetrieb bis zum
                     # 14.09.2026 den lautesten Beitrag - ohne Inhaltsurteil.
                     return automatik.browser_schritt_fern(
                         context, gruppen_url, group_id, text, bisherige, vorgaben, link_url
@@ -1797,26 +1796,10 @@ def campaign_automatik(
                     return "fehler", str(exc).splitlines()[0][:120]
                 return str(ausgang), bemerkung
 
-            def regeln(gruppen_url: str) -> str:
-                """Schritt 1 des Ablaufs: die Gruppenseite lesen.
-
-                Ein Abruf, keine Handlung in der Gruppe. Scheitert er, kommt
-                ein leerer Text zurueck - ``lies_regeln`` macht daraus einen
-                **ungelesenen** Befund, und der schreibt nichts. Eine
-                Anmeldewand ist kein Beleg dafuer, dass eine Regel weg ist.
-                """
-                from fbgroups.automation.actions import fetch_group_html
-
-                try:
-                    return fetch_group_html(context, gruppen_url)
-                except Exception:  # noqa: BLE001 - nicht lesbar ist ein Befund
-                    return ""
-
             meldung = automatik.fuehre_lauf_fern_aus(
                 server,
                 ausfuehren=fern,
                 beitreten=beitritt,
-                regeln_lesen=regeln,
                 max_schritte=max_schritte,
                 nur=list(nur or []),
                 frisch=frisch,
@@ -1860,12 +1843,9 @@ def campaign_automatik(
         for k in fortschritt.kampagnen:
             phase = k.phase(beitritt_frei=fortschritt.beitritt_frei)
             # **Wie viele der Abschnitt noch vor sich hat.** Der Abschnittsname
-            # allein beantwortet die haeufigste Frage nicht: "Gruppenregeln
-            # lesen" sieht nach Stillstand aus, wenn man nicht weiss, ob noch
-            # drei oder dreihundert ausstehen. Beides ist derselbe Schritt,
-            # aber das eine dauert eine Minute und das andere eine Stunde.
+            # allein beantwortet die haeufigste Frage nicht: ob noch drei oder
+            # dreihundert ausstehen.
             offen_im_abschnitt = {
-                lauf.Phase.REGELN: len(k.regeln_offen),
                 lauf.Phase.BEITRITT: len(k.beitritt_offen),
                 lauf.Phase.ARBEIT: sum(1 for g in k.gruppen if g.bearbeitbar),
             }.get(phase)
@@ -1978,7 +1958,6 @@ def campaign_automatik(
             # hingeht - und das ist gerade die Frage vor einem Lauf.
             was = {
                 lauf.Schrittart.BEITRITT: "Beitrittsanfrage",
-                lauf.Schrittart.BEWERTEN: "Neubewertung der Kampagne",
             }.get(
                 schritt.art,
                 f"{'Beitrag' if schritt.texttyp is Texttyp.POST else 'Kommentar'} "
@@ -2033,20 +2012,10 @@ def campaign_automatik(
                 return "fehler", str(exc).splitlines()[0][:120]
             return str(ausgang), bemerkung
 
-        def regeln(gruppen_url: str) -> str:
-            """Schritt 1 des Ablaufs: die Gruppenseite lesen - vor der Anfrage."""
-            from fbgroups.automation.actions import fetch_group_html
-
-            try:
-                return fetch_group_html(context, gruppen_url)
-            except Exception:  # noqa: BLE001 - nicht lesbar ist ein Befund
-                return ""
-
         fortschritt = automatik.fuehre_lauf_aus(
             config,
             ausfuehren=schritt,
             beitreten=beitritt,
-            regeln_lesen=regeln,
             max_schritte=max_schritte,
             nur=list(nur or []),
             frisch=frisch,
@@ -3599,100 +3568,6 @@ def marketing_audit(limit: int = typer.Option(25, "--limit")) -> None:
     console.print(table)
 
 
-@marketing_app.command("regeln")
-def marketing_regeln(
-    limit: int = typer.Option(0, "--limit", help="Hoechstens N Gruppenseiten lesen."),
-    alle: bool = typer.Option(False, "--alle", help="Alle offenen Gruppen."),
-    erneut: bool = typer.Option(
-        False, "--erneut", help="Auch Gruppen, deren Regeln schon gelesen sind."
-    ),
-) -> None:
-    """Liest die Regeln der Gruppenseiten - Beitritt, Links, Werbung, Freigabe.
-
-    **Startet nie beilaeufig.** Ohne ``--limit`` oder ``--alle`` bricht der
-    Befehl mit Exit-Code 2 ab, ohne etwas abzurufen - dieselbe Vorsicht wie
-    bei ``fbgroups enrich`` und aus demselben Grund: Es geht um das Konto des
-    Nutzers, nicht um Guthaben.
-
-    **Nur mit angemeldetem Browser.** Ueber ``httpx`` antwortet Facebook mit
-    einer Anmeldewand; dort steht keine Gruppenregel. Ein Weg, der
-    zuverlaessig nichts findet, waere schlimmer als keiner - er trueg "nichts
-    verboten" in den Bestand ein, und das ist eine Erlaubnis, die niemand
-    erteilt hat.
-
-    Ein **nicht gelesener** Befund schreibt nichts (``merke_regeln``): Eine
-    Anmeldewand ist kein Beleg dafuer, dass eine frueher gelesene Regel weg
-    ist.
-    """
-    from fbgroups.marketing.qualifikation import lies_regeln
-
-    if not limit and not alle:
-        console.print(
-            "[red]Kein Umfang angegeben.[/red] "
-            "Ein Abruf bei facebook.com beginnt nicht beilaeufig:\n"
-            "  --limit N   hoechstens N Gruppenseiten\n"
-            "  --alle      alle offenen"
-        )
-        raise typer.Exit(code=2)
-
-    config = _config()
-    with SqliteStore(config.path("sqlite_path")) as bestand:
-        gruppen = [g for g in bestand.load_groups() if g.url_canonical]
-    with MarketingStore(config.path("sqlite_path")) as store:
-        staende = store.load_all_marketing()
-
-    offen = [
-        g
-        for g in gruppen
-        if erneut
-        or (g.group_id not in staende)
-        or staende[g.group_id].regeln_gelesen_am is None
-    ]
-    wieviele = len(offen) if alle else min(limit, len(offen))
-    console.print(
-        f"{len(gruppen)} Gruppen, davon [bold]{len(offen)}[/bold] ohne gelesene Regeln. "
-        f"{wieviele} in diesem Lauf."
-    )
-    if not wieviele:
-        return
-
-    from fbgroups.automation.actions import fetch_group_html
-    from fbgroups.automation.browser import get_browser_context
-
-    console.print("[cyan]Mit angemeldetem Browser - das Fenster bleibt sichtbar.[/cyan]")
-    gelesen = mit_regel = 0
-    with get_browser_context(config, headless=False) as context, MarketingStore(
-        config.path("sqlite_path")
-    ) as store:
-        for gruppe in offen[:wieviele]:
-            try:
-                html = fetch_group_html(context, gruppe.url_canonical)
-            except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Befund
-                console.print(f"[red]{gruppe.group_id}: {str(exc).splitlines()[0][:80]}[/red]")
-                continue
-
-            befund = lies_regeln(html)
-            if not befund.gelesen:
-                console.print(f"[dim]{gruppe.name or gruppe.group_id}: nichts lesbar[/dim]")
-                continue
-
-            store.merke_regeln(gruppe.group_id, befund)
-            gelesen += 1
-            zusammenfassung = befund.zusammenfassung()
-            if zusammenfassung:
-                mit_regel += 1
-                console.print(
-                    f"[yellow]{gruppe.name or gruppe.group_id}: {zusammenfassung}[/yellow]"
-                )
-            else:
-                console.print(f"[green]{gruppe.name or gruppe.group_id}: nichts verboten[/green]")
-
-    console.print(
-        f"\n[green]{gelesen}[/green] Gruppenseiten gelesen, "
-        f"[yellow]{mit_regel}[/yellow] davon mit einer einschraenkenden Regel."
-    )
-
-
 @campaign_app.command("pruefe-inhalt")
 def campaign_pruefe_inhalt(
     text: list[str] = typer.Argument(
@@ -3700,11 +3575,6 @@ def campaign_pruefe_inhalt(
     ),
     datei: Path = typer.Option(
         None, "--datei", help="Texte aus einer Datei, ein Beitrag je Zeile."
-    ),
-    regeln: str = typer.Option(
-        "",
-        "--regeln",
-        help="Regeltext der Gruppe (z. B. 'Keine Links'). Leer = ungelesen.",
     ),
     mitglied: bool = typer.Option(
         True, "--mitglied/--kein-mitglied", help="Ist das Konto in der Gruppe?"
@@ -3722,13 +3592,11 @@ def campaign_pruefe_inhalt(
     einer Antwort passt, mit oder ohne Link). Wer die Schlagwortlisten in
     ``marketing/inhalt.py`` erweitert, prueft hier, ob es gewirkt hat.
 
-    ``--regeln`` stellt die Gruppe nach: Ohne Angabe gelten ihre Regeln als
-    **ungelesen**, und dann faellt die Entscheidung vorsichtiger aus - genau
-    wie im Betrieb.
+    Die Gruppe ist dabei jede Gruppe: Seit dem 23.09.2026 erlaubt der Lauf
+    ueberall dasselbe (``entscheidung.Erlaubnis()``, mit Link).
     """
-    from fbgroups.marketing import automatik, inhalt, qualifikation
+    from fbgroups.marketing import automatik, bezug, inhalt
     from fbgroups.marketing.entscheidung import Erlaubnis, entscheide
-    from fbgroups.marketing.qualifikation import Regelbefund, beurteile, lies_regeln
 
     texte = list(text or [])
     if datei:
@@ -3747,19 +3615,7 @@ def campaign_pruefe_inhalt(
         raise typer.Exit(code=2)
 
     config = _config()
-    befund_regeln = lies_regeln(regeln) if regeln else Regelbefund()
-    urteil = beurteile(mitglied=mitglied, regeln=befund_regeln)
-    erlaubnis = Erlaubnis.aus_regeln(befund_regeln, urteil.qualifikation)
-
-    console.print(
-        Panel(
-            f"Gruppe: {urteil.beschriftung} - {urteil.grund}\n"
-            f"Erlaubt: Kommentare {'ja' if erlaubnis.kommentare else 'nein'} · "
-            f"Links {'ja' if erlaubnis.links else 'nein'} · "
-            f"Regeln {'gelesen' if erlaubnis.regeln_gelesen else 'UNGELESEN'}",
-            title="Angenommene Gruppe",
-        )
-    )
+    erlaubnis = Erlaubnis()
 
     tabelle = Table(box=None)
     tabelle.add_column("Beitrag", max_width=38)
@@ -3768,6 +3624,7 @@ def campaign_pruefe_inhalt(
     tabelle.add_column("Bezug")
     tabelle.add_column("Entscheidung")
     tabelle.add_column("Link")
+    tabelle.add_column("Bezuege", max_width=40)
 
     for roh in texte:
         befund = inhalt.lies(roh)
@@ -3780,6 +3637,7 @@ def campaign_pruefe_inhalt(
             befund.relevanz.value,
             f"[{farbe}]{entscheidung.art.value}[/{farbe}]",
             "ja" if entscheidung.mit_link else "-",
+            bezug.erkenne(roh).grund,
         )
     console.print(tabelle)
 
@@ -3795,91 +3653,11 @@ def campaign_pruefe_inhalt(
         # ueber den Beitrag. Ob sie sperrt, sagt
         # ``automatik.mitgliedschaft_pflicht`` - sonst stuende hier eine
         # Entscheidung, die der Lauf gar nicht erst treffen wuerde.
-        sperrt = automatik.mitgliedschaft_pflicht(config) or qualifikation.pflicht(config)
+        sperrt = automatik.mitgliedschaft_pflicht(config)
         console.print(
             "[yellow]Ohne Mitgliedschaft:[/yellow] Diese Entscheidung beschreibt "
             "nur den Beitrag. Ob in der Gruppe ueberhaupt etwas versucht wird, "
             "sagt der Schalter - er steht gerade auf "
             f"[bold]{'sperren' if sperrt else 'versuchen'}[/bold] "
-            "(automatik.mitgliedschaft_pflicht / qualifikation.pflicht)."
+            "(automatik.mitgliedschaft_pflicht)."
         )
-
-
-@campaign_app.command("qualifikation")
-def campaign_qualifikation(
-    campaign_id: str = typer.Argument(...),
-    stufe: str = typer.Option("", "--stufe", help="Nur diese Stufe zeigen."),
-) -> None:
-    """Der Trichter dieser Kampagne: entdeckt -> Beitritt -> Bewertung -> geeignet.
-
-    Die Antwort auf "wir haben 300 Gruppen, also posten wir in 300 Gruppen".
-    Gerechnet wird bei jedem Aufruf neu aus Mitgliedschaft, gelesenen Regeln
-    und dem Versuchsprotokoll - es gibt keine gespeicherte Einstufung, die
-    veralten koennte.
-    """
-    from fbgroups.marketing import qualifikation as qual
-
-    config = _config()
-    with SqliteStore(config.path("sqlite_path")) as bestand:
-        gruppen = {g.group_id: g for g in bestand.load_groups()}
-    with MarketingStore(config.path("sqlite_path")) as store:
-        _kampagne_oder_ende(store, campaign_id)
-        links = store.links_for_campaign(campaign_id)
-        staende = store.load_all_marketing()
-        beobachtet = store.beobachtungen()
-
-    mitgliedschaft = {
-        MarketingStatus.MEMBER,
-        MarketingStatus.CONTACTED,
-        MarketingStatus.INTERESTED,
-        MarketingStatus.APPROVED,
-        MarketingStatus.ACTIVE,
-    }
-    je_stufe: dict[str, list[tuple[str, str]]] = {}
-    for link in links:
-        stand = staende.get(link.group_id)
-        befund = qual.beurteile(
-            mitglied=bool(stand and stand.marketing_status in mitgliedschaft),
-            beitritt_angefragt=bool(
-                stand and stand.marketing_status is MarketingStatus.JOIN_REQUESTED
-            ),
-            regeln=qual.Regelbefund(
-                gelesen=bool(stand and stand.regeln_gelesen_am is not None),
-                keine_links=bool(stand and stand.regel_keine_links),
-                keine_werbung=bool(stand and stand.regel_keine_werbung),
-                freigabe_noetig=bool(stand and stand.regel_freigabe_noetig),
-                neue_ohne_links=bool(stand and stand.regel_neue_ohne_links),
-            ),
-            beobachtung=beobachtet.get(link.group_id),
-        )
-        gruppe = gruppen.get(link.group_id)
-        name = (gruppe.name if gruppe else "") or link.group_id
-        je_stufe.setdefault(befund.qualifikation.value, []).append((name, befund.grund))
-
-    tabelle = Table(box=None)
-    tabelle.add_column("Stufe", style="bold")
-    tabelle.add_column("Gruppen", justify="right")
-    for q in qual.TRICHTER:
-        eintraege = je_stufe.get(q.value, [])
-        if eintraege or q is qual.Qualifikation.GEEIGNET:
-            tabelle.add_row(qual.BESCHRIFTUNG[q], str(len(eintraege)))
-    console.print(tabelle)
-
-    arbeitsfaehig = sum(
-        len(je_stufe.get(q.value, []))
-        for q in qual.TRICHTER
-        if qual.darf(q, Texttyp.KOMMENTAR, mit_link=False)
-    )
-    console.print(
-        f"\n[bold]{arbeitsfaehig}[/bold] von {len(links)} Gruppen koennten "
-        "ueberhaupt etwas bekommen."
-    )
-    if not qual.pflicht(config):
-        console.print(
-            "[dim]Der Schalter qualifikation.pflicht steht auf false - "
-            "gearbeitet wird weiterhin in allen.[/dim]"
-        )
-
-    if stufe:
-        for name, grund in je_stufe.get(stufe, []):
-            console.print(f"  {name[:44]:<44}  {grund}")

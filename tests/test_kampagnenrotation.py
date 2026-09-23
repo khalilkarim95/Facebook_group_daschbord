@@ -51,7 +51,6 @@ def _gruppe(
         veroeffentlicht=veroeffentlicht,
         ziel=ZIEL,
         mitglied=True,
-        regeln_gelesen=True,
         # Der Beitrag ist hier nicht die Frage: Er stuende sonst als Schritt
         # vor jedem Kommentar und verdeckte, worum es geht.
         post_status=PostStatus.VEROEFFENTLICHT,

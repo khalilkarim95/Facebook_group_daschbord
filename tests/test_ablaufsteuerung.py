@@ -86,7 +86,7 @@ def _kern(config, posts, kommentieren, **kwargs):
         "Rueckfall {link}",
         kommentieren=kommentieren,
         bisherige=[],
-        erlaubnis=Erlaubnis(links=True, regeln_gelesen=True),
+        erlaubnis=Erlaubnis(links=True),
         anspruch=Anspruch(),
         link_url=LINK_URL,
         **kwargs,
@@ -179,7 +179,6 @@ def _gruppe():
         ziel=10,
         mitglied=True,
         mitgliedschaft_noetig=False,
-        regeln_noetig=False,
         post_status=PostStatus.OFFEN,
         post_fassungen=frozenset({1}),
     )
@@ -210,7 +209,7 @@ def test_gewartet_wird_auf_die_kuerzeste_bremse_nicht_auf_die_erste() -> None:
         status=lauf.LaufStatus.LAEUFT,
         kampagnen=[
             lauf.Kampagnenfortschritt(
-                campaign_id="k", name="k", gruppen=[_gruppe()], bewertet=True
+                campaign_id="k", name="k", gruppen=[_gruppe()]
             )
         ],
         aktionen={
@@ -492,10 +491,8 @@ def test_der_ausgang_wird_trotzdem_gebucht() -> None:
 
 # --- 8./9./10. Mehrere Kampagnen --------------------------------------------
 
-def _kampagne(name: str, *, gruppen: list, bewertet: bool = True):
-    return lauf.Kampagnenfortschritt(
-        campaign_id=name, name=name, gruppen=gruppen, bewertet=bewertet
-    )
+def _kampagne(name: str, *, gruppen: list):
+    return lauf.Kampagnenfortschritt(campaign_id=name, name=name, gruppen=gruppen)
 
 
 def test_eine_kampagne_ohne_arbeit_haelt_die_naechste_nicht_auf() -> None:
@@ -536,7 +533,6 @@ def test_eine_uebersprungene_gruppe_behaelt_ihren_platz() -> None:
             veroeffentlicht=0,
             mitglied=True,
             mitgliedschaft_noetig=False,
-            regeln_noetig=False,
             uebersprungen=uebersprungen,
             post_status=PostStatus.VEROEFFENTLICHT,
         )

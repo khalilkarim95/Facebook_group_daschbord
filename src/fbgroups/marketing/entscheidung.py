@@ -3,7 +3,7 @@
 ## Was dieses Modul ist
 
 Die Stelle, an der aus einem gelesenen Beitrag (``inhalt.py``) und dem, was
-eine Gruppe erlaubt (``qualifikation.py``), **eine** Handlung wird. Es fuehrt
+eine Gruppe erlaubt (``Erlaubnis``), **eine** Handlung wird. Es fuehrt
 nichts aus und speichert nichts; es urteilt.
 
 Rein wie seine beiden Nachbarn: kein Netz, keine Datenbank, kein Playwright.
@@ -27,15 +27,6 @@ App, weil sie zur Frage gehoert. ``DIRECT_APP_RECOMMENDATION`` empfiehlt sie
 samt Link. Je naeher an der Werbung, desto mehr muss dafuer sprechen - und
 desto mehr muss die Gruppe erlauben.
 
-## Unbekannt heisst nicht erlaubt
-
-Solange die Regeln einer Gruppe ungelesen sind, wird die **vorsichtigere**
-Handlung gewaehlt. Das ist Punkt 4 der Anforderung und derselbe Gedanke, der
-im Projekt schon dreimal steht: ``Regelbefund.gelesen`` trennt "nichts
-verboten" von "nicht nachgesehen", ``Group.score is None`` heisst nicht
-bewertbar, ``Seitenbefund.erreichbar`` nicht erreicht. Die Abwesenheit einer
-Regel ist keine Erlaubnis, die jemand erteilt hat.
-
 ## Keine erfundenen Angebote
 
 Was hier entschieden werden kann, ist **wie nah** eine Antwort an unser
@@ -53,7 +44,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from fbgroups.marketing.inhalt import Absicht, Anlass, Inhaltsbefund, Relevanz, Thema
-from fbgroups.marketing.qualifikation import Qualifikation, Regelbefund
 
 
 class Antwortart(StrEnum):
@@ -108,8 +98,8 @@ class Linkmodus(StrEnum):
     TRACKING_LINK = "tracking_link"
 
 
-#: Die Zuordnung. Neben der Aufzaehlung und nicht darin - dieselbe Trennung
-#: wie bei ``qualifikation.BESCHRIFTUNG``.
+#: Die Zuordnung. Neben der Aufzaehlung und nicht darin: Der Wert gehoert der
+#: Datenbank, die Zuordnung der Regel.
 LINKMODUS: dict[Antwortart, Linkmodus] = {
     Antwortart.NO_REPLY: Linkmodus.NO_LINK,
     Antwortart.HELPFUL_REPLY: Linkmodus.NO_LINK,
@@ -186,79 +176,32 @@ class Anspruch:
 
 @dataclass(frozen=True)
 class Erlaubnis:
-    """Was eine Gruppe zulaesst - aus ihren Regeln und aus der Beobachtung.
+    """Was eine Gruppe zulaesst.
 
-    **``werbung`` gibt es seit dem 21.09.2026 nicht mehr** (Anweisung des
-    Nutzers). Das Feld war der Anfang einer geschlossenen Kette: ungelesene
-    Regeln -> ``werbung=False`` -> ``soll_app_nennen`` faellt aus ->
-    ``private_contact_suggestion`` -> ``Linkmodus.NO_LINK`` -> kein
-    Textvorrat -> kein Kommentar. In einer Kampagne aus Gruppen, die ein
-    Mensch ausgesucht und mit "A++" eingestuft hat, hat es damit nichts
-    anderes bewirkt als Stille.
+    **Seit dem 23.09.2026 fuer jede Gruppe dasselbe** (Anweisung des
+    Nutzers): Die Gruppenregeln werden nicht mehr gelesen, und die Sperre
+    nach wiederholter Ablehnung ist entfernt. Der Link geht immer mit, wo die
+    App genannt wird - ohne ihn bekaeme die Gruppe keinen Klick
+    gutgeschrieben. Der Preis ist ausgesprochen: Gruppen, die Links
+    ablehnen, lehnen ab; was dagegen steht, sind die Tagesmengen und die
+    Bremse der Gegenseite (``ausgang.Ausgangsart.RATE_LIMIT``).
 
-    Was die Gruppe zulaesst, wird weiterhin gelesen: ``kommentare``,
-    ``beitraege`` und ``links`` bleiben - der Link im Kommentar ist der
-    haeufigste Grund einer Ablehnung, und das ist eine Aussage ueber die
-    Annahme, nicht ueber die Erlaubnis zu werben.
-
-    **Die Vorgabe fuer ``links`` bleibt die vorsichtige** (``False``): Wer
-    dieses Objekt ohne Angaben baut, hat nichts ueber die Gruppe gelesen.
-    Ohne Link wird trotzdem kommentiert - die App wird dann genannt, nicht
-    verlinkt (``APP_NAME_ONLY``).
+    Die Felder bleiben, weil der Fernbetrieb sie in ``vorgaben`` uebertraegt
+    und ein Test eine einzelne Erlaubnis gezielt abschalten kann.
     """
 
     kommentare: bool = True
     beitraege: bool = True
-    links: bool = False
+    links: bool = True
     privatkontakt: bool = True
-    regeln_gelesen: bool = False
-
-    @classmethod
-    def aus_regeln(
-        cls, regeln: Regelbefund | None, qualifikation: Qualifikation
-    ) -> Erlaubnis:
-        """Die Erlaubnis aus dem, was wir ueber die Gruppe wissen.
-
-        Zwei Quellen, und die Rangfolge ist die des Projekts: Die **Regeln der
-        Gruppe** binden, die **Beobachtung** kann nur enger machen
-        (``qualifikation.beurteile``). Deshalb wird hier nichts neu
-        entschieden - es wird uebersetzt.
-
-        ``links`` ist der einzige Wert, der eine gelesene Regel **braucht**:
-        Ohne gelesene Regeln bleibt er aus. Dass in einer Gruppe schon einmal
-        ein Link durchging, heisst nicht, dass er erlaubt war. Kommentiert
-        wird dort trotzdem, nur ohne Adresse.
-        """
-        regeln = regeln or Regelbefund()
-        gelesen = regeln.gelesen
-        # ``UNGEEIGNET`` schliesst **beides** aus, nicht nur eines: Es
-        # entsteht daraus, dass sowohl Beitraege als auch Kommentare
-        # wiederholt abgelehnt wurden. Das Werbeverbot der Gruppe gehoert
-        # seit dem 21.09.2026 nicht mehr dazu (siehe ``qualifikation``).
-        nichts = qualifikation is Qualifikation.UNGEEIGNET
-        return cls(
-            kommentare=not nichts and qualifikation is not Qualifikation.OHNE_KOMMENTARE,
-            beitraege=not nichts and qualifikation is not Qualifikation.OHNE_BEITRAEGE,
-            links=(
-                gelesen
-                and not regeln.verbietet_links
-                and qualifikation is not Qualifikation.OHNE_LINKS
-            ),
-            # Eine Regel gegen private Kontaktaufnahme lesen wir nicht eigens
-            # aus. Bis zum 21.09.2026 galt sie als im Werbeverbot
-            # eingeschlossen - mit dem Werbeverbot faellt auch diese
-            # Ableitung weg.
-            privatkontakt=True,
-            regeln_gelesen=gelesen,
-        )
 
 
 @dataclass(frozen=True)
 class Entscheidung:
     """Die Handlung und ihr Grund - nie das eine ohne das andere.
 
-    Dieselbe Regel wie bei ``Group.score_reason`` und
-    ``qualifikation.Befund.grund``. Hier wiegt sie schwerer als sonst: Der
+    Dieselbe Regel wie bei ``Group.score_reason``. Hier wiegt sie schwerer
+    als sonst: Der
     Grund ist das Einzige, woran sich spaeter nachvollziehen laesst, warum
     unter einem fremden Beitrag etwas steht - der Beitragstext selbst wird
     nicht gespeichert.
@@ -440,13 +383,9 @@ def entscheide(
     if soll_privat_anbieten(befund, erlaubnis):
         # Der haeufigste Fall bei ``MITTEL``: Es gibt eine Beruehrung, aber
         # keinen Beleg - dann wird nicht geworben, sondern ein Gespraech
-        # angeboten. Und bei ungelesenen Regeln ist es die vorsichtigere
-        # Handlung, die uebrigbleibt.
-        grund = befund.grund
-        if not erlaubnis.regeln_gelesen:
-            grund += ", Regeln ungelesen - vorsichtig"
+        # angeboten.
         return Entscheidung(
-            art=Antwortart.PRIVATE_CONTACT_SUGGESTION, grund=grund, mit_link=False
+            art=Antwortart.PRIVATE_CONTACT_SUGGESTION, grund=befund.grund, mit_link=False
         )
 
     return Entscheidung(grund=f"keine passende Form ({befund.grund})")

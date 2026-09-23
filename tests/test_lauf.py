@@ -31,7 +31,6 @@ from fbgroups.marketing.models import (
     Texttyp,
     VorschlagStatus,
 )
-from fbgroups.marketing.qualifikation import Regelbefund
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.models import Group
 from fbgroups.storage import SqliteStore
@@ -51,11 +50,7 @@ def _gruppe(
     # ``mitglied=True`` als Vorgabe: Diese Tests pruefen Reihenfolge und
     # Rotation. Die Mitgliedschaft hat ihre eigenen Tests weiter unten - sie
     # ueberall mitzudenken machte jeden Test um eine Aussage unschaerfer.
-    #
-    # ``regeln_gelesen=True`` aus demselben Grund (13.09.2026): Seit der
-    # Regelschritt vor der Arbeit steht, bekaeme eine Gruppe mit ungelesenen
-    # Regeln ihn und nicht den Textschritt. Das ist richtig so und hat seinen
-    # eigenen Test in ``test_zielprioritaet.py``.
+
     return lauf.Gruppenfortschritt(
         campaign_id="k",
         group_id=gid,
@@ -65,7 +60,6 @@ def _gruppe(
         erschoepft=erschoepft,
         gescheiterte_fassungen=gescheitert,
         mitglied=mitglied,
-        regeln_gelesen=True,
         post_status=post_status,
         post_fassungen=post_fassungen,
     )
@@ -372,22 +366,13 @@ def _wartende(
     *,
     angefragt: bool = False,
     pflicht: bool = True,
-    regeln_gelesen: bool = True,
 ) -> lauf.Gruppenfortschritt:
     """Eine Gruppe, in der wir noch nicht Mitglied sind.
 
     ``pflicht`` ist die Vorgabe im Code (``automatik.mitgliedschaft_pflicht``):
     Dann wird dort nichts versucht, und die einzige Arbeit, die es in dieser
     Gruppe gibt, ist die Beitrittsanfrage.
-
-    ``regeln_gelesen=True`` als Vorgabe, obwohl der Code ``False`` setzt: Seit
-    dem 13.09.2026 steht vor der Beitrittsanfrage der Regelschritt
-    (``Schrittart.REGELN``), und diese Tests fragen nach der Reihenfolge
-    **danach**. Wer sie ungelesen laesst, bekommt statt der Anfrage den
-    Regelschritt - das ist richtig so und hat seinen eigenen Test.
     """
-    from fbgroups.marketing.qualifikation import Qualifikation
-
     return lauf.Gruppenfortschritt(
         campaign_id="k",
         group_id=gid,
@@ -396,11 +381,7 @@ def _wartende(
         mitglied=False,
         mitgliedschaft_noetig=pflicht,
         beitritt_noetig=not angefragt,
-        regeln_gelesen=regeln_gelesen,
         post_fassungen=frozenset({1}),
-        qualifikation=(
-            Qualifikation.BEITRITT_ANGEFRAGT if angefragt else Qualifikation.BEITRITT_NOETIG
-        ),
     )
 
 
@@ -515,80 +496,8 @@ def test_der_takt_haelt_die_anfrage_an_aber_nicht_die_arbeit() -> None:
     assert fortschritt.wartet_auf_beitritt == "noch 2 Min"
 
 
-def test_die_neubewertung_kommt_vor_der_arbeit() -> None:
-    """Schritt 3: Erst bewerten, dann entscheiden, wo gearbeitet wird.
-
-    Ohne diesen Schritt arbeitete der Lauf nach den Zahlen von vorgestern -
-    und die Rangfolge, nach der die besten Gruppen zuerst drankommen, waere
-    eine Rangfolge von damals.
-    """
-    kampagne = lauf.Kampagnenfortschritt(
-        campaign_id="k", name="Kampagne k", gruppen=[_gruppe("111")], bewertet=False
-    )
-    schritt = lauf.naechster_schritt(_mit_kontingent([kampagne]))
-
-    assert schritt is not None
-    assert schritt.art is lauf.Schrittart.BEWERTEN
-    assert schritt.campaign_id == "k"
-    assert schritt.group_id == "", "die Bewertung gilt der Kampagne, nicht einer Gruppe"
-
-
-def test_erst_beitritt_dann_bewertung_dann_arbeit() -> None:
-    """Die drei Abschnitte in ihrer Reihenfolge, an einer Kampagne durchgespielt."""
-    gruppen = [_gruppe("111", post_fassungen=frozenset({1})), _wartende("222")]
-    unbewertet = lauf.Kampagnenfortschritt(
-        campaign_id="k", name="Kampagne k", gruppen=gruppen, bewertet=False
-    )
-    assert unbewertet.phase(beitritt_frei=True) is lauf.Phase.BEITRITT
-    assert unbewertet.phase(beitritt_frei=False) is lauf.Phase.BEWERTEN
-
-    bewertet = lauf.Kampagnenfortschritt(
-        campaign_id="k", name="Kampagne k", gruppen=gruppen, bewertet=True
-    )
-    assert bewertet.phase(beitritt_frei=False) is lauf.Phase.ARBEIT
-
-
-def test_gruppen_die_beides_nehmen_kommen_zuerst() -> None:
-    """Schritt 4: Beitrag **und** Kommentare schlaegt "nur eines von beiden".
-
-    Die linkscheue Gruppe steht in der Liste vorn - sie hat den besseren
-    Score. Gearbeitet wird trotzdem zuerst dort, wo beides moeglich ist: Eine
-    Gruppe, die nur die Haelfte nimmt, ist der schlechtere Platz, auch wenn
-    sie thematisch besser passt.
-    """
-    from fbgroups.marketing.qualifikation import Qualifikation
-
-    halb = lauf.Gruppenfortschritt(
-        campaign_id="k",
-        group_id="111",
-        name="nur Kommentare",
-        veroeffentlicht=0,
-        post_fassungen=frozenset({1}),
-        mitglied=True,
-        qualifikation=Qualifikation.OHNE_BEITRAEGE,
-    )
-    ganz = lauf.Gruppenfortschritt(
-        campaign_id="k",
-        group_id="222",
-        name="beides",
-        veroeffentlicht=0,
-        post_fassungen=frozenset({1}),
-        mitglied=True,
-        qualifikation=Qualifikation.GEEIGNET,
-    )
-    kampagne = lauf.Kampagnenfortschritt(
-        campaign_id="k", name="Kampagne k", gruppen=[halb, ganz]
-    )
-
-    assert halb.vorrang == 1
-    assert ganz.vorrang == 0
-    assert [g.group_id for g in kampagne.arbeitsliste] == ["222", "111"]
-    assert kampagne.naechste_gruppe is not None
-    assert kampagne.naechste_gruppe.group_id == "222"
-
-
-def test_die_reihenfolge_innerhalb_einer_klasse_bleibt_der_score() -> None:
-    """Stabil sortiert: Der Vorrang ordnet die Klassen, nicht die Gruppen darin.
+def test_die_reihenfolge_bleibt_der_score() -> None:
+    """Die Arbeitsliste ist die Reihenfolge, in der die Gruppen hereinkamen.
 
     Die Liste kommt score-sortiert herein (``sort_by_rank``). Wuerde hier neu
     geordnet, gaebe es zwei Rangfolgen - und die Anzeige zeigte eine andere
@@ -599,87 +508,6 @@ def test_die_reihenfolge_innerhalb_einer_klasse_bleibt_der_score() -> None:
     kampagne = _kampagne("k", [erste, zweite])
 
     assert [g.group_id for g in kampagne.arbeitsliste] == ["111", "222"]
-
-
-def test_eine_gesperrte_gruppe_gilt_nicht_als_ungeeignet() -> None:
-    """Uebersprungen heisst nicht aussortiert - sie bleibt im Bestand.
-
-    "Gibt nichts mehr her" waere ein Urteil ueber die Gruppe; hier liegt eine
-    Entscheidung von uns vor, und sie kann sich aendern: durch eine Aufnahme,
-    einen gelesenen Regelsatz, einen umgelegten Schalter.
-    """
-    from fbgroups.marketing.qualifikation import Qualifikation
-
-    gesperrt = lauf.Gruppenfortschritt(
-        campaign_id="k",
-        group_id="111",
-        name="ungeeignet",
-        veroeffentlicht=0,
-        mitglied=True,
-        qualifikation=Qualifikation.UNGEEIGNET,
-    )
-    kampagne = _kampagne("k", [gesperrt, _gruppe("222")])
-
-    assert gesperrt.gesperrt is True
-    assert gesperrt.vorrang == 2
-    assert lauf.gruppe_ist_erschoepft(gesperrt) is False
-    assert gesperrt.erschoepft is False
-    # Sie steht weiter in der Liste - nur eben hinten.
-    assert [g.group_id for g in kampagne.arbeitsliste] == ["222", "111"]
-    schritt = lauf.naechster_schritt(_mit_kontingent([kampagne], kontingent=0))
-    assert schritt is not None
-    assert schritt.group_id == "222"
-
-
-def test_die_regeln_der_gruppe_binden_ohne_schalter() -> None:
-    """Keine Links, wo Links verboten sind - auch ohne ``qualifikation.pflicht``.
-
-    Der Schalter entscheidet ueber die **Beitrittsstufen**, nicht ueber die
-    Regeln der Gruppe. Ein Schalter, der Letztere aufhoebe, waere ein
-    Schalter zum Regelbruch.
-    """
-    from fbgroups.marketing.qualifikation import Qualifikation
-
-    linkscheu = lauf.Gruppenfortschritt(
-        campaign_id="k",
-        group_id="111",
-        name="ohne Links",
-        veroeffentlicht=0,
-        mitglied=True,
-        qualifikation_pflicht=False,
-        qualifikation=Qualifikation.OHNE_LINKS,
-        fassungen_mit_link=frozenset({1, 2}),
-        post_fassungen=frozenset({1}),
-    )
-
-    assert linkscheu.erlaubt(Texttyp.KOMMENTAR, 1) is False, "Fassung 1 traegt einen Link"
-    assert linkscheu.erlaubt(Texttyp.KOMMENTAR, 3) is True, "diese nicht"
-    assert linkscheu.erlaubt(Texttyp.POST, 1) is False, "ein Beitrag traegt immer einen"
-
-
-def test_ohne_schalter_haelt_die_beitrittsstufe_nicht_auf() -> None:
-    """Die andere Haelfte derselben Trennung.
-
-    Ob "kein Mitglied" sperrt, ist eine Frage ueber **unseren** Stand - und
-    der Nutzer hat sie am 01.09.2026 beantwortet: Der Vermerk beschreibt
-    unsere Buchfuehrung, nicht das, was Facebook zulaesst.
-    """
-    from fbgroups.marketing.qualifikation import Qualifikation
-
-    offen = lauf.Gruppenfortschritt(
-        campaign_id="k",
-        group_id="111",
-        name="angefragt",
-        veroeffentlicht=0,
-        mitglied=False,
-        mitgliedschaft_noetig=False,
-        qualifikation_pflicht=False,
-        qualifikation=Qualifikation.BEITRITT_ANGEFRAGT,
-    )
-    assert offen.erlaubt(Texttyp.KOMMENTAR, 1) is True
-
-    gesperrt = lauf.Gruppenfortschritt(**{**offen.__dict__, "qualifikation_pflicht": True})
-    assert gesperrt.erlaubt(Texttyp.KOMMENTAR, 1) is False
 
 
 def test_erst_wenn_die_kampagne_durch_ist_kommt_die_naechste() -> None:
@@ -753,16 +581,10 @@ def bestand(tmp_path: Path) -> Path:
         )
         # Ohne Mitgliedschaft versucht die Automatik in einer Gruppe nichts -
         # Facebook laesst Nichtmitglieder nicht schreiben.
-        #
-        # Und die Regeln gelten als gelesen: Seit dem 13.09.2026 steht der
-        # Regelschritt vor der Arbeit, und zwar auch fuer Bestandsmitglieder.
-        # Eine Gruppe mit ungelesenen Regeln bekaeme ihn statt des
-        # Textschritts - richtig so, aber nicht die Frage dieser Tests.
         for gid in GRUPPEN:
             store.save_marketing(
                 GroupMarketing(group_id=gid, marketing_status=MarketingStatus.MEMBER)
             )
-            store.merke_regeln(gid, Regelbefund(gelesen=True))
         for i, gid in enumerate(GRUPPEN, start=1):
             store.add_link(
                 CampaignGroup(
@@ -786,16 +608,6 @@ def test_der_fortschritt_wird_gelesen_nicht_gefuehrt(bestand: Path) -> None:
 
     with MarketingStore(bestand) as store:
         lauf_id = store.starte_lauf([KAMPAGNE], ziel_je_gruppe=lauf.ZIEL_JE_GRUPPE)
-        # Die Neubewertung steht vor der Arbeit und ist hier nicht die Frage;
-        # dieser Test prueft den Fortschritt. Ohne den Vermerk waere der
-        # naechste Schritt die Bewertung - das prueft
-        # ``test_die_neubewertung_kommt_vor_der_arbeit``.
-        store.merke_bewertung(lauf_id, KAMPAGNE)
-        # Und aus demselben Grund gelten die Regeln als gelesen: Seit dem
-        # 13.09.2026 steht der Regelschritt noch davor. Sein eigener Test ist
-        # ``test_die_regeln_werden_vor_der_anfrage_gelesen``.
-        for gid in GRUPPEN:
-            store.merke_regeln(gid, Regelbefund(gelesen=True))
 
         # Nichts getan: alles offen.
         stand = lauf.lies_fortschritt(store, lauf_id, gruppen)
@@ -856,7 +668,6 @@ def test_erschoepfung_ueberlebt_den_neustart(bestand: Path) -> None:
 
     with MarketingStore(bestand) as store:
         lauf_id = store.starte_lauf([KAMPAGNE], ziel_je_gruppe=lauf.ZIEL_JE_GRUPPE)
-        store.merke_bewertung(lauf_id, KAMPAGNE)  # die Bewertung ist hier nicht die Frage
         store.setze_kommentar_erschoepft(KAMPAGNE, "111", "nur 2 Beitraege vorhanden")
 
     with MarketingStore(bestand) as store:
@@ -1403,11 +1214,6 @@ def test_die_schleife_stellt_die_anfrage_vor_dem_ersten_kommentar(bestand: Path)
         store.save_marketing(
             GroupMarketing(group_id="222", marketing_status=MarketingStatus.NOT_CONTACTED)
         )
-        # Seit dem 13.09.2026 steht der Regelschritt vor der Anfrage. Diese
-        # Tests fragen nach der **Anfrage**; die Regeln gelten hier deshalb
-        # als gelesen. Dass sie vorher drankommen, hat seinen eigenen Test
-        # (``test_die_regeln_werden_vor_der_anfrage_gelesen``).
-        store.merke_regeln("222", Regelbefund(gelesen=True))
         store.starte_lauf([KAMPAGNE], ziel_je_gruppe=lauf.ZIEL_JE_GRUPPE)
 
     ablauf: list[str] = []
@@ -1461,11 +1267,6 @@ def test_eine_gescheiterte_anfrage_haelt_den_lauf_nicht_auf(bestand: Path) -> No
         store.save_marketing(
             GroupMarketing(group_id="222", marketing_status=MarketingStatus.NOT_CONTACTED)
         )
-        # Seit dem 13.09.2026 steht der Regelschritt vor der Anfrage. Diese
-        # Tests fragen nach der **Anfrage**; die Regeln gelten hier deshalb
-        # als gelesen. Dass sie vorher drankommen, hat seinen eigenen Test
-        # (``test_die_regeln_werden_vor_der_anfrage_gelesen``).
-        store.merke_regeln("222", Regelbefund(gelesen=True))
         lauf_id = store.starte_lauf([KAMPAGNE], ziel_je_gruppe=lauf.ZIEL_JE_GRUPPE)
 
     versuche: list[str] = []
@@ -1621,8 +1422,6 @@ def test_ein_fehler_bei_einer_kampagne_haelt_die_naechste_nicht_auf(bestand: Pat
         lauf_id = store.starte_lauf(
             [KAMPAGNE, "zweite"], ziel_je_gruppe=lauf.ZIEL_JE_GRUPPE
         )
-        store.merke_bewertung(lauf_id, KAMPAGNE)
-        store.merke_bewertung(lauf_id, "zweite")
 
     with SqliteStore(bestand) as s:
         gruppen = {g.group_id: g for g in s.load_groups()}
@@ -2090,7 +1889,6 @@ def test_eine_erschoepfte_kampagne_wird_nicht_dauerhaft_completed(bestand: Path)
     with MarketingStore(bestand) as store:
         _texte_anlegen(store, KAMPAGNE, list(GRUPPEN))
         lauf_id = store.starte_lauf([KAMPAGNE], ziel_je_gruppe=lauf.ZIEL_JE_GRUPPE)
-        store.merke_bewertung(lauf_id, KAMPAGNE)
         for gid in GRUPPEN:
             store.setze_kommentar_erschoepft(KAMPAGNE, gid, "nur 0 von 10 moeglich")
 
@@ -2227,8 +2025,8 @@ def _hole_schritt(client, versuche: int = 6) -> dict:
     """Fragt so lange nach, bis ein Schritt kommt - genau wie der Treiber.
 
     Der Server beantwortet nicht jeden Aufruf mit einer Handlung fuer den
-    Browser: Die Neubewertung einer Kampagne fuehrt er selbst aus und meldet
-    ``weiter``. Ein Test, der einmal fragt und einen Schritt erwartet, prueft
+    Browser: Manches klaert er selbst und meldet ``weiter``. Ein Test, der
+    einmal fragt und einen Schritt erwartet, prueft
     deshalb eine Schnittstelle, die es nicht gibt - ``fuehre_lauf_fern_aus``
     fragt in derselben Schleife weiter.
     """
@@ -2332,11 +2130,6 @@ def test_der_server_gibt_die_beitrittsanfrage_zuerst_heraus(bestand: Path) -> No
         store.save_marketing(
             GroupMarketing(group_id="222", marketing_status=MarketingStatus.NOT_CONTACTED)
         )
-        # Seit dem 13.09.2026 steht der Regelschritt vor der Anfrage. Diese
-        # Tests fragen nach der **Anfrage**; die Regeln gelten hier deshalb
-        # als gelesen. Dass sie vorher drankommen, hat seinen eigenen Test
-        # (``test_die_regeln_werden_vor_der_anfrage_gelesen``).
-        store.merke_regeln("222", Regelbefund(gelesen=True))
 
     daten = _hole_schritt(_fern_client(bestand))
     schritt = daten["schritt"]
@@ -2359,11 +2152,6 @@ def test_eine_gescheiterte_anfrage_wird_auf_dem_server_uebersprungen(bestand: Pa
         store.save_marketing(
             GroupMarketing(group_id="222", marketing_status=MarketingStatus.NOT_CONTACTED)
         )
-        # Seit dem 13.09.2026 steht der Regelschritt vor der Anfrage. Diese
-        # Tests fragen nach der **Anfrage**; die Regeln gelten hier deshalb
-        # als gelesen. Dass sie vorher drankommen, hat seinen eigenen Test
-        # (``test_die_regeln_werden_vor_der_anfrage_gelesen``).
-        store.merke_regeln("222", Regelbefund(gelesen=True))
 
     client = _fern_client(bestand)
     schritt = _hole_schritt(client)["schritt"]

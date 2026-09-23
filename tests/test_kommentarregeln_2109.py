@@ -20,7 +20,6 @@ from fbgroups.marketing.entscheidung import (
 from fbgroups.marketing.inhalt import Inhaltsbefund, Relevanz, Thema
 from fbgroups.marketing.lauf import Gruppenfortschritt, Kampagnenfortschritt
 from fbgroups.marketing.models import PostStatus
-from fbgroups.marketing.qualifikation import Qualifikation, Regelbefund
 
 ZIEL = lauf.ZIEL_JE_GRUPPE
 
@@ -37,7 +36,6 @@ def _gruppe(gid: str, *, veroeffentlicht: int = 0) -> Gruppenfortschritt:
         veroeffentlicht=veroeffentlicht,
         ziel=ZIEL,
         mitglied=True,
-        regeln_gelesen=True,
         post_status=PostStatus.VEROEFFENTLICHT,
     )
 
@@ -50,22 +48,11 @@ def test_es_gibt_kein_feld_werbung_mehr() -> None:
     assert not hasattr(Erlaubnis(), "werbung")
 
 
-def test_ungelesene_regeln_schweigen_nicht_mehr() -> None:
-    """Der haeufigste Fall im Betrieb: Die Regeln waren nie gelesen."""
+def test_ohne_gelesene_regeln_wird_kommentiert() -> None:
+    """Seit dem 23.09.2026 werden Gruppenregeln gar nicht mehr gelesen."""
     entscheidung = entscheide(
         _befund(Relevanz.HOCH),
-        Erlaubnis.aus_regeln(Regelbefund(), Qualifikation.GEEIGNET),
-    )
-    assert LINKMODUS[entscheidung.art] is not Linkmodus.NO_LINK
-
-
-def test_ein_werbeverbot_schweigt_nicht_mehr() -> None:
-    """Die Regel wird gelesen und steht im Bericht - sie sperrt nur nicht."""
-    entscheidung = entscheide(
-        _befund(Relevanz.HOCH),
-        Erlaubnis.aus_regeln(
-            Regelbefund(gelesen=True, keine_werbung=True), Qualifikation.GEEIGNET
-        ),
+        Erlaubnis(),
     )
     assert LINKMODUS[entscheidung.art] is not Linkmodus.NO_LINK
 
@@ -83,7 +70,7 @@ def test_mittel_genuegt_wo_mittel_verlangt_ist() -> None:
     """
     entscheidung = entscheide(
         _befund(Relevanz.MITTEL),
-        Erlaubnis.aus_regeln(Regelbefund(gelesen=True), Qualifikation.GEEIGNET),
+        Erlaubnis(),
         Anspruch(mindestrelevanz=Relevanz.MITTEL, anlass_pflicht=False),
     )
     assert LINKMODUS[entscheidung.art] is not Linkmodus.NO_LINK
@@ -93,7 +80,7 @@ def test_hoch_verlangt_weiterhin_hoch() -> None:
     """Die Anforderung der Gruppe gilt - in beide Richtungen."""
     entscheidung = entscheide(
         _befund(Relevanz.MITTEL),
-        Erlaubnis.aus_regeln(Regelbefund(gelesen=True), Qualifikation.GEEIGNET),
+        Erlaubnis(),
         Anspruch(mindestrelevanz=Relevanz.HOCH, anlass_pflicht=False),
     )
     assert "zu schwach" in entscheidung.grund
@@ -103,7 +90,7 @@ def test_ohne_bezug_wird_nicht_kommentiert() -> None:
     """Punkt 3: keine beliebigen voellig irrelevanten Beitraege."""
     entscheidung = entscheide(
         Inhaltsbefund(thema=Thema.WOHNUNG, relevanz=Relevanz.KEINE),
-        Erlaubnis.aus_regeln(Regelbefund(gelesen=True), Qualifikation.GEEIGNET),
+        Erlaubnis(),
         Anspruch(mindestrelevanz=Relevanz.MITTEL, anlass_pflicht=False),
     )
     assert "kein Bezug" in entscheidung.grund

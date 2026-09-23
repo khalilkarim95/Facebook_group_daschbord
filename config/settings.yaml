@@ -619,24 +619,6 @@ beitritt:
   # Seit dem 23.09.2026 auf 0 - siehe `limits.join_requests.daily`.
   anfragen_pro_tag: 0
 
-  # Muessen die Regeln einer Gruppe gelesen sein, bevor eine Anfrage hinausgeht?
-  # (13.09.2026)
-  #
-  # Die geforderte Reihenfolge lautet: finden, Relevanz bewerten, Prioritaet
-  # bestimmen, Regeln und Berechtigungen pruefen - **dann erst** anfragen. Bis
-  # hierher war es umgekehrt: Die Anfrage ging an jede Gruppe, und ob dort
-  # ueberhaupt kommentiert werden darf, stellte sich Tage spaeter heraus -
-  # nach der Aufnahme, nach dem ersten Versuch, nach dem ersten Fehlschlag.
-  #
-  # Der Regelschritt kostet einen Seitenabruf und keine Handlung in der
-  # Gruppe; er laeuft im Lauf als eigener Schritt (``Schrittart.REGELN``).
-  #
-  # Abschalten hat einen echten Anlass: Laesst sich eine Gruppenseite nicht
-  # lesen - Anmeldewand, geschlossene Gruppe -, bliebe ``regeln_gelesen_am``
-  # leer, und die Anfrage ginge nie hinaus. Dann gilt wieder die alte
-  # Reihenfolge.
-  regeln_zuerst: true
-
   # Minuten zwischen zwei Anfragen. Gestreut wie beim Kaltmodus - fuenfzig in
   # zehn Minuten waeren dasselbe Muster, nur schneller.
   #
@@ -646,36 +628,6 @@ beitritt:
   # aushebelt. Bei 50 Anfragen sind das gut zweieinhalb Stunden - wer das
   # nicht will, setzt `anfragen_pro_tag` niedriger.
   mindestabstand_minuten: 3
-
-# --- Qualifikation: die Frage vor dem Text ------------------------------------
-# "Wir kennen 314 Gruppen" heisst nicht "wir posten in 314 Gruppen". Vor jedem
-# Beitrag und jedem Kommentar steht die Frage, ob diese Gruppe das ueberhaupt
-# zulaesst: Sind wir Mitglied? Was sagen ihre Regeln? Und was kam bei den
-# bisherigen Versuchen heraus?
-#
-# Gerechnet wird das in ``marketing/qualifikation.py`` - aus Mitgliedschaft,
-# gelesenen Gruppenregeln und dem Versuchsprotokoll. Nichts davon wird als
-# Urteil gespeichert; gespeichert ist allein, was auf der Gruppenseite stand.
-qualifikation:
-  # Sperren auch die BEITRITTSSTUFEN - oder nur die Regeln der Gruppe?
-  #
-  # Seit dem 12.09.2026 ist das die ganze Frage, die dieser Schalter noch
-  # stellt. Was die Gruppe selbst erlaubt, bindet ohne ihn: kein Link, wo
-  # Links verboten sind, kein Kommentar, wo Kommentare wiederholt abgelehnt
-  # wurden, gar nichts in einer Gruppe, deren Regeln Werbung verbieten
-  # (`qualifikation.darf_nach_regeln`). Ein Schalter, der das aufhoebe, waere
-  # ein Schalter zum Regelbruch - und die Regeln der Gruppe zu umgehen ist
-  # ausdruecklich nicht das Ziel.
-  #
-  # Uebrig bleibt die Frage nach der Mitgliedschaft, und dort ist die Vorgabe
-  # weiterhin **aus**: Am 11.09.2026 stand keine einzige Gruppe auf "geeignet",
-  # weil noch nie jemand ihre Regeln gelesen hat. Sofort scharf geschaltet
-  # haette der Schalter jede laufende Kampagne angehalten, bis eine
-  # vollstaendige Runde aus Beitritt und Bewertung durch ist - bei 50 Anfragen
-  # am Tag also tagelang. Er ueberschneidet sich darin mit
-  # `automatik.mitgliedschaft_pflicht`; es genuegt, einen von beiden
-  # einzuschalten.
-  pflicht: false
 
 # --- Kommentarautomatik -------------------------------------------------------
 automatik:

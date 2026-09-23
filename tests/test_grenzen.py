@@ -13,8 +13,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from fbgroups.marketing import grenzen
+from fbgroups.marketing.ausgang import Ausgangsart, klassifiziere
 from fbgroups.marketing.grenzen import Aktion, Grenze
-from fbgroups.marketing.qualifikation import Ausgangsart, klassifiziere
 
 JETZT = datetime(2026, 9, 12, 12, 0, tzinfo=UTC)
 OFFEN = Grenze(pro_tag=6, abstand_min=30, abstand_max=90)

@@ -215,7 +215,7 @@ def test_beitrittsanfragen_sind_in_der_konfiguration_abgeschaltet(config) -> Non
     """
     from fbgroups.marketing import grenzen
 
-    gruppe = _gruppe("g", beitritt_noetig=True, regeln_gelesen=True)
+    gruppe = _gruppe("g", beitritt_noetig=True)
     kampagne = lauf.Kampagnenfortschritt(campaign_id="k", name="k", gruppen=[gruppe])
 
     assert [g.group_id for g in kampagne.beitritt_kandidaten] == ["g"]

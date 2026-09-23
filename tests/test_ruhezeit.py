@@ -35,7 +35,6 @@ from fbgroups.marketing.models import (
     MarketingStatus,
     Texttyp,
 )
-from fbgroups.marketing.qualifikation import Regelbefund
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.models import Group
 from fbgroups.storage import SqliteStore
@@ -76,7 +75,6 @@ def bestand(tmp_path: Path) -> Path:
             store.save_marketing(
                 GroupMarketing(group_id=gid, marketing_status=MarketingStatus.MEMBER)
             )
-            store.merke_regeln(gid, Regelbefund(gelesen=True))
         for i, gid in enumerate(GRUPPEN, start=1):
             store.add_link(
                 CampaignGroup(

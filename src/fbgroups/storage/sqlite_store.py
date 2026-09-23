@@ -344,6 +344,9 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
     ),
     # Was die Regeln **einer Gruppe** erlauben - der Schritt vor dem Text.
     #
+    # (Seit dem 23.09.2026 nicht mehr geschrieben - die Qualifikation ist
+    # entfernt; der Schritt bleibt, Migrationen sind additiv.)
+    #
     # Gespeichert wird allein, was sich nicht ableiten laesst: das Ergebnis
     # eines Abrufs der Gruppenseite. Die Qualifikation selbst steht
     # ausdruecklich **nicht** in einer Spalte - sie wird bei jedem Lesen aus

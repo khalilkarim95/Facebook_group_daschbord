@@ -15,34 +15,21 @@ from __future__ import annotations
 import pytest
 
 from fbgroups.marketing.entscheidung import (
-    LINKMODUS,
     Antwortart,
     Erlaubnis,
-    Linkmodus,
     entscheide,
     soll_antworten,
-    soll_app_nennen,
     soll_link_nutzen,
     soll_privat_anbieten,
 )
 from fbgroups.marketing.inhalt import Absicht, Relevanz, Thema, lies
-from fbgroups.marketing.qualifikation import Qualifikation, Regelbefund
 
-# --- Erlaubnisse, wie sie aus echten Gruppen entstehen ---------------------
-OFFEN = Erlaubnis.aus_regeln(Regelbefund(gelesen=True), Qualifikation.GEEIGNET)
-UNGELESEN = Erlaubnis.aus_regeln(None, Qualifikation.BEWERTUNG)
-OHNE_LINKS = Erlaubnis.aus_regeln(
-    Regelbefund(gelesen=True, keine_links=True), Qualifikation.OHNE_LINKS
-)
-#: Eine Gruppe, deren Regeln Werbung verbieten. Seit dem 21.09.2026 ist das
-#: eine Auskunft und keine Sperre mehr: ``beurteile`` macht daraus kein
-#: ``UNGEEIGNET``, also bleibt die Erlaubnis die einer gewoehnlichen Gruppe.
-OHNE_WERBUNG = Erlaubnis.aus_regeln(
-    Regelbefund(gelesen=True, keine_werbung=True), Qualifikation.GEEIGNET
-)
-OHNE_KOMMENTARE = Erlaubnis.aus_regeln(
-    Regelbefund(gelesen=True), Qualifikation.OHNE_KOMMENTARE
-)
+# --- Erlaubnisse ----------------------------------------------------------
+#: Seit dem 23.09.2026 fuer jede Gruppe dieselbe - mit Link.
+OFFEN = Erlaubnis()
+#: Gezielt abgeschaltet, wie es der Fernbetrieb uebertragen kann.
+OHNE_LINKS = Erlaubnis(links=False)
+OHNE_KOMMENTARE = Erlaubnis(kommentare=False)
 
 PAKET = "كيف فيني ابعت غرض صغير من ألمانيا لسوريا؟"
 REISENDER = "مسافر من برلين إلى دمشق الأسبوع الجاي، عندي مكان بالشنطة"
@@ -141,60 +128,13 @@ def test_bei_klarem_bezug_darf_die_app_genannt_werden() -> None:
     assert entscheidung.mit_link
 
 
-def test_ungelesene_regeln_kosten_den_link_nicht_den_kommentar() -> None:
-    """Was von "UNKNOWN heisst nicht erlaubt" bleibt - und was nicht.
-
-    Bis zum 21.09.2026 fuehrten ungelesene Regeln zum privaten Hinweis, und
-    weil es fuer ``Linkmodus.NO_LINK`` keinen Textvorrat gibt, hiess das:
-    **gar kein Kommentar**. Genau diese Kette ist auf Anweisung des Nutzers
-    entfernt.
-
-    Vorsichtig bleibt die Erlaubnis dort, wo es um die **Annahme** geht: Der
-    Link braucht weiterhin eine gelesene Regel (``Erlaubnis.links``), denn
-    "Link im Kommentar" ist der haeufigste Ablehnungsgrund. Die App wird also
-    genannt, aber nicht verlinkt.
-    """
-    entscheidung = entscheide(lies(PAKET), UNGELESEN)
-
-    assert entscheidung.art is Antwortart.CONTEXTUAL_APP_MENTION
-    assert not entscheidung.mit_link
-    assert soll_app_nennen(lies(PAKET), UNGELESEN)
-    assert not soll_link_nutzen(lies(PAKET), UNGELESEN)
-
-
 def test_verbotene_links_nehmen_den_link_nicht_die_antwort() -> None:
-    """Punkt 3 und 28: Die Regel bindet, die Antwort bleibt moeglich.
-
-    Eine Gruppe ohne Links nimmt denselben Hinweis ohne Link - die Regeln zu
-    umgehen ist ausdruecklich nicht das Ziel, auf die Antwort zu verzichten
-    aber auch nicht noetig.
-    """
+    """Ohne Link-Erlaubnis bleibt die Antwort moeglich - ohne Adresse."""
     entscheidung = entscheide(lies(PAKET), OHNE_LINKS)
 
     assert entscheidung.art is Antwortart.CONTEXTUAL_APP_MENTION
     assert not entscheidung.mit_link
     assert not soll_link_nutzen(lies(PAKET), OHNE_LINKS)
-
-
-def test_ein_werbeverbot_haelt_den_kommentar_nicht_mehr_auf() -> None:
-    """Umgekehrt zum Stand bis zum 21.09.2026 - Anweisung des Nutzers.
-
-    Bis dahin machte ``qualifikation.beurteile`` aus ``keine_werbung`` ein
-    ``UNGEEIGNET``, und damit fiel die Gruppe ganz aus: keine Kommentare,
-    keine Beitraege, nichts. Im Betrieb war das die haeufigste Ursache
-    dafuer, dass eine Runde durch dreizehn Gruppen **null** Kommentare
-    schrieb.
-
-    Die Gruppen einer Kampagne hat ein Mensch ausgesucht und eingestuft; ob
-    dort geworben werden darf, ist damit beantwortet. Was die **Annahme**
-    betrifft, bindet unveraendert weiter - die Linkregeln und jede
-    Beobachtung.
-    """
-    entscheidung = entscheide(lies(REISENDER), OHNE_WERBUNG)
-
-    assert OHNE_WERBUNG.kommentare
-    assert entscheidung.art is not Antwortart.NO_REPLY
-    assert LINKMODUS[entscheidung.art] is not Linkmodus.NO_LINK
 
 
 def test_ohne_kommentarerlaubnis_wird_gar_nichts_geschrieben() -> None:
@@ -227,14 +167,12 @@ def test_eine_jobsuche_fuehrt_zu_keiner_erfundenen_stelle() -> None:
     assert entscheidung.art is Antwortart.NO_REPLY
 
 
-def test_die_vorgabe_einer_erlaubnis_ist_die_vorsichtige() -> None:
-    """Wer sie ohne Angaben baut, hat nichts gelesen - und darf wenig.
-
-    Genau die Verwechslung, die Punkt 4 verbietet: Ein Objekt, dessen
-    Vorgaben "alles erlaubt" hiessen, machte aus fehlendem Wissen eine
-    Erlaubnis.
-    """
+def test_jede_gruppe_bekommt_den_link() -> None:
+    """Seit dem 23.09.2026 (Anweisung des Nutzers): Die Gruppenregeln werden
+    nicht mehr gelesen, und die Erlaubnis ist fuer jede Gruppe dieselbe - mit
+    Link, damit jeder Kommentar seine Klicks der Gruppe gutschreibt."""
     leer = Erlaubnis()
 
-    assert leer.links is False
-    assert leer.regeln_gelesen is False
+    assert leer.links is True
+    assert leer.kommentare is True
+    assert soll_link_nutzen(lies(PAKET), leer)

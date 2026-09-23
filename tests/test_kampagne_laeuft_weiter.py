@@ -55,7 +55,6 @@ def _gruppe(
         ziel=ziel,
         mitglied=mitglied,
         mitgliedschaft_noetig=mitgliedschaft_noetig,
-        regeln_noetig=False,
         uebersprungen=uebersprungen,
         post_status=post_status,
         beitritt_noetig=beitritt_noetig,
@@ -63,10 +62,8 @@ def _gruppe(
     )
 
 
-def _kampagne(gruppen: list, *, bewertet: bool = True):
-    return lauf.Kampagnenfortschritt(
-        campaign_id=KAMPAGNE, name=KAMPAGNE, gruppen=gruppen, bewertet=bewertet
-    )
+def _kampagne(gruppen: list):
+    return lauf.Kampagnenfortschritt(campaign_id=KAMPAGNE, name=KAMPAGNE, gruppen=gruppen)
 
 
 # --- 1. Die Kampagne bleibt aktiv -----------------------------------------

@@ -98,7 +98,6 @@ Nachsehen:
 
 ```bash
 fbgroups campaign fortschritt batreeq-syrian-germany
-fbgroups campaign qualifikation batreeq-syrian-germany
 fbgroups marketing analytics --top 10
 fbgroups marketing overview
 ```
@@ -127,13 +126,6 @@ Der Waechter - einmal starten, dann haelt er genau einen Lauf am Leben:
 ```bash
 "$py" -m fbgroups.cli campaign watchdog --server http://127.0.0.1:8090
 "$py" -m fbgroups.cli campaign watchdog --einmal     # nur nachsehen
-```
-
-Gruppenregeln lesen (angemeldeter Browser, schreibt in die Datei **dieses**
-Rechners - kein `--server`):
-
-```bash
-"$py" -m fbgroups.cli marketing regeln --limit 10
 ```
 
 Einen Beitragstext probeweise beurteilen - ohne Netz, ohne Konto:

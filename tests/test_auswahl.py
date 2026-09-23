@@ -17,8 +17,7 @@ import pytest
 
 from fbgroups.marketing import automatik
 from fbgroups.marketing.entscheidung import Antwortart, Erlaubnis
-from fbgroups.marketing.models import Campaign, CampaignGroup, GroupMarketing, MarketingStatus
-from fbgroups.marketing.qualifikation import Qualifikation, Regelbefund, lies_regeln
+from fbgroups.marketing.models import Campaign, CampaignGroup
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.models import Group
 from fbgroups.storage import SqliteStore
@@ -29,7 +28,7 @@ from fbgroups.storage import SqliteStore
 LINK_URL = "https://go.b-tarikak.de/r/k7m2x9q"
 
 GID = "111"
-OFFEN = Erlaubnis.aus_regeln(Regelbefund(gelesen=True), Qualifikation.GEEIGNET)
+OFFEN = Erlaubnis()
 
 PAKET = "في حدا مسافر من ألمانيا لسوريا يقدر ياخد أمانة صغيرة؟"
 WOHNUNG = "Suche dringend eine 2-Zimmer-Wohnung in Stuttgart, zahle Kaution."
@@ -211,60 +210,20 @@ def test_ein_bereits_kommentierter_beitrag_kommt_nicht_zweimal(bestand: Path) ->
     assert gesehen == ["https://www.facebook.com/groups/111/posts/2"]
 
 
-def test_die_gruppenregeln_wirken_auf_die_auswahl(bestand: Path) -> None:
-    """Eine Gruppe, die Werbung verbietet, bekommt keine Werbeantwort.
+def test_eine_abgeschaltete_erlaubnis_wirkt_auf_die_auswahl(bestand: Path) -> None:
+    """Schaltet der Server Kommentare fuer eine Gruppe ab, steht dort nichts.
 
-    Der Paketbeitrag bleibt relevant - aber die einzige Form, die hier noch
-    erlaubt waere, traegt nichts von uns. Geprueft wird, dass die Erlaubnis
-    ueberhaupt bis in die Auswahl durchschlaegt.
+    Seit dem 23.09.2026 kommt eine solche Erlaubnis nicht mehr aus gelesenen
+    Gruppenregeln; der Weg durch die Auswahl bleibt derselbe.
     """
-    ohne_werbung = Erlaubnis.aus_regeln(
-        lies_regeln("Regeln: Keine Werbung, keine Angebote."), Qualifikation.UNGEEIGNET
-    )
-    assert not ohne_werbung.kommentare, "UNGEEIGNET schliesst beides aus"
-
     ergebnis, gesehen = _lauf(
         bestand,
         [_post("https://www.facebook.com/groups/111/posts/2", PAKET, 5, 1)],
-        erlaubnis=ohne_werbung,
+        erlaubnis=Erlaubnis(kommentare=False),
     )
 
-    # Die Gruppe laesst keine Kommentare zu (UNGEEIGNET) - also nichts.
     assert not gesehen
     assert ergebnis.kein_anlass
-
-
-def test_die_erlaubnis_wird_aus_dem_bestand_gelesen(bestand: Path) -> None:
-    """Ohne uebergebene Erlaubnis fragt die Auswahl den Speicher.
-
-    So bleibt die Rangfolge dieselbe wie im Rest des Programms: Regeln
-    binden, Beobachtung schraenkt ein - gerechnet in
-    ``qualifikation.beurteile``, nicht hier zum zweiten Mal.
-    """
-    with MarketingStore(bestand) as store:
-        store.save_marketing(
-            GroupMarketing(group_id=GID, marketing_status=MarketingStatus.MEMBER)
-        )
-        store.merke_regeln(GID, lies_regeln("Willkommen! Bitte freundlich bleiben."))
-        erlaubnis = automatik.erlaubnis_fuer(store, GID)
-
-    assert erlaubnis.regeln_gelesen
-    assert erlaubnis.kommentare
-    assert erlaubnis.links, "nichts verboten, Regeln gelesen"
-
-
-def test_ohne_gelesene_regeln_bleibt_die_erlaubnis_vorsichtig(bestand: Path) -> None:
-    """Punkt 4: Die Abwesenheit einer Regel ist keine Erlaubnis."""
-    with MarketingStore(bestand) as store:
-        store.save_marketing(
-            GroupMarketing(group_id=GID, marketing_status=MarketingStatus.MEMBER)
-        )
-        erlaubnis = automatik.erlaubnis_fuer(store, GID)
-
-    assert not erlaubnis.regeln_gelesen
-    # Vorsichtig heisst seit dem 21.09.2026 noch genau eines: kein **Link**.
-    # Kommentiert wird trotzdem - die App wird dann genannt, nicht verlinkt.
-    assert not erlaubnis.links
 
 
 def test_der_beitragstext_wird_nicht_gespeichert(bestand: Path) -> None:
@@ -317,7 +276,7 @@ def test_ein_gruppenlimit_ist_kein_urteil_ueber_den_text(bestand: Path) -> None:
     Gruppe geht sofort.
     """
     from fbgroups.automation.actions import Kommentarausgang
-    from fbgroups.marketing.qualifikation import Ausgangsart, klassifiziere
+    from fbgroups.marketing.ausgang import Ausgangsart, klassifiziere
 
     meldung = "Du hast das Limit für freizugebende Inhalte in dieser Gruppe erreicht."
     assert klassifiziere(meldung) is Ausgangsart.GRUPPENLIMIT

@@ -74,7 +74,7 @@ def _kern(config, posts, kommentieren, *, bisherige=()):
         "Rueckfall {link}",
         kommentieren=kommentieren,
         bisherige=list(bisherige),
-        erlaubnis=Erlaubnis(links=True, regeln_gelesen=True),
+        erlaubnis=Erlaubnis(links=True),
         anspruch=Anspruch(anlass_pflicht=False),
         link_url=LINK_URL,
     )

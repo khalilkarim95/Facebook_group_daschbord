@@ -44,7 +44,6 @@ def _gruppe(gid: str = "g1", *, veroeffentlicht: int = 0, ziel: int = 10):
         mitglied=True,
         mitgliedschaft_noetig=False,
         post_status=PostStatus.VEROEFFENTLICHT,
-        regeln_noetig=False,
     )
 
 
@@ -54,7 +53,7 @@ def _fortschritt(aktionen: dict[Aktion, Lage]):
         status=lauf.LaufStatus.LAEUFT,
         kampagnen=[
             lauf.Kampagnenfortschritt(
-                campaign_id="k", name="test_neu", gruppen=[_gruppe()], bewertet=True
+                campaign_id="k", name="test_neu", gruppen=[_gruppe()]
             )
         ],
         aktionen=aktionen,
@@ -160,7 +159,6 @@ def test_ohne_arbeit_wird_nicht_gewartet() -> None:
                 campaign_id="k",
                 name="test_neu",
                 gruppen=[_gruppe(veroeffentlicht=10, ziel=10)],
-                bewertet=True,
             )
         ],
         aktionen={Aktion.KOMMENTAR: _takt(Aktion.KOMMENTAR)},
@@ -232,8 +230,8 @@ def test_kein_fehlschlag_verbraucht_ein_tageskontingent(tmp_path) -> None:
     ueber ``qualifikation.Beobachtung``; was das Konto bremst, faengt
     ``Ausgangsart.RATE_LIMIT`` mit seinem Backoff ab.
     """
+    from fbgroups.marketing.ausgang import Ablehnungsgrund
     from fbgroups.marketing.models import Campaign, CampaignGroup, PostVersuch
-    from fbgroups.marketing.qualifikation import Ablehnungsgrund
     from fbgroups.marketing.store import MarketingStore
     from fbgroups.models import Group
     from fbgroups.storage import SqliteStore

@@ -36,11 +36,10 @@ from pathlib import Path
 from typing import Any
 
 from fbgroups.config import AppConfig
-from fbgroups.marketing import qualifikation
 from fbgroups.marketing.analytics import funnel, kennzahlen
+from fbgroups.marketing.ausgang import GRUND_BESCHRIFTUNG, Ablehnungsgrund
 from fbgroups.marketing.bezug import Bezug
 from fbgroups.marketing.models import CampaignStatus, MarketingStatus
-from fbgroups.marketing.qualifikation import GRUND_BESCHRIFTUNG, Ablehnungsgrund
 from fbgroups.marketing.resonanz import resonanz_je_gruppe
 from fbgroups.marketing.selection import (
     Auswahl,
@@ -59,46 +58,13 @@ from fbgroups.models import (
 from fbgroups.scoring import Resonanz
 from fbgroups.storage.sqlite_store import SqliteStore
 
-# Klartext fuer die Statusnamen. Die englischen Kennungen stehen in der
-# Datenbank; auf der Seite haben sie nichts verloren.
-# Welche Staende als Mitgliedschaft gelten - dieselbe Menge wie in
-# ``lauf.lies_fortschritt``. Wer die Zusammenarbeit angebahnt oder
-# abgeschlossen hat, ist erst recht drin; ``beitritt_angefragt`` zaehlt
-# ausdruecklich nicht: Eine offene Anfrage ist keine Mitgliedschaft.
-_MITGLIEDSCHAFT = frozenset(
-    {
-        MarketingStatus.MEMBER,
-        MarketingStatus.CONTACTED,
-        MarketingStatus.INTERESTED,
-        MarketingStatus.APPROVED,
-        MarketingStatus.ACTIVE,
-    }
-)
-
-
-def _regeln_von(stand) -> qualifikation.Regelbefund:  # noqa: ANN001 - GroupMarketing | None
-    """Der Regelbefund aus dem Arbeitsstand - ``gelesen`` traegt die Aussage.
-
-    Ohne Eintrag ``gelesen=False``, und das ist nicht dasselbe wie "nichts
-    verboten": Die Abwesenheit einer Regel waere sonst eine Erlaubnis, die
-    niemand erteilt hat.
-    """
-    if stand is None:
-        return qualifikation.Regelbefund()
-    return qualifikation.Regelbefund(
-        gelesen=stand.regeln_gelesen_am is not None,
-        keine_links=stand.regel_keine_links,
-        keine_werbung=stand.regel_keine_werbung,
-        freigabe_noetig=stand.regel_freigabe_noetig,
-        neue_ohne_links=stand.regel_neue_ohne_links,
-    )
-
-
 #: Nur fuer die Sortierung der Spalte "Prioritaet": A++ zuerst, ohne Note
 #: dahinter. Seit dem 23.09.2026 keine Arbeitsreihenfolge mehr.
 _NOTENRANG: dict[str, int] = {"A++": 0, "A+": 1, "A": 2, "B+": 3, "B": 4}
 
 
+# Klartext fuer die Statusnamen. Die englischen Kennungen stehen in der
+# Datenbank; auf der Seite haben sie nichts verloren.
 _STATUS_LABEL = {
     "not_contacted": "nichts getan",
     "beitritt_angefragt": "Beitritt angefragt",
@@ -234,10 +200,6 @@ def _gruppe_als_zeile(
     passt_zu: list[dict[str, str]] | None = None,
     beitraege: list[dict[str, Any]] | None = None,
     resonanz: Resonanz | None = None,
-    qualifikation: str = "unbekannt",
-    qualifikation_label: str = "",
-    qualifikation_grund: str = "",
-    regeln: str = "",
     bezuege: list[str] | None = None,
     bezuege_gelesen: int = 0,
     gruende: dict[str, int] | None = None,
@@ -300,19 +262,6 @@ def _gruppe_als_zeile(
         "status": group.status.value,
         "marketing": marketing_status,
         "marketing_label": _STATUS_LABEL.get(marketing_status, marketing_status),
-        # Die dritte Achse neben "wo stehen wir?" und "arbeiten wir daran?":
-        # **darf** hier ueberhaupt etwas stehen. Sie wird bei jedem Aufruf aus
-        # Mitgliedschaft, gelesenen Gruppenregeln und dem Versuchsprotokoll
-        # gerechnet (``qualifikation.beurteile``) und ist deshalb nie
-        # veraltet. Der Grund faehrt mit: Eine Einstufung, deren Begruendung
-        # man nachschlagen muss, wird geglaubt statt nachgeschlagen.
-        "qualifikation": qualifikation,
-        "qualifikation_label": qualifikation_label or qualifikation,
-        "qualifikation_grund": qualifikation_grund,
-        # Was auf der Gruppenseite an Regeln stand - leer heisst "nichts
-        # verbietendes gefunden", nicht "nicht nachgesehen"; das sagt die
-        # Stufe selbst (``in Bewertung``).
-        "regeln": regeln,
         # Die Bezuege der Gruppe (23.09.2026) - gesammelt aus den gelesenen
         # Beitraegen (``bezug.fuer_gruppe``). Sie ersetzen die Zielklasse
         # (A-D) und die Region als Grundlage, auf der eine Gruppe beurteilt
@@ -424,10 +373,6 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             }
             for event_type, anzahl, anteil in funnel(mstore)
         ]
-        # Die Grundlage der Qualifikation - in **einem** Zugriff fuer den
-        # ganzen Bestand. Je Zeile einzeln waeren das bei 314 Gruppen 314
-        # Abfragen fuer dieselbe Tabelle.
-        beobachtet = mstore.beobachtungen()
         links = {c.campaign_id: mstore.links_for_campaign(c.campaign_id) for c in campaigns}
         beitrag_zaehler = {c.campaign_id: mstore.post_counts(c.campaign_id) for c in campaigns}
         # Dieselbe Funktion, die auch 'fbgroups rescore' benutzt - Anzeige und
@@ -482,26 +427,6 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
                 {"id": c.campaign_id, "name": c.name}
             )
 
-    # Die Qualifikation je Gruppe - gerechnet, nicht gelesen. Es gibt keine
-    # gespeicherte Einstufung, die veralten koennte; sie entsteht hier aus
-    # Mitgliedschaft, gelesenen Gruppenregeln und dem Versuchsprotokoll.
-    urteile = {
-        g.group_id: qualifikation.beurteile(
-            mitglied=bool(
-                g.group_id in marketing
-                and marketing[g.group_id].marketing_status in _MITGLIEDSCHAFT
-            ),
-            beitritt_angefragt=bool(
-                g.group_id in marketing
-                and marketing[g.group_id].marketing_status
-                is MarketingStatus.JOIN_REQUESTED
-            ),
-            regeln=_regeln_von(marketing.get(g.group_id)),
-            beobachtung=beobachtet.get(g.group_id),
-        )
-        for g in groups
-    }
-
     # Die Bezuege je Gruppe - aus den gelesenen Beitraegen gesammelt.
     with MarketingStore(db_path) as store:
         bezuege_je_gruppe = store.gruppenbezuege()
@@ -529,13 +454,6 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             beitraege=beitraege_je_gruppe.get(g.group_id, []),
             resonanz=resonanz_je_id.get(g.group_id),
             passt_zu=passt_je_gruppe.get(g.group_id, []),
-            qualifikation=urteile[g.group_id].qualifikation.value,
-            qualifikation_label=urteile[g.group_id].beschriftung,
-            qualifikation_grund=urteile[g.group_id].grund,
-            regeln=_regeln_von(marketing.get(g.group_id)).zusammenfassung()
-            if g.group_id in marketing
-            and marketing[g.group_id].regeln_gelesen_am is not None
-            else "",
             bezuege=[
                 b.value for b in bezuege_je_gruppe[g.group_id].bezuege
             ] if g.group_id in bezuege_je_gruppe else [],
@@ -1320,9 +1238,6 @@ genau die Liste, die noch zu beurteilen ist.">
     <option value="-">nicht eingestuft</option>
   </select>
   <select id="f-marketing"><option value="">Jeder Stand</option></select>
-  <select id="f-qualifikation" title="Darf hier ueberhaupt etwas stehen?">
-    <option value="">Jede Stufe</option>
-  </select>
   <select id="f-beitrag">
     <option value="">Jeder Beitrag</option>
     <option value="zu-tun">nur zu erledigen</option>
@@ -1402,9 +1317,6 @@ heisst, dass noch kein Beitrag gelesen wurde.">Bezüge</th>
 Tracking-Code - der wird nie zurueckgenommen, er steht spaeter in
 veroeffentlichten Beitraegen.">Kampagne</th>
     <th data-sort="marketing_label">Stand</th>
-    <th data-sort="qualifikation_label"
-        title="Darf hier ueberhaupt etwas stehen? Gerechnet aus Mitgliedschaft,
-gelesenen Gruppenregeln und den bisherigen Ausgaengen – nicht gespeichert.">Darf</th>
     <th data-sort="beitrag_status"
         title="Der Beitrag dieser Kampagne in dieser Gruppe. Der Text trägt den
 Tracking-Link genau dieser Gruppe – er entsteht aus der Zuordnung, nicht aus
@@ -1654,12 +1566,10 @@ function fuelleAuswahl(id, werte) {{
     .forEach((w) => el.add(new Option(w, w)));
 }}
 fuelleAuswahl("f-marketing", zeilen.map((z) => z.marketing_label));
-fuelleAuswahl("f-qualifikation", zeilen.map((z) => z.qualifikation_label));
 fuelleSammelKampagnen();
 
 function gefiltert() {{
   const stand = document.getElementById("f-marketing").value;
-  const qual = document.getElementById("f-qualifikation").value;
   const bezug = document.getElementById("f-bezug").value;
   const suche = document.getElementById("f-suche").value.trim().toLowerCase();
   const nurBewertet = document.getElementById("f-bewertet").checked;
@@ -1725,7 +1635,6 @@ function gefiltert() {{
     passtAktivitaet(z) &&
     passtKonfidenz(z) &&
     (!stand || z.marketing_label === stand) &&
-    (!qual || z.qualifikation_label === qual) &&
     passtBezug(z, bezug) &&
     (!nurBewertet || z.score !== null) &&
     (!suche || z.name.toLowerCase().includes(suche) ||
@@ -1753,7 +1662,7 @@ function sortiert(liste) {{
 function aktiveFilter() {{
   const felder = [
     ["f-bezug", "Bezug"], ["f-marketing", "Stand"],
-    ["f-qualifikation", "Darf"], ["f-beitrag", "Beitrag"], ["f-mitglieder", "Groesse"],
+    ["f-beitrag", "Beitrag"], ["f-mitglieder", "Groesse"],
     ["f-aktivitaet", "Aktivitaet"], ["f-konfidenz", "Datenqualitaet"],
     ["f-note", "Prioritaet"], ["f-stufe", "Aktivitaetsstufe"],
   ];
@@ -1774,7 +1683,7 @@ function aktiveFilter() {{
 
 function filterZuruecksetzen() {{
   for (const id of ["f-bezug",
-                    "f-marketing", "f-qualifikation", "f-beitrag",
+                    "f-marketing", "f-beitrag",
                     "f-mitglieder", "f-aktivitaet", "f-konfidenz",
                     "f-note", "f-stufe"]) {{
     const feld = document.getElementById(id);
@@ -1853,7 +1762,6 @@ function zeichne() {{
           <td>${{bezugZelle(z)}}</td>
           <td class="kampagnen-zelle">${{kampagnenZelle(z)}}</td>
           <td>${{standZelle(z)}}</td>
-          <td>${{qualZelle(z)}}</td>
           <td>${{beitragZelle(z)}}</td>
           <td class="zahl">${{z.click}}</td>
           <td class="zahl">${{z.registration}}</td>
@@ -2069,21 +1977,6 @@ const BEITRAG_LABEL = {{
 // stillschweigend loeschen.
 const STAND_VON_HAND = ["not_contacted", "beitritt_angefragt"];
 
-// Die Farbe sagt, was der Text sagt - sie ersetzt ihn nicht. Wer nur die
-// Farbe liest, liest "gut/schlecht"; die Stufe selbst steht daneben, und der
-// Grund haengt als Titel daran.
-const QUAL_FARBE = {{
-  geeignet: "#16a34a",
-  bewertung: "#ca8a04",
-  ohne_links: "#ca8a04",
-  ohne_kommentare: "#ca8a04",
-  ohne_beitraege: "#ca8a04",
-  beitritt_noetig: "#6b7280",
-  beitritt_angefragt: "#6b7280",
-  unbekannt: "#6b7280",
-  ungeeignet: "#dc2626",
-}};
-
 // Die Bezuege der Gruppe (23.09.2026). In der Zelle die Zahl, im Titel die
 // Namen: Die Spalte steht in jeder Zeile, und 21 moegliche Namen waeren
 // breiter als der Gruppenname.
@@ -2107,13 +2000,6 @@ function passtBezug(z, wahl) {{
   if (wahl === "-") return z.bezuege_gelesen > 0 && !z.bezuege.length;
   if (wahl === "+") return z.bezuege.length > 0;
   return z.bezuege.includes(wahl);
-}}
-
-function qualZelle(z) {{
-  const farbe = QUAL_FARBE[z.qualifikation] || "#6b7280";
-  const titel = [z.qualifikation_grund, z.regeln].filter(Boolean).join(" · ");
-  return `<span style="color:${{farbe}}" title="${{esc(titel)}}">`
-    + esc(z.qualifikation_label) + `</span>`;
 }}
 
 function standZelle(z) {{

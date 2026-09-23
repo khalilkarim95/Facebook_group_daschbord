@@ -215,31 +215,6 @@ class AutomatikStart(BaseModel):
     """
 
 
-class RegelErgebnis(BaseModel):
-    """Was auf **einer** Gruppenseite an Regeln stand - gemeldet vom Arbeitsrechner.
-
-    Gemeldet wird der **Befund**, nicht die Seite: Der Arbeitsrechner liest
-    sie mit ``actions.fetch_group_html`` und wertet sie mit
-    ``qualifikation.lies_regeln`` aus - derselben reinen Funktion, die auch
-    der oertliche Lauf nimmt. Zwei Auswertungen koennten abweichen, und die
-    Seite selbst ueber den Tunnel zu schicken hiesse, ein halbes Megabyte
-    HTML zu uebertragen, damit der Server vier Wahrheitswerte daraus liest.
-
-    ``gelesen=False`` (Anmeldewand, Zeitablauf) **schreibt nichts** - eine
-    nicht gelesene Seite ist kein Beleg dafuer, dass eine frueher gelesene
-    Regel weg ist. Stattdessen wird die Gruppe fuer diesen Lauf beiseitegelegt,
-    wie bei einer gescheiterten Beitrittsanfrage.
-    """
-
-    group_id: str
-    gelesen: bool = False
-    keine_links: bool = False
-    keine_werbung: bool = False
-    freigabe_noetig: bool = False
-    neue_ohne_links: bool = False
-    campaign_id: str = ""
-
-
 class BeitrittErgebnis(BaseModel):
     """Der Ausgang **einer** Beitrittsanfrage, gemeldet vom Arbeitsrechner.
 
@@ -1194,7 +1169,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         ``fbgroups campaign automatik`` auf dem Rechner, an dem der Browser
         steht.
         """
-        from fbgroups.marketing import automatik, grenzen, lauf, qualifikation
+        from fbgroups.marketing import automatik, grenzen, lauf
 
         with _store() as store:
             offen = store.offener_lauf()
@@ -1215,7 +1190,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 int(offen["lauf_id"]),
                 gruppen,
                 mitgliedschaft_pflicht=automatik.mitgliedschaft_pflicht(cfg),
-                qualifikation_pflicht=qualifikation.pflicht(cfg),
                 kommentare_zuerst=automatik.kommentare_zuerst(cfg),
                 aktionen=lagen,
                 bezuege=store.gruppenbezuege(gruppen),
@@ -1246,7 +1220,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 },
                 "aktuelle_kampagne": aktuell.name if aktuell else "",
                 # In welchem Abschnitt die laufende Kampagne steht -
-                # Beitrittsanfragen, Neubewertung oder Arbeit. Ohne diese
+                # Beitrittsanfragen oder Arbeit. Ohne diese
                 # Angabe sieht ein Lauf, der gerade Anfragen stellt, aus wie
                 # einer, der nichts tut.
                 "abschnitt": (
@@ -1274,10 +1248,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     for aktion in grenzen.Aktion
                     if (lage := fortschritt.lage(aktion)) is not None
                 },
-                # Zwei Arten von Auslassung, und sie bedeuten Verschiedenes:
-                # ein Urteil der Gruppe ueber unseren Inhalt, und ein
-                # Fehlschlag von heute.
-                "gruppen_gesperrt": fortschritt.gruppen_gesperrt,
                 "gruppen_uebersprungen": fortschritt.gruppen_uebersprungen,
                 "aktuelle_gruppe": gruppe.name if gruppe else "",
                 "aktuelle_kommentare": (
@@ -1323,8 +1293,8 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         der Bestand steht.
 
         **Die Reihenfolge entscheidet der Server** (12.09.2026): Kampagne,
-        dann ihre Beitrittsanfragen, dann die Neubewertung, dann die besten
-        Gruppen, darin Beitrag vor Kommentar. Der Arbeitsrechner fuehrt aus,
+        dann ihre Beitrittsanfragen, dann die Gruppen in Score-Reihenfolge,
+        darin Beitrag und Kommentar. Der Arbeitsrechner fuehrt aus,
         was ``lauf.naechster_schritt`` vorgibt - er kennt die Reihenfolge
         nicht und kann sie deshalb auch nicht anders auslegen als der
         oertliche Lauf.
@@ -1343,9 +1313,9 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             automatik,
             grenzen,
             lauf,
-            qualifikation,
         )
         from fbgroups.marketing.beitrag import mit_link
+        from fbgroups.marketing.entscheidung import Erlaubnis
 
         with SqliteStore(pfad) as gruppen_store:
             gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
@@ -1399,11 +1369,9 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 lauf_id,
                 gruppen,
                 mitgliedschaft_pflicht=automatik.mitgliedschaft_pflicht(cfg),
-                qualifikation_pflicht=qualifikation.pflicht(cfg),
                 kommentare_zuerst=automatik.kommentare_zuerst(cfg),
                 aktionen=lagen,
                 bezuege=store.gruppenbezuege(gruppen),
-                regeln_pflicht=automatik.regeln_zuerst(cfg),
                 heute_je_gruppe=store.versuche_heute_je_gruppe(
                     heute, Texttyp.KOMMENTAR.value
                 ),
@@ -1518,53 +1486,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     }
                 )
 
-            if schritt.art is lauf.Schrittart.BEWERTEN:
-                # Die Neubewertung braucht keinen Browser - sie bleibt auf
-                # dem Server. Ausgefuehrt wird sie ausserhalb dieses Blocks:
-                # Sie oeffnet den Bestand selbst, und zwei offene Schreibwege
-                # auf dieselbe Datei sind eine Sperre, die niemand braucht.
-                zu_bewerten = schritt.campaign_id
-                kampagnenname = schritt.gruppe_name
-                nur_gruppen = {
-                    link.group_id for link in store.links_for_campaign(zu_bewerten)
-                }
-            elif schritt.art is lauf.Schrittart.REGELN:
-                # Schritt 1: nachsehen, was die Gruppe erlaubt - vor der
-                # Anfrage. Der Arbeitsrechner holt die Seite (er hat den
-                # angemeldeten Browser) und wertet sie mit derselben reinen
-                # Funktion aus wie der oertliche Lauf; hier kommt nur der
-                # Befund zurueck.
-                gruppe = gruppen.get(schritt.group_id)
-                if gruppe is None or not gruppe.url_canonical:
-                    store.ueberspringe_gruppe(
-                        lauf_id, schritt.campaign_id, schritt.group_id, "keine Gruppen-URL"
-                    )
-                    return JSONResponse({"schritt": None, "weiter": True, "fertig": False})
-                return JSONResponse(
-                    {
-                        "schritt": {
-                            "lauf_id": lauf_id,
-                            "neu": neu,
-                            "art": lauf.Schrittart.REGELN.value,
-                            "campaign_id": schritt.campaign_id,
-                            "group_id": schritt.group_id,
-                            "gruppe_name": schritt.gruppe_name,
-                            "gruppen_url": gruppe.url_canonical,
-                            "nummer": 0,
-                            "texttyp": "",
-                            "kommentar_nr": 1,
-                            "kommentar_ziel": 1,
-                            "ziel": "",
-                            "tracking_code": "",
-                            "text": "",
-                            "bisherige_post_urls": [],
-                        },
-                        "weiter": True,
-                        "fertig": False,
-                        "fortschritt": lauf.fortschrittstext(fortschritt),
-                    }
-                )
-            elif schritt.art is lauf.Schrittart.BEITRITT:
+            if schritt.art is lauf.Schrittart.BEITRITT:
                 gruppe = gruppen.get(schritt.group_id)
                 if gruppe is None or not gruppe.url_canonical:
                     # Ohne Adresse laesst sich keine Anfrage stellen. Fuer
@@ -1598,8 +1520,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     }
                 )
             else:
-                zu_bewerten = ""
-
                 # Fehlende Fassungen werden **erzeugt**, nicht als
                 # Erschoepfung gemeldet. Der Fernbetrieb ist der Weg, den der
                 # Nutzer faehrt; ohne diesen Schritt erklaerte er jede Gruppe,
@@ -1676,17 +1596,11 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 bisherige = sorted(store.bisherige_post_urls(schritt.group_id))
 
                 # **Die Entscheidungsgrundlagen gehen mit** (14.09.2026).
-                # Der Arbeitsrechner haelt keinen Bestand - er kann weder
-                # die gelesenen Gruppenregeln noch die Klasse der Gruppe
-                # nachschlagen. Ohne diese drei Angaben nahm er deshalb den
-                # lautesten Beitrag und setzte den vorbereiteten Text
-                # darunter: kein Inhaltsurteil, keine Regeln, kein Anspruch.
-                #
-                # Gerechnet wird hier, ausgewertet dort - dieselbe Aufteilung
-                # wie bei den Gruppenregeln (``lies_regeln``): Der Bestand
-                # liegt, wo gezaehlt wird; die reine Regel laeuft, wo der
-                # Browser steht.
-                erlaubnis = automatik.erlaubnis_fuer(store, schritt.group_id)
+                # Der Arbeitsrechner haelt keinen Bestand. Gerechnet wird
+                # hier, ausgewertet dort: Der Bestand liegt, wo gezaehlt
+                # wird; die reine Regel laeuft, wo der Browser steht. Die
+                # Erlaubnis ist seit dem 23.09.2026 fuer jede Gruppe dieselbe.
+                erlaubnis = Erlaubnis()
                 anspruch = automatik.anspruch_aus_config(cfg)
                 vorgaben = {
                     "erlaubnis": {
@@ -1694,7 +1608,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                         "beitraege": erlaubnis.beitraege,
                         "links": erlaubnis.links,
                         "privatkontakt": erlaubnis.privatkontakt,
-                        "regeln_gelesen": erlaubnis.regeln_gelesen,
                     },
                     "anspruch": {
                         "mindestrelevanz": anspruch.mindestrelevanz.value,
@@ -1711,28 +1624,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                         )
                     ),
                 }
-
-        if zu_bewerten:
-            # Schritt 3 des Ablaufs, auf dem Server ausgefuehrt: Was wir
-            # inzwischen wissen, entscheidet ueber die Rangfolge, nach der
-            # gearbeitet wird. Scheitert sie, wird sie trotzdem vermerkt -
-            # sonst stuende die Kampagne bei jedem Aufruf wieder davor.
-            from fbgroups.rescoring import bewerte_neu
-
-            meldung = f"{kampagnenname}: neu bewertet"
-            try:
-                ergebnis = bewerte_neu(cfg, nur=nur_gruppen)
-                meldung = (
-                    f"{kampagnenname}: {ergebnis.bewertet} Gruppen bewertet, "
-                    f"{ergebnis.geaendert} mit geaendertem Score"
-                )
-            except Exception as exc:  # noqa: BLE001 - eine Kampagne, nicht der Lauf
-                meldung = f"{kampagnenname}: Neubewertung fehlgeschlagen ({exc})"
-            with _store() as store:
-                store.merke_bewertung(lauf_id, zu_bewerten)
-            return JSONResponse(
-                {"schritt": None, "weiter": True, "fertig": False, "meldung": meldung}
-            )
 
         return JSONResponse(
             {
@@ -1941,45 +1832,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 "meldung": "" if liste else "Keine Gruppe ohne Anfrage uebrig.",
             }
         )
-
-    @app.post("/automatik/regeln/ergebnis")
-    def automatik_regeln_ergebnis(meldung: RegelErgebnis, request: Request):  # noqa: ANN202
-        """Traegt fest, was auf **einer** Gruppenseite an Regeln stand.
-
-        Derselbe Weg wie ``store.merke_regeln`` im oertlichen Lauf, und
-        derselbe Vorbehalt: Ein **nicht gelesener** Befund schreibt nichts.
-        Eine Anmeldewand ist kein Beleg dafuer, dass eine frueher gelesene
-        Regel weg ist - dieselbe Ueberlegung wie bei ``upsert_groups`` mit
-        COALESCE.
-
-        Damit dieselbe Gruppe trotzdem nicht bei jedem Durchgang wiederkommt,
-        wird sie dann fuer diesen Lauf beiseitegelegt - wie bei einer
-        gescheiterten Beitrittsanfrage.
-        """
-        _nur_lokal(request)
-        from fbgroups.marketing.qualifikation import Regelbefund
-
-        with _store() as store:
-            if meldung.gelesen:
-                store.merke_regeln(
-                    meldung.group_id,
-                    Regelbefund(
-                        gelesen=True,
-                        keine_links=meldung.keine_links,
-                        keine_werbung=meldung.keine_werbung,
-                        freigabe_noetig=meldung.freigabe_noetig,
-                        neue_ohne_links=meldung.neue_ohne_links,
-                    ),
-                )
-                return JSONResponse({"ok": True, "vermerkt": True})
-            if meldung.campaign_id and (offen := store.offener_lauf()) is not None:
-                store.ueberspringe_gruppe(
-                    int(offen["lauf_id"]),
-                    meldung.campaign_id,
-                    meldung.group_id,
-                    "Gruppenseite nicht lesbar",
-                )
-            return JSONResponse({"ok": True, "vermerkt": False})
 
     @app.post("/automatik/beitritt/ergebnis")
     def automatik_beitritt_ergebnis(meldung: BeitrittErgebnis, request: Request):  # noqa: ANN202

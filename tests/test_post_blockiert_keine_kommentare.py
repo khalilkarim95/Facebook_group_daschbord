@@ -52,7 +52,6 @@ def _gruppe(
         ziel=10,
         mitglied=True,
         mitgliedschaft_noetig=False,
-        regeln_noetig=False,
         post_status=post_status,
         post_fassungen=frozenset({1}),
         heute_in_gruppe=heute_in_gruppe,
@@ -66,7 +65,7 @@ def _stand(gruppen: list, aktionen: dict):
         status=lauf.LaufStatus.LAEUFT,
         kampagnen=[
             lauf.Kampagnenfortschritt(
-                campaign_id="k", name="k", gruppen=gruppen, bewertet=True
+                campaign_id="k", name="k", gruppen=gruppen
             )
         ],
         aktionen=aktionen,
@@ -225,7 +224,6 @@ def test_die_rangfolge_bleibt_auch_bei_der_kommentargruppe() -> None:
     kampagne = lauf.Kampagnenfortschritt(
         campaign_id="k",
         name="k",
-        bewertet=True,
         gruppen=[
             _gruppe("g1", heute_in_gruppe=1, gruppenlimit=1, post_status=PostStatus.OFFEN),
             _gruppe("g2"),
@@ -251,7 +249,6 @@ def test_erschoepfte_beitraege_beenden_die_kampagne_nicht() -> None:
     kampagne = lauf.Kampagnenfortschritt(
         campaign_id="k",
         name="k",
-        bewertet=True,
         gruppen=[
             _gruppe("g1", post_status=PostStatus.VEROEFFENTLICHT, veroeffentlicht=2),
             _gruppe("g2", post_status=PostStatus.VEROEFFENTLICHT, veroeffentlicht=3),
@@ -389,7 +386,7 @@ def test_eine_fertige_gruppe_zaehlt_nicht_als_tagesmenge() -> None:
         post_status=PostStatus.VEROEFFENTLICHT, veroeffentlicht=10,
     )
     kampagne = lauf.Kampagnenfortschritt(
-        campaign_id="k", name="k", gruppen=[fertig], bewertet=True
+        campaign_id="k", name="k", gruppen=[fertig]
     )
 
     assert fertig.fertig is True

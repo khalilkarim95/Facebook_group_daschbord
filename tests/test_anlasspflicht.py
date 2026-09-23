@@ -31,7 +31,7 @@ from fbgroups.marketing.entscheidung import (
 )
 from fbgroups.marketing.inhalt import Relevanz, Thema, lies
 
-ERLAUBT = Erlaubnis(kommentare=True, links=True, regeln_gelesen=True)
+ERLAUBT = Erlaubnis()
 
 #: Ein Reisender mit freiem Gepaeck - der haeufigste Beitrag dieser Gruppen.
 FREIES_GEPAECK = "مرحبا نازلة من ألمانيا فيسبادن عالشام ب 27/9 متوفر وزن خفيف وأوراق"

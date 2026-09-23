@@ -65,13 +65,6 @@ from fbgroups.marketing.models import (
     PostStatus,
     Texttyp,
 )
-from fbgroups.marketing.qualifikation import (
-    BEITRITTSSTUFEN,
-    Qualifikation,
-    Regelbefund,
-    beurteile,
-    darf_nach_regeln,
-)
 
 # Zehn Kommentare je Gruppe, aus fuenf Vorlagen. Die beiden Zahlen sind
 # **nicht** dasselbe, und genau deshalb stehen sie getrennt:
@@ -189,30 +182,6 @@ class Gruppenfortschritt:
     Beitrag wird deshalb nicht ein zweites Mal abgesetzt.
     """
 
-    qualifikation: Qualifikation = Qualifikation.UNBEKANNT
-    """Was diese Gruppe erlaubt - gerechnet, nicht gespeichert.
-
-    Sie kommt aus ``qualifikation.beurteile`` und traegt Mitgliedschaft,
-    Gruppenregeln und die bisherigen Ausgaenge zusammen. Ob sie **sperrt**,
-    entscheidet ``qualifikation_pflicht``; ohne den Schalter wird sie nur
-    angezeigt. Der Grund dafuer steht in ``qualifikation.pflicht``.
-    """
-
-    qualifikation_grund: str = ""
-    """Warum. Nie das Urteil ohne den Grund - wie bei ``score_reason``."""
-
-    qualifikation_pflicht: bool = False
-    """Gilt die Qualifikation als Sperre oder nur als Anzeige?"""
-
-    fassungen_mit_link: frozenset[int] = frozenset()
-    """Welche Kommentarfassungen dieser Gruppe einen ``{link}`` tragen.
-
-    Nur dadurch laesst sich ``OHNE_LINKS`` von ``OHNE_KOMMENTARE``
-    unterscheiden: In einer Gruppe, die Links ablehnt, darf derselbe
-    Kommentar ohne Link weiterhin stehen. Ohne diese Menge muesste der Lauf
-    entweder alle Kommentare sperren oder keinen.
-    """
-
     post_fassungen: frozenset[int] = frozenset()
     """Welche Beitragsfassungen es fuer diese Gruppe ueberhaupt gibt.
 
@@ -258,13 +227,6 @@ class Gruppenfortschritt:
     uebersprungen_grund: str = ""
     """Warum sie beiseiteliegt - nie das eine ohne das andere."""
 
-    bewertet: bool = True
-    """Ist der Score dieser Gruppe in diesem Lauf aufgefrischt worden?
-
-    Wird je Kampagne beantwortet, nicht je Gruppe; hier steht der Wert nur,
-    damit die Anzeige ihn nennen kann.
-    """
-
     bezuege: tuple[str, ...] = ()
     """Die Bezuege, die in den Beitraegen dieser Gruppe erkannt wurden.
 
@@ -273,35 +235,6 @@ class Gruppenfortschritt:
     (``bezug.fuer_gruppe``). **Sie entscheidet hier noch nichts**: Leer
     heisst "spaeter definierte Sonderbehandlung", und die ist ausdruecklich
     noch nicht festgelegt. Bis dahin werden alle Gruppen gleich behandelt.
-    """
-
-    regeln_noetig: bool = True
-    """Muessen die Regeln gelesen sein, bevor eine Anfrage hinausgeht?
-
-    Vorgabe **wahr** - die vorsichtige, wie ueberall im Code; abgeschaltet
-    wird auf Ansage in ``settings.yaml`` (``beitritt.regeln_zuerst``).
-    Dieselbe Aufteilung wie bei ``mitgliedschaft_noetig``: Der Code behaelt
-    den Schutz fuer den Fall, dass niemand etwas gesagt hat, und die
-    Konfiguration ist die Stelle, an der etwas gesagt wird.
-
-    Der Schalter ist noetig, weil es einen Fall gibt, in dem die Regel
-    blockiert: Laesst sich eine Gruppenseite nicht lesen - Anmeldewand,
-    geschlossene Gruppe -, bleibt ``regeln_gelesen`` fuer immer falsch, und
-    die Anfrage ginge nie hinaus. Ausgeschaltet gilt wieder die alte
-    Reihenfolge.
-    """
-
-    regeln_gelesen: bool = False
-    """Ist die Gruppenseite schon auf ihre Regeln hin gelesen worden?
-
-    Die Vorbedingung der **Beitrittsanfrage** seit dem 13.09.2026: Erst
-    nachsehen, was eine Gruppe erlaubt, dann anfragen. Vorher ging die
-    Anfrage an jede Gruppe, und ob dort ueberhaupt kommentiert werden darf,
-    stellte sich Tage spaeter heraus - nach der Aufnahme, nach dem ersten
-    Versuch, nach dem ersten Fehlschlag.
-
-    Es ist **nicht** dasselbe wie ``Regelbefund.gelesen`` im Urteil: Dort
-    entscheidet es ueber die Erlaubnis, hier ueber die Reihenfolge.
     """
 
     heute_in_gruppe: int = 0
@@ -358,102 +291,17 @@ class Gruppenfortschritt:
         """
         return self.mitgliedschaft_noetig and not self.mitglied and not self.fertig
 
-    def erlaubt(self, texttyp: Texttyp, nummer: int) -> bool:
-        """Darf **diese** Fassung in diese Gruppe? Die Frage vor dem Versuch.
-
-        Ohne ``qualifikation_pflicht`` immer ``True``: Beobachtet und
-        angezeigt wird ab sofort, gesperrt wird auf Ansage - siehe
-        ``qualifikation.pflicht``.
-
-        Ein **Beitrag** traegt immer einen Link; ``pruefe_platzhalter``
-        verlangt ihn. In einer Gruppe, deren Regeln Links verbieten, ist er
-        damit ebenso ausgeschlossen wie ein Kommentar mit Link - die Regeln
-        der Gruppe zu umgehen ist ausdruecklich nicht das Ziel.
-
-        ``nummer = 0`` ist die allgemeine Frage "koennte hier ueberhaupt ein
-        Kommentar stehen?": Die Null steht in keiner Fassungsliste, gilt also
-        als linklos und prueft damit genau die Sperre, die alle Kommentare
-        trifft.
-        """
-        if self.qualifikation in BEITRITTSSTUFEN:
-            # "Sind wir drin?" ist eine Frage ueber **unseren** Stand. Ob sie
-            # sperrt, sagt der Schalter; die Mitgliedschaft selbst haelt
-            # ausserdem ``wartet`` fest, mit ihrem eigenen Schalter.
-            return not self.qualifikation_pflicht
-        mit_link = (
-            texttyp is Texttyp.POST or nummer in self.fassungen_mit_link
-        )
-        # "Was erlaubt die Gruppe?" ist eine Frage ueber **die Gruppe**, und
-        # sie bindet ohne Schalter: kein Link, wo Links verboten sind, kein
-        # Kommentar, wo Kommentare abgelehnt werden. Ein Schalter, der das
-        # aufhoebe, waere ein Schalter zum Regelbruch.
-        return darf_nach_regeln(self.qualifikation, texttyp, mit_link=mit_link)
-
-    @property
-    def kann_beitrag(self) -> bool:
-        """Naehme diese Gruppe einen Beitrag? Ein Beitrag traegt immer einen Link."""
-        return self.erlaubt(Texttyp.POST, self.post_nummer or 1)
-
-    @property
-    def kann_kommentar(self) -> bool:
-        """Naehme diese Gruppe **irgendeine** der vorhandenen Kommentarfassungen?
-
-        Gefragt wird nach den vorhandenen Fassungen und nicht nach der
-        Moeglichkeit an sich: "Diese Gruppe naehme einen Kommentar ohne Link"
-        hilft nicht, wenn alle zehn Fassungen einen tragen.
-        """
-        return any(
-            self.erlaubt(Texttyp.KOMMENTAR, nummer)
-            for nummer in range(1, self.ziel + 1)
-        )
-
-    @property
-    def vorrang(self) -> int:
-        """Die Rangklasse dieser Gruppe - **vor** dem Score, nicht statt seiner.
-
-        ``0`` beides moeglich, ``1`` eines von beiden, ``2`` nichts. Das ist
-        Punkt 3 des Ablaufs: Eine Gruppe, die Beitrag **und** Kommentare
-        nimmt, ist der bessere Platz als eine, die nur eines nimmt - und zwar
-        unabhaengig davon, wie gut sie thematisch passt. Innerhalb einer
-        Klasse entscheidet weiterhin der Score, denn die Liste kommt
-        score-sortiert herein und wird **stabil** umsortiert.
-
-        Klasse 2 heisst uebersprungen, nicht ungeeignet: Sie bleibt im
-        Bestand und wird beim naechsten Lauf neu beurteilt.
-        """
-        return 2 - int(self.kann_beitrag) - int(self.kann_kommentar)
-
-    @property
-    def gesperrt(self) -> bool:
-        """Sperrt die Qualifikation hier **alles**?
-
-        Blockiert, nicht erledigt - dieselbe Unterscheidung wie bei
-        ``wartet``: Die Arbeit fehlt nicht, weil sie getan waere, sondern
-        weil sie hier nicht getan werden darf. Eine Kampagne, die daraufhin
-        "erfolgreich abgeschlossen" meldete, behauptete Beitraege, die es
-        nicht gibt.
-
-        Gefragt wird nach den **vorhandenen** Fassungen, nicht nach der
-        Moeglichkeit an sich. "Diese Gruppe naehme einen Kommentar ohne Link"
-        hilft nicht, wenn alle zehn Fassungen einen tragen: Der Lauf bliebe
-        dann vor einer Gruppe stehen, aus der er nichts holen kann, und die
-        naechste kaeme nie dran. Das ist derselbe Grund, aus dem ``wartet``
-        eine Gruppe ueberspringt, statt es dort zu versuchen.
-        """
-        if self.post_offen and self.kann_beitrag:
-            return False
-        return not self.kann_kommentar
-
     @property
     def bearbeitbar(self) -> bool:
         """Darf die Automatik hier ueberhaupt etwas versuchen?
 
-        Fuenf Gruende sprechen dagegen, und sie bedeuten Verschiedenes: heute
+        Vier Gruende sprechen dagegen, und sie bedeuten Verschiedenes: heute
         schon genug in dieser Gruppe (Takt), keine Mitgliedschaft
-        (blockiert), von der Gruppe nicht erlaubt (gesperrt), in diesem Lauf
-        fehlgeschlagen (uebersprungen) oder schlicht erledigt (fertig). Nur
-        der letzte ist ein Erfolg, und nur ``gesperrt`` und ``fertig`` sind
-        Aussagen ueber die Gruppe.
+        (blockiert), in diesem Lauf fehlgeschlagen (uebersprungen) oder
+        schlicht erledigt (fertig). Nur der letzte ist ein Erfolg.
+
+        Die Qualifikation (Gruppenregeln, Sperre nach wiederholter
+        Ablehnung) ist am 23.09.2026 entfallen - Anweisung des Nutzers.
 
         Der sechste Grund - die Zielklasse ``D`` - ist am 23.09.2026
         entfallen: Beurteilt wird eine Gruppe seither nach den Bezuegen in
@@ -477,7 +325,6 @@ class Gruppenfortschritt:
             # Kommentar nahm der Gruppe den Beitrag fuer denselben Tag.
             (not self.tageslimit_erreicht or self.post_offen)
             and (self.mitglied or not self.mitgliedschaft_noetig)
-            and not self.gesperrt
             and not self.uebersprungen
             and not self.fertig
         )
@@ -504,15 +351,14 @@ class Phase(StrEnum):
     """Wo eine Kampagne innerhalb ihres Ablaufs steht.
 
     Die Reihenfolge ist der Ablauf, und sie gilt **je Kampagne**: Erst gehen
-    die Beitrittsanfragen an die Gruppen dieser Kampagne hinaus, dann werden
-    sie neu bewertet, dann wird in den besten gearbeitet - und erst danach
-    kommt die naechste Kampagne. Das ist ausdruecklich nicht "alle Gruppen
-    irgendwie bearbeiten, spaeter beitreten, irgendwann bewerten".
+    die Beitrittsanfragen an die Gruppen dieser Kampagne hinaus, dann wird
+    gearbeitet - und erst danach kommt die naechste Kampagne.
+
+    Die Abschnitte "Gruppenregeln lesen" und "Neubewertung" sind am
+    23.09.2026 entfallen (Anweisung des Nutzers).
     """
 
-    REGELN = "regeln"
     BEITRITT = "beitritt"
-    BEWERTEN = "bewerten"
     ARBEIT = "arbeit"
     FERTIG = "fertig"
 
@@ -525,14 +371,6 @@ class Kampagnenfortschritt:
     name: str
     gruppen: list[Gruppenfortschritt]
     status: KampagnenLaufStatus = KampagnenLaufStatus.WARTET
-    bewertet: bool = True
-    """Sind die Gruppen dieser Kampagne in diesem Lauf neu bewertet worden?
-
-    Steht zwischen Beitritt und Arbeit. ``True`` als Vorgabe, damit ein Stand,
-    der ohne diese Angabe gebaut wird (Tests, aeltere Aufrufer), nicht in eine
-    Bewertungsschleife laeuft.
-    """
-
     @property
     def gruppen_gesamt(self) -> int:
         return len(self.gruppen)
@@ -655,11 +493,6 @@ class Kampagnenfortschritt:
         return sum(1 for g in self.gruppen if g.uebersprungen)
 
     @property
-    def gruppen_gesperrt(self) -> int:
-        """Von der Gruppe nicht erlaubt - fuer diesen Durchgang uebersprungen."""
-        return sum(1 for g in self.gruppen if g.gesperrt and not g.fertig)
-
-    @property
     def gruppen_ohne_bezug(self) -> int:
         """Gruppen, in deren Beitraegen kein Bezug erkannt wurde (``[]``).
 
@@ -692,115 +525,28 @@ class Kampagnenfortschritt:
         ]
 
     @property
-    def regeln_offen(self) -> list[Gruppenfortschritt]:
-        """Die Gruppe, deren Regeln **jetzt gleich** gebraucht werden.
-
-        Hoechstens zwei Eintraege: die naechste Gruppe, an die eine Anfrage
-        geht, und die naechste, in der gearbeitet wird. **Nicht** alle Gruppen
-        der Kampagne.
-
-        Der Unterschied ist der ganze Punkt (13.09.2026, nachgebessert am
-        selben Tag). Zuerst stand hier die vollstaendige Liste, und die Phase
-        galt der ganzen Kampagne: Bei 254 Gruppen las der Lauf **eine halbe
-        Stunde**, bevor der erste Beitrag hinausging. Verlangt war aber "vor
-        der Beitrittsanfrage die Regeln pruefen" - je Gruppe, nicht als
-        Vorlauf ueber den ganzen Bestand. Jetzt gilt: Regeln von Gruppe 1
-        lesen, in Gruppe 1 arbeiten, Regeln von Gruppe 2 lesen, in Gruppe 2
-        arbeiten. Derselbe Abruf, dieselbe Reihenfolge - nur verzahnt statt
-        gestapelt, und nach acht Sekunden statt nach einer halben Stunde steht
-        der erste Beitrag.
-
-        **Auch fuer Bestandsmitglieder**, nicht nur vor einer Anfrage: In
-        einer Gruppe, in der das Konto laengst Mitglied ist, steht keine
-        Anfrage mehr aus - ihre Regeln waeren damit nie gelesen worden. Seit
-        dem 21.09.2026 kostet das keinen Kommentar mehr (die Werbungslogik
-        ist entfernt), wohl aber den **Link**: ``Erlaubnis.links`` verlangt
-        eine gelesene Regel, und ohne Adresse bekommt die Gruppe keinen
-        Klick gutgeschrieben.
-
-        Die Regeln einer Gruppe zu lesen, in der weder gearbeitet noch
-        beigetreten wird, kostet einen Seitenabruf fuer nichts - deshalb die
-        Einschraenkung auf ``bearbeitbar``.
-        """
-        kandidaten = [
-            next(iter(self.beitritt_kandidaten), None),
-            self.naechste_gruppe,
-            # **Und die Gruppe, in der gleich kommentiert wird** (21.09.2026).
-            # Seit dem 15.09.2026 waehlt der Kommentarzweig seine Gruppe
-            # selbst (``naechste_kommentargruppe``) - hier stand aber nur
-            # ``naechste_gruppe``. In einer Kampagne aus lauter Mitgliedern
-            # gibt es keine Beitrittskandidaten, und ``naechste_gruppe`` ist
-            # **eine** Gruppe: Die Regeln aller uebrigen wurden nie gelesen,
-            # obwohl der Lauf dort kommentierte.
-            #
-            # Damals war die Folge gar kein Kommentar (ungelesene Regeln
-            # hiessen ``werbung=False``); seit dem 21.09.2026 ist es der
-            # fehlende **Link**: ``Erlaubnis.links`` verlangt eine gelesene
-            # Regel, und ohne Adresse zaehlt kein Klick auf die Gruppe.
-            self.naechste_kommentargruppe,
-        ]
-        gesehen: dict[str, Gruppenfortschritt] = {}
-        for gruppe in kandidaten:
-            if (
-                gruppe is not None
-                and gruppe.regeln_noetig
-                and not gruppe.regeln_gelesen
-                and not gruppe.uebersprungen
-                and gruppe.group_id not in gesehen
-            ):
-                gesehen[gruppe.group_id] = gruppe
-        return list(gesehen.values())
-
-    @property
     def beitritt_offen(self) -> list[Gruppenfortschritt]:
         """Die Gruppen dieser Kampagne, an die noch eine Anfrage gehen muss.
 
-        Schritt 2 des Ablaufs, und seit dem 13.09.2026 mit **zwei**
-        Vorbedingungen mehr:
-
-        * **Ein Kandidat** (``beitritt_kandidaten``). Bis zum 22.09.2026 nur
-          die Zielklassen ``A`` und ``B``; seither jede Gruppe, der eine
-          Anfrage fehlt - abgeschaltet ist die Anfrage bis auf Weiteres in
-          ``settings.yaml`` (``limits.join_requests.daily: 0``).
-        * **Regeln gelesen.** Erst nachsehen, was eine Gruppe erlaubt, dann
-          anfragen. Vorher ging die Anfrage hinaus, und ob dort ueberhaupt
-          kommentiert werden darf, stellte sich Tage spaeter heraus. Wo die
-          Regeln alles ausschliessen (``UNGEEIGNET``), entfaellt die Anfrage
-          ganz - ein Beitritt zu einer Gruppe, in der nichts stehen darf,
-          waere ein Handgriff ohne Zweck.
-
-        Die Reihenfolge ist die der Arbeitsliste.
+        Bis zum 22.09.2026 nur die Zielklassen ``A`` und ``B``, bis zum
+        23.09.2026 nur mit gelesenen Gruppenregeln; seither jede Gruppe, der
+        eine Anfrage fehlt. Abgeschaltet ist die Anfrage bis auf Weiteres in
+        ``settings.yaml`` (``limits.join_requests.daily: 0``).
         """
-        return [
-            g
-            for g in self.beitritt_kandidaten
-            if (g.regeln_gelesen or not g.regeln_noetig)
-            and g.qualifikation is not Qualifikation.UNGEEIGNET
-        ]
+        return self.beitritt_kandidaten
 
     @property
     def arbeitsliste(self) -> list[Gruppenfortschritt]:
         """Die Gruppen in der Reihenfolge, in der gearbeitet wird.
 
-        **Zwei Stufen** (seit 23.09.2026):
-
-        1. **Vorrang** - die Gruppen, die **beides** nehmen (Beitrag und
-           Kommentare), vor denen mit einem von beiden, zuletzt die
-           gesperrten.
-        2. **Score** - innerhalb dessen die Reihenfolge, in der die Liste
-           hereinkam (``sort_by_rank``).
-
-        Bis zum 22.09.2026 standen davor die gepflegte Note, die Zielklasse
-        (``A``-``D``) und die Region. Sie sind entfallen: Eine Gruppe wird
-        nach den Bezuegen in ihren Beitraegen beurteilt, und wie diese die
-        Reihenfolge bestimmen, ist noch nicht festgelegt. Bis dahin gilt, was
-        ohne Einstufung immer galt.
-
-        Deshalb wird **stabil** sortiert und nicht neu geordnet: Eine zweite
-        Rangfolge neben der ersten koennte von ihr abweichen, und dann zeigte
-        die Anzeige eine andere Gruppe als die, an der gearbeitet wird.
+        Die Reihenfolge, in der die Liste hereinkam: ``sort_by_rank``, also
+        der Score. Bis zum 22.09.2026 standen davor Note, Zielklasse
+        (``A``-``D``) und Region, bis zum 23.09.2026 der Vorrang aus der
+        Qualifikation (was die Gruppe erlaubt). Beides ist entfallen; wie die
+        Bezuege einer Gruppe die Reihenfolge bestimmen, ist noch nicht
+        festgelegt.
         """
-        return sorted(self.gruppen, key=lambda g: g.vorrang)
+        return list(self.gruppen)
 
     @property
     def naechste_gruppe(self) -> Gruppenfortschritt | None:
@@ -875,7 +621,6 @@ class Kampagnenfortschritt:
             return KampagnenLaufStatus.FERTIG
         if (
             self.naechste_gruppe is not None
-            or self.regeln_offen
             or (beitritt_frei and self.beitritt_offen)
         ):
             return KampagnenLaufStatus.LAEUFT
@@ -890,23 +635,12 @@ class Kampagnenfortschritt:
 
         ``beitritt_frei`` sagt, ob die Tagesmenge ueberhaupt noch eine Anfrage
         zulaesst - sie gilt ueber alle Kampagnen zusammen und kann deshalb
-        nicht aus der Kampagne selbst kommen. Ist sie erschoepft, geht es zur
-        Bewertung weiter, statt vor einer Anfrage stehenzubleiben, die heute
-        nicht mehr hinausgeht.
+        nicht aus der Kampagne selbst kommen.
         """
         if self.fertig or self.leer:
             return Phase.FERTIG
-        # Die Regeln zuerst, und **ohne** ``beitritt_frei`` zu fragen: Sie zu
-        # lesen kostet keine Beitrittsanfrage, sondern einen Seitenabruf. Wer
-        # das an die Tagesmenge der Anfragen binden wuerde, laese an einem
-        # erschoepften Tag gar nichts - und stuende am naechsten Morgen
-        # wieder vor derselben ungelesenen Gruppe.
-        if self.regeln_offen:
-            return Phase.REGELN
         if beitritt_frei and self.beitritt_offen:
             return Phase.BEITRITT
-        if not self.bewertet:
-            return Phase.BEWERTEN
         return Phase.ARBEIT
 
 
@@ -1004,10 +738,6 @@ class Lauffortschritt:
         return sum(k.gruppen_uebersprungen for k in self.kampagnen)
 
     @property
-    def gruppen_gesperrt(self) -> int:
-        return sum(k.gruppen_gesperrt for k in self.kampagnen)
-
-    @property
     def gruppen_ohne_bezug(self) -> int:
         return sum(k.gruppen_ohne_bezug for k in self.kampagnen)
 
@@ -1072,8 +802,6 @@ class Lauffortschritt:
             # dann B. Gewartet wird dann auf die Rueckkehr
             # (``store.naechste_rueckkehr``), nicht gewechselt.
             if k.gruppen_ruhend:
-                return True
-            if not k.bewertet and not k.leer:
                 return True
             return self.beitritt_frei and bool(k.beitritt_offen)
 
@@ -1199,30 +927,14 @@ class Schrittart(StrEnum):
 
     Sie stehen in der Reihenfolge, in der sie je Kampagne drankommen:
 
-    1. ``REGELN`` - die Gruppenseite lesen und festhalten, was sie erlaubt.
-       Ein Seitenabruf, keine Handlung in der Gruppe.
-    2. ``BEITRITT`` - eine Beitrittsanfrage an eine Gruppe dieser Kampagne.
-    3. ``BEWERTEN`` - die Gruppen dieser Kampagne neu bewerten. Kein Browser,
-       kein Netz; der Treiber fuehrt das selbst aus und fragt sofort weiter.
-    4. ``TEXT`` - ein Beitrag oder ein Kommentar, in der besten Gruppe zuerst.
+    1. ``BEITRITT`` - eine Beitrittsanfrage an eine Gruppe dieser Kampagne.
+    2. ``TEXT`` - ein Beitrag oder ein Kommentar.
 
-    ``REGELN`` steht **vor** ``BEITRITT``, und das ist die Anforderung vom
-    13.09.2026 in einer Zeile: erst nachsehen, was eine Gruppe erlaubt, dann
-    anfragen. Vorher ging die Anfrage hinaus, und ob dort ueberhaupt
-    kommentiert werden darf, stellte sich Tage spaeter heraus - nach der
-    Aufnahme, nach dem ersten Versuch, nach dem ersten Fehlschlag.
-
-    Warum die Bewertung ein **Schritt** ist und kein Nebenbei: Die Reihenfolge
-    des Ablaufs steht an genau einer Stelle (``naechster_schritt``). Liefe die
-    Neubewertung daneben mit, gaebe es sie in jedem Treiber einmal - in der
-    Kommandozeile, im Dienst -, und die beiden koennten sie zu verschiedenen
-    Zeitpunkten ausfuehren. Dann waere die Rangfolge, nach der gearbeitet
-    wird, im Fernbetrieb eine andere als oertlich.
+    ``REGELN`` (Gruppenseite lesen) und ``BEWERTEN`` (Neubewertung) sind am
+    23.09.2026 entfallen - Anweisung des Nutzers.
     """
 
-    REGELN = "regeln"
     BEITRITT = "beitritt"
-    BEWERTEN = "bewerten"
     TEXT = "text"
 
 
@@ -1235,9 +947,8 @@ class Schritt:
     zweimal - einmal in der Kommandozeile, einmal im Web -, und die beiden
     koennten verschiedene Fassungen waehlen.
 
-    Bei ``BEITRITT`` und ``BEWERTEN`` ist ``texttyp`` bedeutungslos und bleibt
-    auf der Vorgabe stehen; ``BEWERTEN`` traegt ausserdem keine ``group_id``,
-    denn es gilt der ganzen Kampagne.
+    Bei ``BEITRITT`` ist ``texttyp`` bedeutungslos und bleibt auf der
+    Vorgabe stehen.
     """
 
     campaign_id: str
@@ -1310,25 +1021,17 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
 
     1. Die Kampagne, die an der Reihe ist - streng sequentiell, nie zwei
        gleichzeitig.
-    2. Darin zuerst die **Gruppenregeln**: Was erlaubt diese Gruppe? Ein
-       Seitenabruf, keine Handlung in der Gruppe - und die Vorbedingung der
-       Anfrage, nicht ihre Nachbereitung.
-    3. Dann die **Beitrittsanfragen** an ihre Gruppen, solange die
-       Tagesmenge es zulaesst. Bis festgelegt ist, welche Bezuege eine
-       Anfrage rechtfertigen, steht die Tagesmenge auf 0 (die Zielklassen A
-       und B, an denen sie hing, sind entfallen). Erst wenn keine
-       mehr ansteht oder das Kontingent erschoepft ist, geht es weiter.
-    4. Dann die **Neubewertung** dieser Kampagne: Was wir inzwischen wissen,
-       entscheidet ueber die Rangfolge, nach der gearbeitet wird.
-    5. Dann die **beste qualifizierte Gruppe** (``arbeitsliste``): Gruppen,
-       die Beitrag und Kommentare nehmen, vor solchen mit nur einem von
-       beiden; innerhalb der Klasse der Score.
-    6. Darin **erst der Beitrag, dann die Kommentare**. Der eigene Beitrag
-       ist der Anlass, unter dem spaeter kommentiert werden kann; ein
-       Kommentar haengt an einem fremden. Scheitert er, geht es sofort mit
-       den Kommentaren weiter - ein Fehlschlag laesst die Gruppe nicht
-       ausfallen.
-    7. Erst wenn die Kampagne durch ist, kommt die naechste.
+    2. Darin die **Beitrittsanfragen** an ihre Gruppen, solange die
+       Tagesmenge es zulaesst (derzeit 0, siehe ``beitritt_kandidaten``).
+    3. Dann die erste Gruppe der ``arbeitsliste``, in der gearbeitet werden
+       kann - in Score-Reihenfolge.
+    4. Darin Beitrag und Kommentare in der Reihenfolge von
+       ``kommentare_zuerst``. Scheitert der eine, geht es mit dem anderen
+       weiter - ein Fehlschlag laesst die Gruppe nicht ausfallen.
+    5. Erst wenn die Kampagne durch ist, kommt die naechste.
+
+    Gruppenregeln lesen und Neubewertung waren bis zum 23.09.2026 eigene
+    Schritte; sie sind entfallen.
 
     ``None`` heisst nicht "fertig". Es kann auch heissen: Der Lauf wartet auf
     den Takt der Beitrittsanfragen (``wartet_auf_beitritt``) oder die naechste
@@ -1341,22 +1044,6 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
         return None
 
     phase = kampagne.phase(beitritt_frei=fortschritt.beitritt_frei)
-
-    # 1. Die Regeln der Gruppe lesen - vor der Anfrage, nicht danach.
-    #    Kein Takt und keine Tagesmenge: Es ist ein Seitenabruf und keine
-    #    Handlung in der Gruppe. Der Abstand dazwischen kommt vom Treiber
-    #    (``enrich.mindestabstand_sekunden``), wie beim Anreichern.
-    if phase is Phase.REGELN:
-        ziel = kampagne.regeln_offen[0]
-        return Schritt(
-            campaign_id=kampagne.campaign_id,
-            group_id=ziel.group_id,
-            nummer=0,
-            art=Schrittart.REGELN,
-            gruppe_name=ziel.name,
-            kommentar_nr=1,
-            kommentar_ziel=1,
-        )
 
     # 3. Beitrittsanfragen - vor der Arbeit in dieser Kampagne, aber **nur
     #    wenn der Takt sie jetzt zulaesst**.
@@ -1397,23 +1084,7 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
             kommentar_ziel=1,
         )
 
-    # 4. Neubewertung - kein Browser, kein Netz; der Treiber macht das selbst.
-    #    Gefragt wird der Stand selbst und nicht nur ``phase``: Solange
-    #    Anfragen offen sind, nennt jene ``BEITRITT``, und ein wartender Takt
-    #    uebersprnge die Bewertung sonst stillschweigend - der Lauf arbeitete
-    #    nach den Zahlen von vorgestern.
-    if phase is Phase.BEWERTEN or not kampagne.bewertet:
-        return Schritt(
-            campaign_id=kampagne.campaign_id,
-            group_id="",
-            nummer=0,
-            art=Schrittart.BEWERTEN,
-            gruppe_name=kampagne.name,
-            kommentar_nr=1,
-            kommentar_ziel=1,
-        )
-
-    # 5. Die beste qualifizierte Gruppe dieser Kampagne.
+    # Die erste Gruppe, in der gearbeitet werden kann.
     gruppe = kampagne.naechste_gruppe
     if gruppe is None:
         return None
@@ -1429,7 +1100,7 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
         if not darf_post:
             return None
         post_nummer = gruppe.post_nummer
-        if post_nummer is None or not gruppe.erlaubt(Texttyp.POST, post_nummer):
+        if post_nummer is None:
             return None
         return Schritt(
             campaign_id=kampagne.campaign_id,
@@ -1462,19 +1133,9 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
         if ziel_gruppe is None:
             return None
 
-        # Was die Gruppe nicht erlaubt, gilt hier wie eine aufgegebene
-        # Fassung: uebersprungen statt versucht. Ein Kommentar mit Link in
-        # einer Gruppe, die Links ablehnt, scheitert nicht zufaellig, sondern
-        # immer - und der Fehlschlag stuende hinterher als Urteil ueber die
-        # Gruppe da.
-        verboten = {
-            n
-            for n in range(1, ziel_gruppe.ziel + 1)
-            if not ziel_gruppe.erlaubt(Texttyp.KOMMENTAR, n)
-        }
         nummer = naechste_nummer(
             set(range(1, ziel_gruppe.veroeffentlicht + 1)),
-            set(ziel_gruppe.gescheiterte_fassungen) | verboten,
+            set(ziel_gruppe.gescheiterte_fassungen),
         )
         if nummer is None:
             # Alle Fassungen sind heraus oder aufgegeben, die Gruppe gilt
@@ -1522,13 +1183,6 @@ def gruppe_ist_erschoepft(gruppe: Gruppenfortschritt) -> bool:
     """
     if gruppe.voll or gruppe.erschoepft or gruppe.post_offen:
         return False
-    # Eine gesperrte Gruppe ist **nicht** erschoepft. "Gibt nichts mehr her"
-    # waere ein Urteil ueber die Gruppe; hier liegt eine Entscheidung von uns
-    # vor, und sie kann sich aendern - durch eine Aufnahme, einen gelesenen
-    # Regelsatz oder einen umgelegten Schalter. Als erschoepft vermerkt waere
-    # sie dauerhaft draussen, ohne dass etwas gegen sie spraeche.
-    if gruppe.gesperrt or not gruppe.erlaubt(Texttyp.KOMMENTAR, 0):
-        return False
     return (
         naechste_nummer(
             set(range(1, gruppe.veroeffentlicht + 1)),
@@ -1557,22 +1211,6 @@ def _post_status(link) -> PostStatus:
     return link.post_status
 
 
-def _urteil(
-    mitglied: bool, angefragt: bool, regeln, beobachtung
-) -> dict:  # noqa: ANN001 - Regelbefund | None, Beobachtung | None
-    """Das Urteil als Feldpaar - damit der Aufrufer es nicht auseinanderzieht."""
-    befund = beurteile(
-        mitglied=mitglied,
-        beitritt_angefragt=angefragt,
-        regeln=regeln,
-        beobachtung=beobachtung,
-    )
-    return {
-        "qualifikation": befund.qualifikation,
-        "qualifikation_grund": befund.grund,
-    }
-
-
 # --- Den Stand aus dem Bestand lesen ---------------------------------------
 def lies_fortschritt(
     store,
@@ -1580,10 +1218,8 @@ def lies_fortschritt(
     gruppen: dict,
     *,
     mitgliedschaft_pflicht: bool = True,
-    qualifikation_pflicht: bool = False,
     aktionen: dict[Aktion, Lage] | None = None,
     bezuege: dict | None = None,
-    regeln_pflicht: bool = True,
     heute_je_gruppe: dict | None = None,
     gruppenlimit: int = 0,
     ziel_kommentare: int = 0,
@@ -1643,27 +1279,6 @@ def lies_fortschritt(
         for gid, stand in staende.items()
         if stand.marketing_status in mitgliedschaft
     }
-    angefragt = {
-        gid
-        for gid, stand in staende.items()
-        if stand.marketing_status is MarketingStatus.JOIN_REQUESTED
-    }
-    # Die Qualifikation wird **gerechnet**, nicht gelesen: Mitgliedschaft aus
-    # ``group_marketing``, Regeln von der Gruppenseite, Ausgaenge aus dem
-    # Versuchsprotokoll. Ein gespeichertes Urteil neben diesen dreien liefe
-    # von ihnen weg, sobald sich eines aendert - dieselbe Ueberlegung wie beim
-    # Fortschritt selbst.
-    beobachtet = store.beobachtungen()
-    regeln_je_gruppe = {
-        gid: Regelbefund(
-            gelesen=stand.regeln_gelesen_am is not None,
-            keine_links=stand.regel_keine_links,
-            keine_werbung=stand.regel_keine_werbung,
-            freigabe_noetig=stand.regel_freigabe_noetig,
-            neue_ohne_links=stand.regel_neue_ohne_links,
-        )
-        for gid, stand in staende.items()
-    }
 
     kopf = store.lauf(lauf_id)
     if kopf is None:
@@ -1694,15 +1309,10 @@ def lies_fortschritt(
                     gruppen,
                     ziel=ziel,
                     ist_mitglied=ist_mitglied,
-                    angefragt=angefragt,
-                    beobachtet=beobachtet,
-                    regeln_je_gruppe=regeln_je_gruppe,
                     uebersprungen=uebersprungen,
                     ruhend=ruhend,
                     mitgliedschaft_pflicht=mitgliedschaft_pflicht,
-                    qualifikation_pflicht=qualifikation_pflicht,
                     bezuege=bezuege or {},
-                    regeln_pflicht=regeln_pflicht,
                     heute_je_gruppe=heute_je_gruppe or {},
                     gruppenlimit=gruppenlimit,
                     ziel_kommentare=ziel_kommentare,
@@ -1741,15 +1351,10 @@ def _lies_kampagne(
     *,
     ziel: int,
     ist_mitglied: set,
-    angefragt: set,
-    beobachtet: dict,
-    regeln_je_gruppe: dict,
     uebersprungen: dict,
     ruhend: set,
     mitgliedschaft_pflicht: bool,
-    qualifikation_pflicht: bool,
     bezuege: dict,
-    regeln_pflicht: bool,
     heute_je_gruppe: dict,
     gruppenlimit: int,
     ziel_kommentare: int = 0,
@@ -1762,10 +1367,6 @@ def _lies_kampagne(
     from fbgroups.scoring import sort_by_rank
 
     campaign_id = zeile["campaign_id"]
-    # Eine Datei aus einer Fassung vor Migrationsschritt 21 kennt die Spalte
-    # ``bewertet_am`` nicht. Sie bekommt die Bewertung damit einmal zu viel,
-    # nie zu wenig - die teurere Richtung ist hier die richtige.
-    spalten = set(zeile.keys())
     kampagne = store.load_campaign(campaign_id)
     stand = store.kommentarstand(campaign_id)
     erschoepft = {
@@ -1779,7 +1380,6 @@ def _lies_kampagne(
     # auch die Arbeitsseite fuellt. Ein von Hand abgesetzter Beitrag wird
     # deshalb nicht ein zweites Mal abgesetzt.
     post_texte = store.fassungen_mit_text(campaign_id, Texttyp.POST)
-    mit_link = store.fassungen_mit_link(campaign_id, Texttyp.KOMMENTAR)
     links = store.links_for_campaign(campaign_id)
     je_gruppe = {link.group_id: link for link in links}
     # Schritt 2 des Ablaufs: An welche Gruppen **dieser** Kampagne muss noch
@@ -1809,8 +1409,6 @@ def _lies_kampagne(
             mitgliedschaft_noetig=mitgliedschaft_pflicht,
             post_status=_post_status(je_gruppe.get(gid)),
             post_fassungen=frozenset(post_texte.get(gid, set())),
-            fassungen_mit_link=frozenset(mit_link.get(gid, set())),
-            qualifikation_pflicht=qualifikation_pflicht,
             beitritt_noetig=gid in beitritt_noetig,
             uebersprungen=(campaign_id, gid) in uebersprungen,
             uebersprungen_grund=uebersprungen.get((campaign_id, gid), ""),
@@ -1818,22 +1416,8 @@ def _lies_kampagne(
             bezuege=(
                 tuple(b.value for b in bezuege[gid].bezuege) if gid in bezuege else ()
             ),
-            regeln_noetig=regeln_pflicht,
-            # Dieselbe Quelle wie das Urteil: ``group_marketing.
-            # regeln_gelesen_am``. Ein zweiter Vermerk daneben koennte von
-            # ihm abweichen, und dann liesse sich nicht mehr sagen, welcher
-            # gilt.
-            regeln_gelesen=bool(
-                gid in regeln_je_gruppe and regeln_je_gruppe[gid].gelesen
-            ),
             heute_in_gruppe=int(heute_je_gruppe.get(gid, 0)),
             gruppenlimit=gruppenlimit,
-            **_urteil(
-                gid in ist_mitglied,
-                gid in angefragt,
-                regeln_je_gruppe.get(gid),
-                beobachtet.get(gid),
-            ),
         )
         for gid in reihenfolge
     ]
@@ -1843,22 +1427,15 @@ def _lies_kampagne(
         name=(kampagne.name if kampagne else campaign_id),
         gruppen=eintraege,
         status=KampagnenLaufStatus(zeile["status"]),
-        # Ob die Neubewertung schon lief, steht in der eingefrorenen
-        # Kampagnenliste - die einzige Angabe des Ablaufs, die sich nicht
-        # ableiten laesst.
-        bewertet=bool(zeile["bewertet_am"]) if "bewertet_am" in spalten else True,
         ziel_kommentare=ziel_kommentare,
     )
 
 
 # --- Anzeige ---------------------------------------------------------------
 #: Wie die Abschnitte des Ablaufs heissen. Neben der Aufzaehlung und nicht
-#: darin - dieselbe Trennung wie bei ``BESCHRIFTUNG`` zur ``Qualifikation``:
-#: Der Wert ist fuer die Datenbank, der Text fuer den Menschen.
+#: darin: Der Wert ist fuer die Datenbank, der Text fuer den Menschen.
 PHASENTEXT: dict[Phase, str] = {
-    Phase.REGELN: "Gruppenregeln lesen",
     Phase.BEITRITT: "Beitrittsanfragen",
-    Phase.BEWERTEN: "Neubewertung",
     Phase.ARBEIT: "Beitraege und Kommentare",
     Phase.FERTIG: "fertig",
 }
@@ -1883,14 +1460,6 @@ def fortschrittstext(fortschritt: Lauffortschritt) -> str:
             "",
             f"{fortschritt.gruppen_wartend} Gruppe(n) warten auf Mitgliedschaft "
             "- dort wird nichts versucht.",
-        ]
-    # Zwei Arten von Auslassung, und sie bedeuten Verschiedenes: Die eine ist
-    # ein Urteil der Gruppe ueber unseren Inhalt, die andere ein Fehlschlag von
-    # heute. Zusammengezaehlt waere keines von beiden mehr zu erkennen.
-    if fortschritt.gruppen_gesperrt:
-        zeilen += [
-            f"{fortschritt.gruppen_gesperrt} Gruppe(n) lassen weder Beitrag noch "
-            "Kommentar zu - fuer diesen Durchgang uebersprungen.",
         ]
     if fortschritt.gruppen_uebersprungen:
         zeilen += [
@@ -2062,15 +1631,6 @@ def abschlusstext(fortschritt: Lauffortschritt) -> str:
                 "offen ist - Facebook laesst Nichtmitglieder nicht schreiben.",
                 "Beitritt von Hand stellen, dann:  fbgroups marketing set <gruppe> "
                 "--status mitglied",
-            ]
-        if fortschritt.gruppen_gesperrt:
-            zeilen += [
-                "",
-                f"{fortschritt.gruppen_gesperrt} Gruppe(n) lassen weder Beitrag "
-                "noch Kommentar zu (Regeln der Gruppe oder wiederholte "
-                "Ablehnung). Sie gelten nicht als ungeeignet und werden im "
-                "naechsten Lauf erneut beurteilt:  fbgroups campaign "
-                "qualifikation <kampagne>",
             ]
         if fortschritt.gruppen_uebersprungen:
             zeilen += [

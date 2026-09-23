@@ -106,8 +106,8 @@ wird **nicht** hochgerechnet.
 | `location` | 15 | Stadt, sonst Bundesland, sonst Land |
 | `target_audience` | 15 | Zielgruppen-Tags aus dem Bestand |
 
-Neu bewertet wird beim Kampagnenlauf (`rescoring.bewerte_neu`); einen eigenen
-`rescore`-Befehl gibt es nicht mehr.
+Gerechnet wird der Score beim Einlesen (`import-mitglieder`); der
+Kampagnenlauf bewertet nicht neu.
 
 ## Konfiguration
 
