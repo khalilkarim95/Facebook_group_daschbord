@@ -41,7 +41,6 @@ from fbgroups.marketing import (
     kaltmodus,
     lauf,
     qualifikation,
-    zielgruppe,
 )
 from fbgroups.marketing.models import (
     CampaignStatus,
@@ -97,6 +96,16 @@ class Schrittergebnis:
     Eingefuehrt am 15.09.2026: Ohne dieses Feld bot der Server nach einem
     technischen Fehlschlag dieselbe Gruppe sofort wieder an, und der Lauf
     lief in derselben Gruppe im Kreis.
+    """
+
+    bezuege: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    """Die Bezuege jedes **gelesenen** Beitrags: ``((post_url, (bezug, ...)), ...)``.
+
+    Seit dem 23.09.2026 die Grundlage, auf der eine Gruppe beurteilt wird
+    (``bezug.fuer_gruppe``). Sie reist mit dem Ausgang, weil sie dort
+    entsteht, wo der Browser ist, und dort gespeichert wird, wo der Bestand
+    ist - oertlich im selben Prozess, im Fernbetrieb auf dem Server.
+    Schlagwoerter, nie der Text.
     """
 
     kein_anlass: bool = False
@@ -534,10 +543,6 @@ def fuehre_lauf_aus(
     # ``qualifikation.pflicht``. Was die Gruppe selbst verbietet, bindet
     # unabhaengig davon (``qualifikation.darf_nach_regeln``).
     qual_pflicht = qualifikation.pflicht(config)
-    # Einmal je Lauf: Die Begriffe stehen in der Konfiguration und aendern
-    # sich waehrend eines Laufs nicht. Die **Einstufung** wird trotzdem bei
-    # jedem Durchgang neu gerechnet - siehe ``stand``.
-    zielregeln = zielgruppe.regeln_aus_config(config)
     schlafen = warte if warte is not None else _schlafe
 
     with MarketingStore(pfad) as store:
@@ -579,14 +584,11 @@ def fuehre_lauf_aus(
             mitgliedschaft_pflicht=pflicht,
             qualifikation_pflicht=qual_pflicht,
             aktionen=lagen,
-            # Bei jedem Durchgang neu gerechnet und nicht einmal am Anfang:
-            # ``_bewerten`` schreibt neue Kategorien und Zielgruppen in
-            # ``gruppen``, und eine Einstufung von vor der Neubewertung waere
-            # genau die veraltete zweite Wahrheit, die dieses Projekt
-            # vermeidet. Die Rechnung kostet nichts gegen einen Seitenabruf.
-            zielbefunde={
-                gid: zielgruppe.aus_group(g, zielregeln) for gid, g in gruppen.items()
-            },
+            # Die Bezuege der Gruppen (23.09.2026) - bei jedem Durchgang neu
+            # gelesen, denn jeder Kommentarschritt liest Beitraege und legt
+            # ihre Bezuege ab. Sie entscheiden noch nichts; siehe
+            # ``lauf.Gruppenfortschritt.bezuege``.
+            bezuege=store.gruppenbezuege(gruppen),
             # Ohne Leser keine Regelschritte - dieselbe Ueberlegung wie bei
             # ``beitreten is None``: Ein Treiber ohne Browser soll nicht so
             # tun, als koennte er nachsehen. Wuerde die Pflicht trotzdem
@@ -600,9 +602,6 @@ def fuehre_lauf_aus(
             gruppenlimit=grenzen.einstellungen(config)
             .fuer(grenzen.Aktion.KOMMENTAR)
             .je_gruppe_taeglich,
-            # Aus derselben Tabelle wie die Mindestrelevanz: Eine Klasse ohne
-            # Schwelle ist eine, in der nicht gearbeitet wird.
-            klassen=zielgruppe.bearbeitbare_klassen(config),
             ziel_kommentare=ziel_kommentare(config),
             kommentare_zuerst=kommentare_zuerst(config),
         )
@@ -1088,6 +1087,10 @@ def _text_schritt(
     ergebnis = ausfuehren(
         gruppe.url_canonical, schritt.group_id, text, schritt.texttyp.value, link_url
     )
+    if ergebnis.bezuege:
+        with MarketingStore(pfad) as store:
+            for post_url, bezuege in ergebnis.bezuege:
+                store.merke_bezuege(schritt.group_id, post_url, bezuege)
 
     # **NO_REPLY ist ein Ergebnis, kein Fehlversuch.** In dieser Gruppe stand
     # heute kein Beitrag, unter dem eine Antwort von uns etwas beigetragen
@@ -1458,62 +1461,40 @@ def beurteile_beitraege(
     return gelegenheiten
 
 
-def anspruch_fuer(config: AppConfig, group_id: str):  # noqa: ANN201
-    """Was ein Beitrag **in dieser Gruppe** hergeben muss.
+def mindestrelevanz(config: AppConfig) -> inhalt.Relevanz:
+    """Welche Relevanz ein Beitrag mindestens haben muss - ``marketing.mindestrelevanz``.
 
-    Die Uebersetzung von der Gruppenklasse in die Schwelle: ``zielgruppe``
-    sagt, wo wir sind, ``entscheidung.Anspruch`` sagt, was dort gilt. Beides
-    steht in ``settings.yaml``; hier wird nur zusammengefuehrt.
+    **Eine Schwelle fuer alle Gruppen** (23.09.2026). Bis dahin hing sie an
+    der Zielklasse der Gruppe (``A``-``D``) oder an ihrer gepflegten Note;
+    beide sind als Entscheidungsgrundlage entfallen. Wie die Bezuege einer
+    Gruppe die Schwelle kuenftig bestimmen, ist noch nicht festgelegt - bis
+    dahin gilt ``mittel``, der Wert, den am 21.09.2026 ohnehin jede Klasse
+    trug.
 
-    Eine Gruppe, die es im Bestand nicht gibt, bekommt die Vorgabe - nicht
-    den strengsten Wert: Eine fehlende Angabe ist kein Urteil, und der
-    strengste Wert waere hier eines.
-
-    **Gefragt wird zuerst die gepflegte Note** ("A++" bis "B" aus der
-    Mitgliederliste), danach erst die gerechnete Klasse. Wer die Gruppe
-    angesehen und eingestuft hat, weiss mehr als jede Worterkennung an einem
-    Namen - dieselbe Rangfolge wie zwischen gepflegter Kategorie und
-    ``kategoriebegriffe``.
+    "niedrig" heisst ``mittel``: Darunter liegt nur ``Relevanz.KEINE``, also
+    "kein Zusammenhang mit unserem Angebot", und darauf wird nicht
+    geantwortet. Ein unbekanntes Wort ergibt die Vorgabe und keine geratene
+    Stufe.
     """
-    from fbgroups.models import Group  # noqa: F401 - nur fuer die Typangabe im Kopf
+    wort = str(config.get("marketing", "mindestrelevanz", default="mittel")).strip().lower()
+    if wort == "hoch":
+        return inhalt.Relevanz.HOCH
+    return inhalt.Relevanz.MITTEL
 
-    with SqliteStore(config.path("sqlite_path")) as gruppen_store:
-        gruppe = gruppen_store.get_group(group_id)
-    # Der Schalter gehoert zur Schwelle, nicht zur Gruppe: Er sagt, ob neben
-    # ihr noch ein Halbsatz verlangt wird. Deshalb steht er in **jedem**
-    # Rueckgabewert hier - auch in der Vorgabe.
-    pflicht = anlass_pflicht(config)
-    if gruppe is None:
-        return entscheidung_modul.Anspruch(anlass_pflicht=pflicht)
 
-    # **Die gepflegte Note geht vor** (21.09.2026). Sie steht am Datensatz,
-    # weil ein Mensch die Gruppe angesehen hat; die Klasse wird aus Namen und
-    # Feldern erschlossen. Bis hierhin entschied die erschlossene Klasse auch
-    # dort, wo eine Note dastand - und weil die Mitgliederliste keine
-    # Kategorie mitbringt, war das fast immer "C: hoch + Strecke", also die
-    # Schwelle, die im Betrieb jeden Kommentar verhindert hat.
-    noten = zielgruppe.anspruch_aus_note(config)
-    if (aus_note := noten.get((gruppe.listenprioritaet or "").strip().upper())) is not None:
-        relevanz, strecke = aus_note
-        return entscheidung_modul.Anspruch(
-            mindestrelevanz=relevanz, verlangt_strecke=strecke, anlass_pflicht=pflicht
-        )
+def anspruch_aus_config(config: AppConfig):  # noqa: ANN201 - entscheidung.Anspruch
+    """Was ein Beitrag hergeben muss - fuer **jede** Gruppe gleich (23.09.2026).
 
-    befund = zielgruppe.aus_group(gruppe, zielgruppe.regeln_aus_config(config))
-    tabelle = zielgruppe.anspruch_aus_config(config)
-    stufe = tabelle.get(befund.prioritaet)
-    if stufe is None:
-        # Klasse D: Dort wird gar nicht geantwortet. Der Lauf kommt hier
-        # normalerweise nicht hin (``bearbeitbar`` schliesst sie aus); wer es
-        # doch versucht, bekommt die Schwelle, die nichts durchlaesst.
-        return entscheidung_modul.Anspruch(
-            mindestrelevanz=inhalt.Relevanz.HOCH,
-            verlangt_strecke=True,
-            anlass_pflicht=pflicht,
-        )
-    relevanz, strecke = stufe
+    Vorher ``anspruch_fuer`` mit der Gruppe: die Schwelle je Zielklasse
+    oder Note. Die ausgeschriebene Strecke verlangt keine Gruppe mehr; das
+    Feld ``verlangt_strecke`` bleibt in ``entscheidung.Anspruch``, weil der
+    Fernbetrieb es in ``vorgaben`` liest und ein aelterer Arbeitsrechner es
+    erwartet.
+    """
     return entscheidung_modul.Anspruch(
-        mindestrelevanz=relevanz, verlangt_strecke=strecke, anlass_pflicht=pflicht
+        mindestrelevanz=mindestrelevanz(config),
+        verlangt_strecke=False,
+        anlass_pflicht=anlass_pflicht(config),
     )
 
 
@@ -1574,13 +1555,48 @@ def waehle_und_kommentiere(
         kommentieren=kommentieren,
         bisherige=bisherige,
         erlaubnis=erlaubnis,
-        anspruch=anspruch_fuer(config, group_id),
+        anspruch=anspruch_aus_config(config),
         verbrauchte_vorlagen=verbrauchte_vorlagen,
         link_url=link_url,
     )
 
 
+def bezuege_der_beitraege(roh: list[dict]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Die Bezuege aller gelesenen Beitraege - der Text geht hinein, nicht hinaus.
+
+    Beitraege ohne Text fehlen: Ohne Text ist nichts gelesen, und eine leere
+    Zeile im Bestand hiesse "gelesen, nichts gefunden".
+    """
+    from fbgroups.marketing import bezug
+
+    return tuple(
+        (p["post_url"], tuple(b.value for b in bezug.erkenne(p["text"]).sortiert))
+        for p in roh
+        if p.get("post_url") and (p.get("text") or "").strip()
+    )
+
+
 def entscheide_und_kommentiere(
+    context,
+    config: AppConfig,
+    roh: list[dict],
+    group_id: str,
+    text: str,
+    **kwargs,
+) -> Schrittergebnis:
+    """Lesen, beurteilen, entscheiden, kommentieren - und die Bezuege mitgeben.
+
+    Der Kern steht in ``_entscheide_und_kommentiere``. Die Bezuege werden
+    hier an **jeden** Ausgang gehaengt, statt an jeder der Rueckgabestellen
+    darin: Gelesen wurden die Beitraege in jedem Fall, auch wenn am Ende
+    nichts geschrieben wurde - und eine Stelle, die es vergaesse, liesse
+    Gruppen ohne Bezug erscheinen, die welche haben.
+    """
+    ergebnis = _entscheide_und_kommentiere(context, config, roh, group_id, text, **kwargs)
+    return replace(ergebnis, bezuege=bezuege_der_beitraege(roh))
+
+
+def _entscheide_und_kommentiere(
     context,
     config: AppConfig,
     roh: list[dict],
@@ -1611,7 +1627,7 @@ def entscheide_und_kommentiere(
     * ``erlaubnis`` - was die Gruppe laut ihren **gelesenen** Regeln zulaesst
       (``qualifikation.beurteile`` → ``Erlaubnis.aus_regeln``).
     * ``anspruch`` - wie viel ein Beitrag **an dieser Stelle** hergeben muss
-      (``zielgruppe.anspruch_aus_config``).
+      (``automatik.anspruch_aus_config``, fuer jede Gruppe gleich).
     * ``verbrauchte_vorlagen`` - damit derselbe Satz nicht zweimal in
       derselben Gruppe steht.
     * ``link_url`` - die **fertige** Adresse dieser Gruppe. Der Anlasstext
@@ -2389,6 +2405,10 @@ def fuehre_lauf_fern_aus(
                     # Unrecht ausgeschieden sind - nur an einer anderen
                     # Stelle und ein Vierteljahr spaeter.
                     "kein_anlass": ergebnis.kein_anlass,
+                    # Die Bezuege der gelesenen Beitraege (23.09.2026) -
+                    # Schlagwoerter, kein Text. Gespeichert wird dort, wo der
+                    # Bestand liegt.
+                    "bezuege": [[url, list(bz)] for url, bz in ergebnis.bezuege],
                     # **Diese Gruppe fuer diesen Lauf beiseitelegen.** Der
                     # Ausgang wird trotzdem gebucht - er gehoert ins
                     # Protokoll -, aber der Server bietet die Gruppe nicht

@@ -521,11 +521,14 @@ def test_der_lauf_friert_alle_aktiven_kampagnen_ein() -> None:
     assert "starte_lauf(kampagnen" in quelle
 
 
-def test_die_zielprioritaet_bleibt_beim_ueberspringen_erhalten() -> None:
-    """Eine beiseitegelegte Gruppe aendert die Rangfolge der uebrigen nicht."""
-    from fbgroups.marketing.zielgruppe import Region, Zielprioritaet
+def test_eine_uebersprungene_gruppe_behaelt_ihren_platz() -> None:
+    """Eine beiseitegelegte Gruppe aendert die Rangfolge der uebrigen nicht.
 
-    def g(gid: str, prio: Zielprioritaet, *, uebersprungen: bool = False):
+    Bis zum 22.09.2026 hiess der Test "die Zielprioritaet bleibt erhalten";
+    die Zielklassen sind entfallen, der Gedanke bleibt.
+    """
+
+    def g(gid: str, *, uebersprungen: bool = False):
         return lauf.Gruppenfortschritt(
             campaign_id="k",
             group_id=gid,
@@ -534,20 +537,11 @@ def test_die_zielprioritaet_bleibt_beim_ueberspringen_erhalten() -> None:
             mitglied=True,
             mitgliedschaft_noetig=False,
             regeln_noetig=False,
-            zielprioritaet=prio,
-            zielregion=Region.DE,
             uebersprungen=uebersprungen,
             post_status=PostStatus.VEROEFFENTLICHT,
         )
 
-    kampagne = _kampagne(
-        "k",
-        gruppen=[
-            g("a1", Zielprioritaet.A, uebersprungen=True),
-            g("b1", Zielprioritaet.B),
-            g("a2", Zielprioritaet.A),
-        ],
-    )
+    kampagne = _kampagne("k", gruppen=[g("a1", uebersprungen=True), g("a2"), g("b1")])
 
     assert [x.group_id for x in kampagne.arbeitsliste] == ["a1", "a2", "b1"]
     # Die uebersprungene faellt aus der Arbeit, nicht aus der Rangfolge.

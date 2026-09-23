@@ -22,7 +22,7 @@ from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEM
 from fbgroups.marketing.store import SCHEMA_VORSCHLAEGE as MARKETING_VORSCHLAEGE_SCHEMA
 from fbgroups.models import Group, GroupPost, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 
 def _iso_oder_none(zeitpunkt: datetime | None) -> str | None:
@@ -455,6 +455,11 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE campaigns ADD COLUMN target_prioritaeten TEXT NOT NULL DEFAULT '[]'",
         "ALTER TABLE campaigns ADD COLUMN target_aktivitaet TEXT NOT NULL DEFAULT '[]'",
     ),
+    # Die Bezuege je gelesenem Beitrag (23.09.2026) - die Grundlage, die die
+    # Zielklassen A-D, die Region und die Note als Entscheidungsgrundlage
+    # abloest. Rein additiv: eine neue Tabelle, die im Marketing-Schema
+    # steht und deshalb mit ihm angelegt wird.
+    26: (MARKETING_SCHEMA,),
 }
 
 SCHEMA = """

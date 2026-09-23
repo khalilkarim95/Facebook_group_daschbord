@@ -202,7 +202,10 @@ def test_die_grenzen_kommen_aus_der_konfiguration(config) -> None:
     """Und die Vorgaben im Code sind die vorsichtigen."""
     gelesen = grenzen.einstellungen(config)
 
-    assert 0 < gelesen.fuer(Aktion.BEITRITT).pro_tag <= 50
+    # ``0`` ist erlaubt und heisst "abgeschaltet" - so steht es seit dem
+    # 23.09.2026 in ``settings.yaml``, bis festgelegt ist, welche Bezuege eine
+    # Anfrage rechtfertigen.
+    assert 0 <= gelesen.fuer(Aktion.BEITRITT).pro_tag <= 50
     assert gelesen.fuer(Aktion.KOMMENTAR).pro_tag > 0
 
 

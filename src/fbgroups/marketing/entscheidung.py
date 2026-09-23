@@ -140,8 +140,10 @@ class Anspruch:
     Stelle hilfreich und an der anderen eingeworfene Werbung - und der
     Unterschied liegt nicht am Satz, sondern am Ort.
 
-    Die Werte kommen aus ``zielgruppe.anspruch_aus_config``, also aus
-    ``settings.yaml``. Die Vorgaben hier sind die des bisherigen Verhaltens:
+    Die Werte kommen aus ``automatik.anspruch_aus_config``, also aus
+    ``settings.yaml`` (``marketing.mindestrelevanz``) - seit dem 23.09.2026
+    fuer jede Gruppe dieselben; bis dahin hingen sie an der Zielklasse.
+    Die Vorgaben hier sind die des bisherigen Verhaltens:
     ``MITTEL`` genuegt, die Strecke wird nicht verlangt - so bleibt ein
     Aufrufer, der nichts angibt, bei dem, was vorher galt.
     """

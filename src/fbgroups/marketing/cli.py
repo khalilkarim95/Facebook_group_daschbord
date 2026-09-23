@@ -1084,7 +1084,7 @@ def campaign_kaltmodus(campaign_id: str = typer.Argument(...)) -> None:
         gruppen = {g.group_id: g for g in bestand.load_groups()}
     with MarketingStore(config.path("sqlite_path")) as store:
         campaign = _kampagne_oder_ende(store, campaign_id)
-        reihe = arbeitsreihenfolge(store, campaign_id, gruppen, config)
+        reihe = arbeitsreihenfolge(store, campaign_id, gruppen)
         heute = store.versuche_heute(jetzt.date().isoformat())
         roh = store.letzter_versuch()
 
@@ -1686,7 +1686,7 @@ def campaign_automatik(
     Aufruf dort aufgenommen, wo er stand - der Fortschritt steht in den
     Fassungen selbst und nicht in einem Zaehler, der veralten koennte.
     """
-    from fbgroups.marketing import automatik, grenzen, lauf, zielgruppe
+    from fbgroups.marketing import automatik, grenzen, lauf
     from fbgroups.marketing.models import CampaignStatus
 
     config = _config()
@@ -1844,7 +1844,7 @@ def campaign_automatik(
                 int(offen["lauf_id"]),
                 gruppen,
                 aktionen=lagen,
-                klassen=zielgruppe.bearbeitbare_klassen(config),
+                bezuege=store.gruppenbezuege(gruppen),
                 ziel_kommentare=automatik.ziel_kommentare(config),
             )
         console.print(Panel(lauf.fortschrittstext(fortschritt), title="Automatik"))
@@ -1967,7 +1967,7 @@ def campaign_automatik(
                 lauf_id,
                 gruppen,
                 aktionen=lagen,
-                klassen=zielgruppe.bearbeitbare_klassen(config),
+                bezuege=store.gruppenbezuege(gruppen),
                 ziel_kommentare=automatik.ziel_kommentare(config),
             )
             schritt = lauf.naechster_schritt(fortschritt)
@@ -2087,7 +2087,7 @@ def campaign_auto(
 
             with SqliteStore(config.path("sqlite_path")) as gruppen_store:
                 gruppen = {g.group_id: g for g in gruppen_store.load_groups()}
-            reihe = arbeitsreihenfolge(store, campaign_id, gruppen, config)
+            reihe = arbeitsreihenfolge(store, campaign_id, gruppen)
             offen = [link for link in reihe if link.post_status != PostStatus.VEROEFFENTLICHT]
             if not offen:
                 console.print("[green]Alle zugeordneten Gruppen sind abgearbeitet.[/green]")

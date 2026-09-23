@@ -78,6 +78,71 @@ Klassen `Audience`, `City` und `Category` gibt es nicht mehr.
 **Der Weg in den Bestand heißt jetzt `import-mitglieder`** (20.09.2026, siehe
 eigenen Abschnitt). `import-seeds` war der einzige davor und ist entfernt.
 
+## Bezüge statt Zielklassen (23.09.2026)
+
+Anweisung des Nutzers: Eine Gruppe wird **nicht mehr** nach Klasse A/B/C/D,
+Region (DE/EU/außerhalb) oder gepflegter Note beurteilt, sondern nach den
+**Bezügen**, die in ihren Beiträgen tatsächlich vorkommen.
+
+```
+GRUPPE -> INHALTE ANALYSIEREN -> ALLE ERKANNTEN BEZUEGE SAMMELN
+       -> BEZUEGE DER GRUPPE
+            []       -> spaeter definierte Sonderbehandlung (NOCH NICHT festgelegt)
+            nicht [] -> spaeter normale Behandlung
+```
+
+- **Die Liste steht in `marketing/bezug.py`** (`Bezug`, 21 Werte): Gepäck
+  (Gewicht, Übergepäck, Gepäck, Kapazität), was mitgeht (Gegenstand,
+  persönliche Gegenstände, Paket/Sendung, Amanah, Dokumente, Medikamente,
+  Geschenke, Elektronik), wie es geht (Versenden/Zustellung, Transport,
+  Flughafen, Mitnahme, Übergabe/Abholung, Termin), dazu Reisender und die
+  abgeleiteten `RICHTUNG` und `SENDUNG_MIT_REISENDEM`. Die endgültige Liste
+  prüft der Nutzer noch.
+- **Ein Bezug ist ein Begriff, kein Wort.** `REISENDER` verlangt Bewegung
+  **und** Ziel/Herkunft/Reisewort („رايح ع الشغل" ist keiner); Gewicht und
+  Übergepäck verlangen Gepäckzusammenhang und fallen beim Körper weg
+  („وزني 80 وبدي انحف"); `TERMIN_DATUM` zählt nur neben Reise, Mitnahme oder
+  Übergabe; `RICHTUNG` und `SENDUNG_MIT_REISENDEM` entstehen aus anderen
+  Bezügen. Die Einzelwort-Treffer der Musterliste vom 23.09.2026 („شي",
+  „مكان", „محل", „نقل", „وصل") stehen bewusst nicht darin. Kein Sprachmodell;
+  jeder Befund trägt seine Treffer.
+- **Gesammelt wird, wo gelesen wird.** `automatik.entscheide_und_kommentiere`
+  hängt die Bezüge **jedes gelesenen** Beitrags an den Ausgang
+  (`Schrittergebnis.bezuege`), auch wenn nichts geschrieben wurde; örtlich
+  speichert `_fuehre_schritt_aus`, im Fernbetrieb der Server
+  (`AutomatikErgebnis.bezuege`). Tabelle `beitrag_bezuege` (Migrationsschritt
+  26): je Beitrag **eine** Zeile mit Schlagwörtern — kein Text, kein Autor.
+  Ein Beitrag ohne Bezug bekommt seine Zeile trotzdem: „gelesen, nichts
+  gefunden" ist etwas anderes als „nie gelesen" (`Gruppenbezuege.gelesen`).
+- **Die Bezüge entscheiden noch nichts.** Bis die Behandlung von `[]`
+  festgelegt ist, werden alle zugeordneten Gruppen **gleich** behandelt:
+  Arbeitsliste nach Vorrang, dann Score; `bearbeitbar` ohne Klassenfrage;
+  eine Schwelle für alle (`marketing.mindestrelevanz: mittel`,
+  `automatik.anspruch_aus_config`). Gezählt wird `gruppen_ohne_bezug` in der
+  Laufmeldung, damit sichtbar ist, wen die Sonderbehandlung betreffen wird.
+- **Beitrittsanfragen sind in `settings.yaml` abgeschaltet**
+  (`limits.join_requests.daily: 0`, `beitritt.anfragen_pro_tag: 0`). Sie
+  gingen nur an A und B; welche Bezüge eine Anfrage rechtfertigen, ist offen.
+  Der Weg im Code gilt jetzt für jede Gruppe — Einschalten ist eine Zahl.
+- **Entfernt:** `marketing/zielgruppe.py` samt `Zielprioritaet`, `Region`,
+  `Zielbefund`, `notenrang`, `anspruch_aus_note`, `bearbeitbare_klassen`;
+  `automatik.anspruch_fuer`; die Felder `zielprioritaet`, `zielregion`,
+  `note`, `bearbeitbare_klassen` an `Gruppenfortschritt`; der Block
+  `marketing.zielprioritaet` in `settings.yaml` (config-check meldet einen
+  übrig gebliebenen); in der Übersicht Spalte „Ziel", Filter „Jede
+  Zielklasse"/„Jedes Land" und die Kacheln A/B/C+D — an ihrer Stelle Spalte
+  und Filter „Bezüge" und die Kacheln mit/ohne/ungelesen; die
+  Zielprioritäts-Tabelle bei `import-mitglieder`.
+- **Nicht entfernt:** die Note und die Aktivitätsstufe als **Daten** und als
+  **Kampagnenfilter** (`target_prioritaeten`, `target_aktivitaet`) — sie
+  wählen aus, was ein Mensch auswählen will, und entscheiden keine Schwelle
+  und keine Reihenfolge mehr.
+- Die Abschnitte „Zielpriorität", „Deutschland zuerst, dann Europa", „Was ein
+  Beitrag hergeben muss, hängt am Ort", „Die Übersicht bekommt eine vierte
+  Achse", „Die gepflegte Note entscheidet" und „Warum nur 4 von 13 Gruppen
+  besucht wurden" weiter unten beschreiben den Stand **davor**.
+- Festgehalten in `tests/test_bezuege.py`.
+
 ## Harte Projektgrenzen
 
 Diese Grenzen sind mit dem Nutzer vereinbart und dürfen nicht ohne
@@ -1266,6 +1331,8 @@ https://go.b-tarikak.de → Übersicht → Kampagne → [Arbeiten]
 
 ### Zielpriorität: welche Gruppe zuerst (`marketing/zielgruppe.py`)
 
+> **Entfallen am 23.09.2026** — siehe „Bezüge statt Zielklassen" oben. Der Abschnitt beschreibt den Stand davor.
+
 ```
 A  Reise- und Versandgruppen mit genanntem Ziel   → zuerst, Beitritt, alles
 B  syrische/arabische Gemeinschaft in Deutschland → danach, Beitritt, nur bei Bezug
@@ -1352,6 +1419,8 @@ mit 900, und die 900 sind genau die Menschen, die einen Mitnehmer suchen.
   Bestand ab.
 
 ### Deutschland zuerst, dann Europa (`zielgruppe.Region`)
+
+> **Entfallen am 23.09.2026** — siehe „Bezüge statt Zielklassen" oben. Der Abschnitt beschreibt den Stand davor.
 
 ```
 A · DE          Reise/Versand nach Syrien, Deutschland genannt   → zuerst
@@ -1762,6 +1831,8 @@ TRACKING_LINK   mit {link}              → direct_app_recommendation
 
 ### Was ein Beitrag hergeben muss, hängt am Ort (`entscheidung.Anspruch`)
 
+> **Entfallen am 23.09.2026** — siehe „Bezüge statt Zielklassen" oben. Der Abschnitt beschreibt den Stand davor.
+
 **Seit dem 21.09.2026 gilt diese Tabelle nur noch für Gruppen ohne gepflegte
 Note.** Steht eine da, entscheidet sie — siehe „Die gepflegte Note
 entscheidet, nicht die gerechnete Klasse".
@@ -1845,6 +1916,8 @@ beantwortet die Frage, die ein **Mensch** stellt, wenn er hinterher in die
   45 Gruppen als erschöpft.
 
 ### Die Übersicht bekommt eine vierte Achse
+
+> **Entfallen am 23.09.2026** — siehe „Bezüge statt Zielklassen" oben. Der Abschnitt beschreibt den Stand davor.
 
 „Wo stehen wir?" (`marketing`), „arbeiten wir daran?" (`bearbeiten`), „darf
 hier etwas stehen?" (`qualifikation`) — und seit dem 13.09.2026 **„gehört
@@ -2802,6 +2875,8 @@ Werbeverbot → weiterhin `NO_LINK`).
 
 ### Die gepflegte Note entscheidet, nicht die gerechnete Klasse (21.09.2026)
 
+> **Entfallen am 23.09.2026** — siehe „Bezüge statt Zielklassen" oben. Der Abschnitt beschreibt den Stand davor.
+
 ```
 Mitgliederliste   rating: A++            →  groups.listenprioritaet
         ▼
@@ -2857,6 +2932,8 @@ Aktivitätsstufe.
 Festgehalten in `tests/test_note_vor_klasse.py`.
 
 ### Warum nur 4 von 13 Gruppen besucht wurden (21.09.2026)
+
+> **Entfallen am 23.09.2026** — siehe „Bezüge statt Zielklassen" oben. Der Abschnitt beschreibt den Stand davor.
 
 ```
 Mitgliederliste:  category = "Unbekannt"   →  Group.category = NULL

@@ -82,7 +82,8 @@ def test_der_server_schickt_die_entscheidungsgrundlagen_mit(
 
     assert '"vorgaben": vorgaben' in quelltext
     assert "automatik.erlaubnis_fuer(store, schritt.group_id)" in quelltext
-    assert "automatik.anspruch_fuer(cfg, schritt.group_id)" in quelltext
+    # Seit dem 23.09.2026 eine Schwelle fuer alle Gruppen, nicht je Klasse.
+    assert "automatik.anspruch_aus_config(cfg)" in quelltext
 
 
 def test_fehlende_vorgaben_ergeben_die_vorsichtige_erlaubnis() -> None:

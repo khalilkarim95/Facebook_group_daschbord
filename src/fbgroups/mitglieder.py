@@ -15,18 +15,16 @@ eigentliche Inhalt dieses Moduls:
 
 ``category``
     Traegt Anzeigenamen ("Reise & Transport"), der Bestand traegt Kennungen
-    (``reise``). Uebersetzt wird ueber ``KATEGORIEN``. Ohne diese Uebersetzung
-    griffe ``marketing.zielprioritaet.kategorien`` nie - jede eingelesene
-    Gruppe fiele aus Klasse A heraus, und die Kampagne arbeitete wieder in den
-    Gemeinschaftsgruppen. Ein Wert, der nicht in der Tabelle steht, wird
+    (``reise``). Uebersetzt wird ueber ``KATEGORIEN``; die Kategorie traegt
+    Score-Punkte. (Bis zum 22.09.2026 hing daran auch die Zielklasse A - die
+    ist entfallen.) Ein Wert, der nicht in der Tabelle steht, wird
     **uebergangen** und nicht geraten.
 
 ``city``
     Traegt das *Reiseziel* ("Damaskus", "دمشق"), nicht den Sitz der Gruppe.
-    ``Group.city`` ist aber die deutsche Stadt und traegt 15 Score-Punkte,
-    und in ``zielgruppe.bestimme_region`` belegt sie ``Region.DE``. Eine
-    Gruppe mit "Damaskus" in diesem Feld gaelte damit als in Deutschland
-    ansaessig. Deshalb wird die Spalte **nicht** uebernommen; ihr Inhalt
+    ``Group.city`` ist aber die deutsche Stadt und traegt 15 Score-Punkte.
+    Eine Gruppe mit "Damaskus" in diesem Feld gaelte damit als in
+    Deutschland ansaessig. Deshalb wird die Spalte **nicht** uebernommen; ihr Inhalt
     landet als ausdruecklich benannter Hinweis in ``notes``. Dieselbe
     Zurueckhaltung wie bei einem Beitragstitel, der kein Gruppenname ist.
 
@@ -389,8 +387,7 @@ def zeile_zu_gruppe(
         # Die beiden Urteile des Menschen, der die Liste gefuehrt hat. Sie
         # werden uebernommen, wo sie dastehen, und bleiben sonst leer - und
         # sie greifen in nichts ein: Der Score rechnet weiter mit den
-        # gemessenen Zahlen, die Zielprioritaet weiter mit Kategorie, Stadt
-        # und Zielgruppe. Was sie koennen, ist eine Kampagne auszuwaehlen.
+        # gemessenen Zahlen. Was sie koennen, ist eine Kampagne auszuwaehlen.
         listenprioritaet=note,
         aktivitaetsstufe=stufe,
         category=kategorie,

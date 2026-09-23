@@ -188,255 +188,21 @@ marketing:
   # aendert eine Zahl und keinen Code.
   anlass_pflicht: false
 
-  # --- Zielprioritaet: welche Gruppen zuerst? (13.09.2026) --------------
+  # --- Bezuege statt Zielklassen (23.09.2026) ------------------------------
   #
-  # "Wir kennen 314 Gruppen" heisst nicht "alle 314 sind gleich viel wert".
-  # Die Kampagne bewirbt einen Weg - Deutschland nach Syrien, kleine
-  # Gegenstaende, freier Platz im Koffer. Eine Reise- oder Versandgruppe ist
-  # dafuer der richtige Platz; eine allgemeine Gemeinschaftsgruppe ist es nur
-  # dann, wenn dort gerade jemand genau danach fragt.
+  # Bis zum 22.09.2026 stand hier `zielprioritaet`: Zielklassen A-D aus dem
+  # Gruppennamen, eine Region (DE/EU/ausserhalb) und eine Schwelle je
+  # gepflegter Note. Alles davon ist als Entscheidungsgrundlage entfallen.
+  # Eine Gruppe wird nach den **Bezuegen** beurteilt, die in ihren Beitraegen
+  # tatsaechlich vorkommen (`marketing/bezug.py`) - und was eine Gruppe ohne
+  # Bezug erfaehrt, ist noch nicht festgelegt. Bis dahin werden alle
+  # zugeordneten Gruppen gleich behandelt.
   #
-  # Vorher sortierte der Lauf allein nach Score. Das ist die Antwort auf
-  # "welche Gruppe ist gut?" und nicht auf "welche Gruppe ist die richtige":
-  # Eine Gemeinschaftsgruppe mit 40.000 Mitgliedern steht damit vor einer
-  # Reisegruppe mit 900 - und die 900 sind genau die Menschen, die suchen.
-  #
-  # Gerechnet wird die Einstufung in ``marketing/zielgruppe.py``, aus dem, was
-  # ohnehin im Bestand steht (Name, Beschreibung, Kategorie, Zielgruppe,
-  # Stadt). **Nicht gespeichert**: Ein Urteil neben seinen eigenen Grundlagen
-  # laeuft von ihnen weg, sobald sich eine aendert - dieselbe Ueberlegung wie
-  # bei ``qualifikation.beurteile``.
-  zielprioritaet:
-    # A - der eigentliche Zielmarkt: Reise- und Versandgruppen mit einem
-    # genannten Ziel. Die Kategorien werden gegen den Bestand geprueft
-    # (categories.yaml gibt es seit dem 20.09.2026 nicht mehr); eine
-    # Kategorie, die an keiner Gruppe steht, meldet "config-check".
-    kategorien: [versand, reise]
-
-    # Die Woerter, an denen dasselbe Thema **im Namen** erkannt wird.
-    #
-    # Sie standen bis zum 20.09.2026 in categories.yaml und sind am
-    # 21.09.2026 zurueckgekommen. Der Anlass ist ein Lauf, der in vier
-    # Gruppen im Kreis ging und in jeder Runde meldete:
-    #
-    #     Bezug zu schwach fuer diese Gruppe (hoch, verlangt hoch + Strecke)
-    #
-    # "verlangt hoch + Strecke" ist die Anforderung der Klasse C - und dass
-    # eine Gruppe namens "شركة شحن دولي سوريا" dort landete, lag allein an
-    # einer leeren Spalte: Die Mitgliederliste traegt in `category` fast
-    # durchgehend "Unbekannt", also ist `Group.category` leer, also fehlte
-    # das Thema, also war Klasse A unerreichbar. Neun von dreizehn Gruppen
-    # fielen aus demselben Grund sogar auf D und wurden nie besucht.
-    #
-    # DIE GEPFLEGTE KATEGORIE GEHT WEITERHIN VOR. Diese Liste greift, wo
-    # nichts gepflegt ist - sie ergaenzt eine fehlende Angabe und
-    # ueberschreibt keine.
-    #
-    # Sie steht bewusst eng: Nur Woerter, die das Thema des Hauses nennen,
-    # nicht die, mit denen ein einzelner Beitrag darueber spricht. Der
-    # Beitragswortschatz steht in marketing/inhalt.py und hat eine andere
-    # Aufgabe - er beurteilt Saetze, diese Liste beurteilt Titel.
-    kategoriebegriffe: [Versand, Mitnahme, Transport, Reise, Reisen, Kurier,
-                        Fracht, Logistik, Sendung, Paket,
-                        شحن, ارسال, إرسال, توصيل, وصلني, نقل, بريد, طرود, طرد,
-                        امانات, أمانات, امانة, أمانة, كرتونة, شنطة, حقيبة,
-                        مشاوير, مشوار, سفر, مسافر, مسافرين, مسافره, musafer,
-                        نازل, نازلة, رايح, راجع, عوده, عودة, رحلة, رحلات,
-                        بطريقك, طريقك, سرفيس, باص, بولمان, تكسي, تاكسي]
-
-    # Wohin der Weg geht. Ohne eines dieser Worte ist "Reisegruppe" keine
-    # Gruppe fuer uns - "Reisen nach Thailand" traegt dieselbe Kategorie und
-    # meint etwas anderes. Arabisch wird als Teilstring verglichen (Artikel
-    # und Praepositionen haengen am Wort), lateinisch mit Wortgrenze.
-    ziele: [Syrien, Syria, Damaskus, Damascus, Aleppo, Homs, Latakia,
-            سوريا, سورية, الشام, دمشق, حلب, حمص, اللاذقية, طرطوس]
-
-    # Woher. Ein Weg hat zwei Enden; eine Gruppe, die beide nennt, beschreibt
-    # genau den Markt der App. Fehlt die Herkunft, bleibt es bei A - eine
-    # syrische Reisegruppe in Deutschland nennt Deutschland nicht immer.
-    #
-    # Diese Liste belegt zugleich "Region.DE" - den ersten Platz der
-    # geografischen Rangfolge.
-    #
-    # Die Staedtenamen standen bis zum 20.09.2026 in cities.yaml und kamen
-    # von dort als eigene Liste dazu. Mit der Entdeckungsschicht ist die
-    # Datei entfernt, und die Namen sind hierher gezogen statt zu
-    # verschwinden: "مشاوير برلين - بيروت - دمشق" ist eine Berliner Gruppe,
-    # und ohne "برلين" stuende sie als "Land unbekannt" hinter einer
-    # libanesischen. Gemeint ist nur der Deutschlandbeleg - welche Stadt es
-    # ist, entscheidet hier nichts.
-    herkunft: [Deutschland, Germany, Almanya, المانيا, ألمانيا, ألمانيه,
-               Berlin, Hamburg, München, Muenchen, Munich, Stuttgart,
-               Köln, Koeln, Cologne, Frankfurt, Düsseldorf, Duesseldorf,
-               Dusseldorf, Dortmund, Bremen, Hannover, Hanover, Duisburg,
-               Bochum, Wuppertal, Bonn, Leipzig, Dresden, Nürnberg,
-               Nuernberg, Nuremberg, Mannheim, Karlsruhe, Freiburg, Mainz,
-               Saarbrücken, Saarbruecken,
-               برلين, هامبورغ, هامبورج, ميونخ, ميونيخ, شتوتغارت, شتوتجارت,
-               كولونيا, فرانكفورت, دوسلدورف, دورتموند, بريمن, هانوفر,
-               دويسبورغ, بوخوم, فوبرتال, بون, لايبزيغ, لايبزيج, دريسدن,
-               نورنبرغ, مانهايم, كارلسروه, فرايبورغ, ماينز, ساربروكن]
-
-    # --- Der geografische Vorrang innerhalb von A (14.09.2026) ------------
-    #
-    # Die Klasse sagt "worum geht es dort?", und das genuegte nicht:
-    # "نقل من لبنان إلى سورية" ist eine lupenreine Versandgruppe mit
-    # genanntem Ziel - und beschreibt eine Strecke, auf der diese App
-    # niemandem hilft, denn ihre Nutzer sitzen in Europa.
-    #
-    # Gearbeitet wird deshalb in dieser Reihenfolge:
-    #
-    #   1. A in Deutschland        (herkunft - Laender- und Staedtenamen)
-    #   2. A im uebrigen Europa    (europa)
-    #   3. A ohne genanntes Land   (der Regelfall - kein Mangel, siehe unten)
-    #   ... und erst danach B.
-    #
-    # "Kein Land genannt" steht VOR "ausserhalb Europas" und nicht dahinter:
-    # Die meisten deutschen Gruppen heissen "شحن الى سوريا" und schreiben
-    # Deutschland nirgends hin. Sie hinter eine libanesische Versandgruppe zu
-    # stellen hiesse, sie fuer eine Auslassung zu bestrafen.
-    #
-    # Das uebrige Europa. Zweite Wahl und nicht dritte: Ein Mitnehmer von Wien
-    # nach Damaskus nimmt dieselbe Sendung mit wie einer von Berlin - er ist
-    # nur nicht der Markt, in dem die Kampagne zuerst arbeitet.
-    europa: [Österreich, Oesterreich, Austria, النمسا, فيينا, Wien,
-             Schweden, Sweden, السويد, Stockholm, ستوكهولم,
-             Niederlande, Netherlands, Holland, هولندا, Amsterdam, أمستردام,
-             Belgien, Belgium, بلجيكا, Brüssel, Bruessel, بروكسل,
-             Dänemark, Daenemark, Denmark, الدنمارك, الدنمرك,
-             Norwegen, Norway, النرويج, Finnland, Finland, فنلندا,
-             Schweiz, Switzerland, سويسرا, Zürich, Zuerich,
-             Frankreich, France, فرنسا, Paris, باريس,
-             Großbritannien, Grossbritannien, England, بريطانيا, لندن, London,
-             Italien, Italy, ايطاليا, إيطاليا, Spanien, Spain, اسبانيا, إسبانيا,
-             Polen, Poland, بولندا, Tschechien, التشيك,
-             Griechenland, Greece, اليونان, Portugal, البرتغال,
-             Irland, Ireland, ايرلندا, إيرلندا, Europa, أوروبا, اوروبا]
-
-    # Laender, die den Weg AN EUROPA VORBEI beschreiben. Sie sind der Grund,
-    # warum es diese Achse gibt - und sie wirken staerker als die uebrigen
-    # Listen: Eine Gruppe, die NUR eines dieser Laender nennt, faellt aus der
-    # Klasse A heraus (nach C, nicht nach D - ein einzelner Beitrag aus
-    # Deutschland bleibt dort erreichbar).
-    #
-    # Ein europaeisches Wort schlaegt ein aussereuropaeisches: "Mitnahme
-    # Berlin - Beirut - Damaskus" bleibt eine deutsche Gruppe. Nur wer allein
-    # die andere Seite nennt, meint die andere Strecke.
-    #
-    # SYRIEN STEHT HIER NICHT. Es ist das Ziel und wird von jeder Gruppe des
-    # Zielmarkts genannt; stuende es hier, waere der ganze Zielmarkt
-    # aussereuropaeisch. Dasselbe gilt fuer die syrischen Staedte - sie stehen
-    # in "ziele".
-    ausserhalb: [Libanon, Lebanon, لبنان, Beirut, بيروت,
-                 Türkei, Tuerkei, Turkey, تركيا, İstanbul, Istanbul, اسطنبول,
-                 Ägypten, Aegypten, Egypt, مصر, القاهرة, Kairo, Cairo,
-                 Jordanien, Jordan, الأردن, الاردن, عمان,
-                 Irak, Iraq, العراق, بغداد, Bagdad, أربيل,
-                 Saudi, السعودية, الرياض, جدة,
-                 Emirate, Dubai, دبي, الإمارات, الامارات, أبوظبي,
-                 Kuwait, الكويت, Katar, Qatar, قطر, الدوحة,
-                 Bahrain, البحرين, Jemen, اليمن,
-                 Sudan, السودان, Libyen, ليبيا, Tunesien, تونس,
-                 Algerien, الجزائر, Marokko, المغرب,
-                 Kanada, Canada, كندا, Amerika, USA, أمريكا, امريكا,
-                 Australien, Australia, أستراليا, استراليا]
-
-    # B - die syrischen und arabischen Gemeinschaftsgruppen. Sie sind
-    # sekundaer: Dort wird nur kommentiert, wo ein einzelner Beitrag einen
-    # konkreten Reise- oder Versandbedarf nennt.
-    audiences: [syrians, arabs]
-
-    # Ihre Woerter, aus demselben Grund wie bei `kategoriebegriffe`: Eine
-    # Gruppe heisst "السوريون في ألمانيا" und traegt im Bestand trotzdem
-    # keinen Tag, solange niemand einen eingetragen hat. Ohne diese Liste
-    # fiel sie nach D - also aus der Bearbeitung heraus, obwohl ein Mensch
-    # sie der Kampagne ausdruecklich zugeordnet hatte.
-    #
-    # Der Deutschlandbezug bleibt Bedingung (Stadt am Datensatz oder ein Wort
-    # aus `herkunft`): Eine Gruppe ueber Syrien, die Deutschland nie nennt,
-    # ist keine Gemeinschaft HIER.
-    audiencebegriffe: [Syrer, Syrerinnen, Syrien, Araber, arabisch, arabische,
-                       سوري, سوريين, سوريون, السوريين, السوريون, سورية,
-                       عرب, العرب, عربي, العربية, الجالية, جالية,
-                       اللاجئين, لاجئين, مجتمع]
-
-    # Welche Relevanz ein einzelner Beitrag mindestens haben muss, damit in
-    # einer Gruppe dieser Klasse ueberhaupt geantwortet wird. Die Stufen sind
-    # die aus ``marketing/inhalt.Relevanz``.
-    #
-    # A: "mittel" genuegt - wer in einer Reisegruppe nach einem Koffer fragt,
-    #    meint uns, auch ohne das Wort "Syrien" im selben Satz.
-    # B: "hoch" - in einer Gemeinschaftsgruppe ist das Gespraech ueber alles
-    #    moegliche; nur ein belegter Bezug ist ein Anlass.
-    # C: "hoch" UND die genannte Strecke - der klare, konkrete Einzelfall.
-    # D: gar nicht (steht nicht in der Liste).
-    #
-    # D steht seit dem 21.09.2026 dabei, und das ist eine Entscheidung und
-    # keine Kleinigkeit: Vorher wurde eine Gruppe der Klasse D ueberhaupt
-    # nicht besucht. Im Betrieb waren das neun von dreizehn zugeordneten
-    # Gruppen - der Lauf kreiste stundenlang durch die uebrigen vier, und
-    # nirgends stand, wo die anderen geblieben sind. Zugeordnet hat sie ein
-    # Mensch; "kein erkennbarer Bezug" ist dagegen ein Schluss aus einem
-    # Namen.
-    #
-    # Die Schwelle dort ist die strengste, die es gibt - belegter Bezug UND
-    # die ausgeschriebene Strecke: Es wird also nur der klare Einzelfall
-    # beantwortet, und der Rest der Gruppe bleibt unberuehrt. Die
-    # Beitrittsanfrage geht weiterhin NUR an A und B (BEITRITT_WERT im Code):
-    # Die riskanteste Handlung des Projekts bleibt den Gruppen des
-    # Zielmarkts vorbehalten.
-    #
-    # Wer es wieder abstellen will, loescht die Zeile "d:" - ohne sie gilt
-    # die Vorgabe des Codes, und die kennt D nicht.
-    # --- Die GEPFLEGTE Note geht der gerechneten Klasse vor (21.09.2026) --
-    #
-    # Die Mitgliederliste traegt je Gruppe eine Note: A++, A+, A, B+, B. Ein
-    # Mensch hat die Gruppe angesehen und sie eingestuft - das ist eine
-    # bessere Auskunft als jede Worterkennung an einem Namen. Steht sie da,
-    # entscheidet SIE, wie viel ein Beitrag hergeben muss; die Tabelle
-    # darunter (a/b/c/d) gilt dann nur noch fuer Gruppen ohne Note.
-    #
-    # A-Noten sind der Zielmarkt: dort genuegt "mittel". B-Noten sind die
-    # Randgruppen: dort ist "hoch" noetig. Die ausgeschriebene Strecke wird
-    # bei keiner Note verlangt - genau diese Zusatzforderung war es, die im
-    # Betrieb jeden Kommentar verhindert hat, und sie ergibt keinen Sinn, wo
-    # ein Mensch die Gruppe bereits beurteilt hat.
-    #
-    # Eine Gruppe MIT Note wird immer bearbeitet: Sie steht auf einer Liste,
-    # die jemand von Hand gefuehrt hat. Die Klasse D schliesst nur noch
-    # Gruppen ohne Note aus.
-    mindestrelevanz_note:
-      "A++": mittel
-      "A+": mittel
-      "A": mittel
-      "B+": hoch
-      "B": hoch
-
-    # Fuer Gruppen OHNE Note - die gerechnete Klasse aus Name, Kategorie,
-    # Zielgruppe und Stadt.
-    # Erlaubte Stufen: hoch, mittel, niedrig.
-    #
-    # "niedrig" ist die schwaechste Schwelle, die es geben kann, und sie
-    # bedeutet **mittel**: Darunter liegt nur ``Relevanz.KEINE``, und das
-    # heisst woertlich "kein Zusammenhang mit unserem Angebot". Darauf wird
-    # nicht geantwortet - ausdruecklich auch nach der Anweisung vom
-    # 21.09.2026 ("keine beliebigen voellig irrelevanten Beitraege").
-    mindestrelevanz:
-      a: mittel
-      b: mittel
-      c: mittel
-      d: mittel
-
-    # Verlangt eine Klasse zusaetzlich, dass ein Beitrag Herkunft UND Ziel
-    # nennt?
-    #
-    # **Seit dem 21.09.2026 aus** (Anweisung des Nutzers: "nicht pauschal
-    # hoch + Strecke verlangen"). Die Zusatzforderung war der Ersatz fuer ein
-    # Urteil ueber die Gruppe - und das liegt vor: Die Gruppen einer Kampagne
-    # hat ein Mensch ausgesucht und eingestuft. Im Betrieb hat sie in jeder
-    # Runde jeden Beitrag abgewiesen, weil syrische Reisegruppen ihre
-    # Herkunft selten ausschreiben ("نازل ع الشام" nennt kein Deutschland).
-    c_verlangt_strecke: false
+  # Was bleibt, ist eine Schwelle fuer jede Gruppe: welche Relevanz ein
+  # Beitrag mindestens haben muss, damit geantwortet wird. `mittel` ist der
+  # Wert, den am 21.09.2026 ohnehin jede Klasse trug. "niedrig" heisst
+  # ebenfalls `mittel` - darunter liegt nur "kein Zusammenhang".
+  mindestrelevanz: mittel
 
 # --- Der Waechter (15.09.2026) ------------------------------------------
 #
@@ -754,7 +520,12 @@ limits:
   join_requests:
     # Vom Nutzer am 13.09.2026 auf 50 gesetzt - dieselbe Zahl, die vor der
     # Umstellung unter `beitritt.anfragen_pro_tag` stand (31.08.2026).
-    daily: 50
+    #
+    # **Seit dem 23.09.2026 auf 0**: Die Anfrage ging nur an die Zielklassen
+    # A und B, und die sind entfallen. Welche Bezuege eine Anfrage
+    # rechtfertigen, ist noch nicht festgelegt - bis dahin geht keine hinaus.
+    # Der Weg selbst gilt jetzt fuer jede Gruppe; Einschalten ist diese Zahl.
+    daily: 0
 
   comments:
     # Vom Nutzer am 13.09.2026 auf 100 gesetzt. Der Anlass ist Arithmetik:
@@ -895,7 +666,8 @@ beitritt:
   # damit auf, wenn die Tagesmenge erreicht ist - dann geht es mit der
   # Bewertung und der Arbeit weiter. `0` nimmt die Beitrittsanfragen ganz aus
   # dem Lauf; einen zweiten Schalter dafuer gibt es bewusst nicht.
-  anfragen_pro_tag: 50
+  # Seit dem 23.09.2026 auf 0 - siehe `limits.join_requests.daily`.
+  anfragen_pro_tag: 0
 
   # Muessen die Regeln einer Gruppe gelesen sein, bevor eine Anfrage hinausgeht?
   # (13.09.2026)

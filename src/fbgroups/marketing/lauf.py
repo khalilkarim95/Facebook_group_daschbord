@@ -72,15 +72,6 @@ from fbgroups.marketing.qualifikation import (
     beurteile,
     darf_nach_regeln,
 )
-from fbgroups.marketing.zielgruppe import (
-    BEARBEITBAR,
-    BEITRITT_WERT,
-    RANG,
-    RANG_REGION,
-    Region,
-    Zielprioritaet,
-    notenrang,
-)
 
 # Zehn Kommentare je Gruppe, aus fuenf Vorlagen. Die beiden Zahlen sind
 # **nicht** dasselbe, und genau deshalb stehen sie getrennt:
@@ -274,35 +265,14 @@ class Gruppenfortschritt:
     damit die Anzeige ihn nennen kann.
     """
 
-    zielprioritaet: Zielprioritaet = Zielprioritaet.B
-    """Wie nah diese Gruppe am Zielmarkt der Kampagne steht (A bis D).
+    bezuege: tuple[str, ...] = ()
+    """Die Bezuege, die in den Beitraegen dieser Gruppe erkannt wurden.
 
-    Gerechnet in ``zielgruppe.einstufe`` aus Name, Beschreibung, Kategorie,
-    Zielgruppe und Stadt; hereingereicht wie ``aktionen``, weil dieses Modul
-    keine Konfiguration liest.
-
-    **Die Vorgabe ist ``B`` und nicht ``D``.** Wer den Stand ohne Angabe baut
-    - ein Test, ein aelterer Aufrufer -, hat nichts ueber die Gruppe gesagt,
-    und daraus einen Ausschluss zu machen waere dieselbe Art Fehler wie eine
-    Erlaubnis aus ungelesenen Regeln: ein Urteil aus dem Nichts. ``B`` ist
-    genau die Behandlung, die vor dem 13.09.2026 jede Gruppe bekam.
-    """
-
-    zielprioritaet_grund: str = ""
-    """Warum. Nie das Urteil ohne den Grund - wie bei ``score_reason``."""
-
-    zielregion: Region = Region.UNBEKANNT
-    """In welchem Land die Gruppe arbeitet - die zweite Achse (14.09.2026).
-
-    Sie ordnet **innerhalb** einer Klasse: erst Deutschland, dann das uebrige
-    Europa, dann die Gruppen ohne genanntes Land. Gerechnet wie die Klasse
-    selbst und aus demselben Grund hereingereicht - dieses Modul liest keine
-    Konfiguration.
-
-    **Die Vorgabe ist ``UNBEKANNT``**, nicht ``AUSSERHALB``: Wer den Stand
-    ohne Angabe baut, hat nichts ueber das Land gesagt, und daraus eine
-    Herabstufung zu machen waere ein Urteil aus dem Nichts - dieselbe
-    Ueberlegung wie bei der Vorgabe ``B`` fuer die Klasse.
+    Seit dem 23.09.2026 die Grundlage, auf der eine Gruppe beurteilt wird -
+    an Stelle der Zielklassen ``A``-``D``, der Region und der Note
+    (``bezug.fuer_gruppe``). **Sie entscheidet hier noch nichts**: Leer
+    heisst "spaeter definierte Sonderbehandlung", und die ist ausdruecklich
+    noch nicht festgelegt. Bis dahin werden alle Gruppen gleich behandelt.
     """
 
     regeln_noetig: bool = True
@@ -336,34 +306,6 @@ class Gruppenfortschritt:
 
     heute_in_gruppe: int = 0
     """Wie viele Versuche heute schon in **dieser** Gruppe standen."""
-
-    note: str = ""
-    """Die gepflegte Note der Mitgliederliste ("A++" bis "B") - oder leer.
-
-    **Sie geht der gerechneten Klasse vor** (21.09.2026). Ein Mensch hat die
-    Gruppe angesehen und eingestuft; die Klasse wird aus Name, Kategorie,
-    Zielgruppe und Stadt erschlossen. Wo beides vorliegt, gilt die Note - fuer
-    die Reihenfolge (``arbeitsliste``), fuer die Frage, ob hier ueberhaupt
-    gearbeitet wird (``bearbeitbar``), und fuer die Schwelle je Beitrag
-    (``automatik.anspruch_fuer``).
-
-    Leer heisst **nicht eingestuft** und ist kein schlechtes Urteil: Dann
-    entscheidet wie bisher die Klasse.
-    """
-
-    bearbeitbare_klassen: frozenset[Zielprioritaet] = BEARBEITBAR
-    """In welchen Zielklassen ueberhaupt gearbeitet wird.
-
-    Vorgabe ist die vorsichtige aus dem Code (``A``, ``B``, ``C`` - ``D``
-    nicht), gefuellt wird sie aus ``zielgruppe.bearbeitbare_klassen``, also
-    aus derselben Tabelle, die auch die Mindestrelevanz haelt. Dieselbe
-    Aufteilung wie bei ``mitgliedschaft_noetig`` und ``regeln_noetig``: Der
-    Code behaelt den Schutz fuer den Fall, dass niemand etwas gesagt hat.
-
-    Der Anlass (21.09.2026): Von dreizehn zugeordneten Gruppen waren neun
-    ``D``, und der Lauf kreiste stundenlang durch die uebrigen vier, ohne
-    dass irgendwo stand, wo die anderen geblieben sind.
-    """
 
     gruppenlimit: int = 0
     """Wie viele an einem Tag hoechstens - ``0`` heisst ohne Schranke.
@@ -506,25 +448,22 @@ class Gruppenfortschritt:
     def bearbeitbar(self) -> bool:
         """Darf die Automatik hier ueberhaupt etwas versuchen?
 
-        Sechs Gruende sprechen dagegen, und sie bedeuten Verschiedenes: kein
-        Bezug zur Kampagne (Klasse ``D``), heute schon genug in dieser Gruppe
-        (Takt), keine Mitgliedschaft (blockiert), von der Gruppe nicht
-        erlaubt (gesperrt), in diesem Lauf fehlgeschlagen (uebersprungen)
-        oder schlicht erledigt (fertig). Nur der letzte ist ein Erfolg, und
-        nur ``gesperrt`` und ``fertig`` sind Aussagen ueber die Gruppe.
+        Fuenf Gruende sprechen dagegen, und sie bedeuten Verschiedenes: heute
+        schon genug in dieser Gruppe (Takt), keine Mitgliedschaft
+        (blockiert), von der Gruppe nicht erlaubt (gesperrt), in diesem Lauf
+        fehlgeschlagen (uebersprungen) oder schlicht erledigt (fertig). Nur
+        der letzte ist ein Erfolg, und nur ``gesperrt`` und ``fertig`` sind
+        Aussagen ueber die Gruppe.
 
-        ``D`` steht vorn, weil es die grundsaetzlichste der sechs Fragen ist:
-        Eine Gruppe ohne erkennbaren Bezug zu Deutschland, Syrien, Reise oder
-        Versand ist kein Platz fuer einen Beitrag - und dort etwas zu
-        versuchen kostet einen Versuch aus einem Konto, an dem alles haengt.
+        Der sechste Grund - die Zielklasse ``D`` - ist am 23.09.2026
+        entfallen: Beurteilt wird eine Gruppe seither nach den Bezuegen in
+        ihren Beitraegen (``bezuege``), und was eine Gruppe ohne Bezug
+        erfaehrt, ist noch nicht festgelegt.
         """
         return (
-            # **Eine benotete Gruppe wird immer bearbeitet.** Sie steht auf
-            # einer Liste, die ein Mensch von Hand gefuehrt hat; ihn mit
-            # "kein erkennbarer Bezug" zu ueberstimmen - einem Schluss aus
-            # einem Gruppennamen - waere genau die Verwechslung, an der neun
-            # von dreizehn Gruppen nie besucht wurden.
-            (bool(self.note) or self.zielprioritaet in self.bearbeitbare_klassen)
+            # Seit dem 23.09.2026 steht hier keine Zielklasse und keine Note
+            # mehr: Bis die Behandlung der Gruppen ohne Bezug festgelegt ist,
+            # wird jede zugeordnete Gruppe gleich behandelt.
             # **Die Tagesmenge je Gruppe gilt dem Kommentar, nicht der
             # Gruppe** (15.09.2026). Sie kommt aus
             # ``limits.comments.je_gruppe_taeglich`` und wird aus den
@@ -536,7 +475,7 @@ class Gruppenfortschritt:
             #
             # Bei ``je_gruppe_taeglich: 1`` war das keine Feinheit: Der erste
             # Kommentar nahm der Gruppe den Beitrag fuer denselben Tag.
-            and (not self.tageslimit_erreicht or self.post_offen)
+            (not self.tageslimit_erreicht or self.post_offen)
             and (self.mitglied or not self.mitgliedschaft_noetig)
             and not self.gesperrt
             and not self.uebersprungen
@@ -721,23 +660,15 @@ class Kampagnenfortschritt:
         return sum(1 for g in self.gruppen if g.gesperrt and not g.fertig)
 
     @property
-    def gruppen_ausserhalb(self) -> int:
-        """Gruppen, deren Zielklasse gar nicht bearbeitet wird.
+    def gruppen_ohne_bezug(self) -> int:
+        """Gruppen, in deren Beitraegen kein Bezug erkannt wurde (``[]``).
 
-        **Die stillste Auslassung des Projekts** (21.09.2026): Neun von
-        dreizehn zugeordneten Gruppen waren ``D``, der Lauf kreiste durch die
-        uebrigen vier, und nirgends stand eine Zahl dazu. Wer die vier
-        Gruppennamen im Protokoll sah, hatte keinen Anlass, die anderen neun
-        zu vermissen.
+        **Nur gezaehlt, nicht behandelt** (23.09.2026): Fuer sie ist eine
+        eigene Behandlung vorgesehen, die noch nicht festgelegt ist. Bis dahin
+        arbeitet der Lauf dort wie ueberall; die Zahl steht in der Meldung,
+        damit sichtbar ist, wie viele es betrifft.
         """
-        return sum(
-            1
-            for g in self.gruppen
-            # Die Note hebt den Ausschluss auf - also zaehlt hier nur, wer
-            # wirklich draussen bleibt. Sonst meldete die Zeile Gruppen als
-            # uebergangen, an denen der Lauf gerade arbeitet.
-            if not g.note and g.zielprioritaet not in g.bearbeitbare_klassen
-        )
+        return sum(1 for g in self.gruppen if not g.bezuege)
 
     @property
     def beitritt_kandidaten(self) -> list[Gruppenfortschritt]:
@@ -747,12 +678,17 @@ class Kampagnenfortschritt:
         liegt: Hier stehen die Gruppen, die eine Anfrage verdienen; dort die,
         bei denen sie jetzt hinausgehen darf.
         """
+        # **Keine Zielklasse mehr** (23.09.2026). Die Anfrage ging bis dahin
+        # nur an die Klassen ``A`` und ``B``; die Klassen sind entfallen, und
+        # welche Bezuege eine Anfrage rechtfertigen, ist noch nicht
+        # festgelegt. Bis dahin ist sie **in der Konfiguration abgeschaltet**
+        # (``limits.join_requests.daily: 0``) und nicht hier: Eine
+        # Abschaltung gehoert in ``settings.yaml``, damit das Einschalten eine
+        # Zahl ist und keine Codeaenderung.
         return [
             g
             for g in self.arbeitsliste
-            if g.beitritt_noetig
-            and not g.uebersprungen
-            and g.zielprioritaet in BEITRITT_WERT
+            if g.beitritt_noetig and not g.uebersprungen
         ]
 
     @property
@@ -783,9 +719,8 @@ class Kampagnenfortschritt:
         Klick gutgeschrieben.
 
         Die Regeln einer Gruppe zu lesen, in der weder gearbeitet noch
-        beigetreten wird (Klasse ``C``, ``D``), kostet einen Seitenabruf fuer
-        nichts - deshalb die Einschraenkung auf A und B beim Beitritt und auf
-        ``bearbeitbar`` bei der Arbeit.
+        beigetreten wird, kostet einen Seitenabruf fuer nichts - deshalb die
+        Einschraenkung auf ``bearbeitbar``.
         """
         kandidaten = [
             next(iter(self.beitritt_kandidaten), None),
@@ -823,12 +758,10 @@ class Kampagnenfortschritt:
         Schritt 2 des Ablaufs, und seit dem 13.09.2026 mit **zwei**
         Vorbedingungen mehr:
 
-        * **Zielprioritaet A oder B.** Eine Beitrittsanfrage ist die
-          riskanteste Handlung des Projekts; sie gehoert an die Gruppen, an
-          denen gearbeitet werden soll. In einer Gruppe der Klasse ``C``
-          passt hoechstens einmal ein einzelner Beitrag - dafuer beizutreten
-          hiesse, sie "aktiv zu bearbeiten", und genau das schliesst die
-          Anforderung aus.
+        * **Ein Kandidat** (``beitritt_kandidaten``). Bis zum 22.09.2026 nur
+          die Zielklassen ``A`` und ``B``; seither jede Gruppe, der eine
+          Anfrage fehlt - abgeschaltet ist die Anfrage bis auf Weiteres in
+          ``settings.yaml`` (``limits.join_requests.daily: 0``).
         * **Regeln gelesen.** Erst nachsehen, was eine Gruppe erlaubt, dann
           anfragen. Vorher ging die Anfrage hinaus, und ob dort ueberhaupt
           kommentiert werden darf, stellte sich Tage spaeter heraus. Wo die
@@ -836,9 +769,7 @@ class Kampagnenfortschritt:
           ganz - ein Beitritt zu einer Gruppe, in der nichts stehen darf,
           waere ein Handgriff ohne Zweck.
 
-        Die Reihenfolge ist die der Arbeitsliste, also Zielprioritaet vor
-        Score: Wird die Tagesmenge nie ausgeschoepft, sollen es die richtigen
-        gewesen sein.
+        Die Reihenfolge ist die der Arbeitsliste.
         """
         return [
             g
@@ -851,53 +782,25 @@ class Kampagnenfortschritt:
     def arbeitsliste(self) -> list[Gruppenfortschritt]:
         """Die Gruppen in der Reihenfolge, in der gearbeitet wird.
 
-        **Drei Stufen, und ihre Reihenfolge ist der Kern der Anforderung vom
-        13.09.2026:**
+        **Zwei Stufen** (seit 23.09.2026):
 
-        1. **Zielprioritaet** - Reise- und Versandgruppen (``A``) vor
-           Gemeinschaftsgruppen (``B``) vor allgemeinen (``C``). Wer zwanzig
-           geeignete A-Gruppen hat, soll nicht zuerst hundert allgemeine
-           Gemeinschaftsgruppen abarbeiten.
-        2. **Zielregion** - innerhalb einer Klasse Deutschland vor dem
-           uebrigen Europa vor den Gruppen ohne genanntes Land (14.09.2026).
-           Damit ist die geforderte Folge vollstaendig: erst **alle** A in
-           Deutschland, dann **alle** A in Europa - und erst danach B. Ein
-           niedriger Score einer A-Gruppe bringt keine B-Gruppe nach vorn;
-           der Score entscheidet erst auf Stufe 4.
-        3. **Vorrang** - innerhalb dessen die Gruppen, die **beides** nehmen
-           (Beitrag und Kommentare), vor denen mit einem von beiden, zuletzt
-           die gesperrten.
-        4. **Score** - innerhalb dessen die Reihenfolge, in der die Liste
+        1. **Vorrang** - die Gruppen, die **beides** nehmen (Beitrag und
+           Kommentare), vor denen mit einem von beiden, zuletzt die
+           gesperrten.
+        2. **Score** - innerhalb dessen die Reihenfolge, in der die Liste
            hereinkam (``sort_by_rank``).
+
+        Bis zum 22.09.2026 standen davor die gepflegte Note, die Zielklasse
+        (``A``-``D``) und die Region. Sie sind entfallen: Eine Gruppe wird
+        nach den Bezuegen in ihren Beitraegen beurteilt, und wie diese die
+        Reihenfolge bestimmen, ist noch nicht festgelegt. Bis dahin gilt, was
+        ohne Einstufung immer galt.
 
         Deshalb wird **stabil** sortiert und nicht neu geordnet: Eine zweite
         Rangfolge neben der ersten koennte von ihr abweichen, und dann zeigte
         die Anzeige eine andere Gruppe als die, an der gearbeitet wird.
-
-        Die Zielprioritaet steht **vor** dem Vorrang, nicht dahinter: Dass
-        eine Gruppe Beitrag und Kommentare nimmt, macht sie nicht zur
-        richtigen Gruppe. "Was ist moeglich?" ist die zweite Frage; die erste
-        ist "wo gehoert es hin?".
-
-        Und die **Klasse steht vor der Region**: Eine deutsche
-        Gemeinschaftsgruppe kommt nicht vor eine oesterreichische
-        Versandgruppe, nur weil sie in Deutschland ist. Das Land ordnet
-        innerhalb einer Klasse, es hebt keine Klasse an.
         """
-        return sorted(
-            self.gruppen,
-            key=lambda g: (
-                # **Stufe 0: die gepflegte Note** (21.09.2026). A++ zuerst,
-                # B zuletzt, ohne Note dahinter. Sie steht vor der
-                # gerechneten Klasse, weil sie von einem Menschen stammt -
-                # und sie ordnet den ganzen Bestand, wo die Klasse mangels
-                # gepflegter Kategorie fast ueberall dasselbe sagte.
-                notenrang(g.note),
-                RANG[g.zielprioritaet],
-                RANG_REGION[g.zielregion],
-                g.vorrang,
-            ),
-        )
+        return sorted(self.gruppen, key=lambda g: g.vorrang)
 
     @property
     def naechste_gruppe(self) -> Gruppenfortschritt | None:
@@ -1105,8 +1008,8 @@ class Lauffortschritt:
         return sum(k.gruppen_gesperrt for k in self.kampagnen)
 
     @property
-    def gruppen_ausserhalb(self) -> int:
-        return sum(k.gruppen_ausserhalb for k in self.kampagnen)
+    def gruppen_ohne_bezug(self) -> int:
+        return sum(k.gruppen_ohne_bezug for k in self.kampagnen)
 
     def lage(self, aktion: Aktion) -> Lage:
         """Was diese Aktion jetzt darf. Unbekannt heisst erlaubt.
@@ -1411,8 +1314,9 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
        Seitenabruf, keine Handlung in der Gruppe - und die Vorbedingung der
        Anfrage, nicht ihre Nachbereitung.
     3. Dann die **Beitrittsanfragen** an ihre Gruppen, solange die
-       Tagesmenge es zulaesst. Nur an Gruppen der Klassen A und B, deren
-       Regeln gelesen sind und nicht alles ausschliessen. Erst wenn keine
+       Tagesmenge es zulaesst. Bis festgelegt ist, welche Bezuege eine
+       Anfrage rechtfertigen, steht die Tagesmenge auf 0 (die Zielklassen A
+       und B, an denen sie hing, sind entfallen). Erst wenn keine
        mehr ansteht oder das Kontingent erschoepft ist, geht es weiter.
     4. Dann die **Neubewertung** dieser Kampagne: Was wir inzwischen wissen,
        entscheidet ueber die Rangfolge, nach der gearbeitet wird.
@@ -1678,11 +1582,10 @@ def lies_fortschritt(
     mitgliedschaft_pflicht: bool = True,
     qualifikation_pflicht: bool = False,
     aktionen: dict[Aktion, Lage] | None = None,
-    zielbefunde: dict | None = None,
+    bezuege: dict | None = None,
     regeln_pflicht: bool = True,
     heute_je_gruppe: dict | None = None,
     gruppenlimit: int = 0,
-    klassen: frozenset | None = None,
     ziel_kommentare: int = 0,
     kommentare_zuerst: bool = False,
 ) -> Lauffortschritt:
@@ -1702,11 +1605,10 @@ def lies_fortschritt(
     aus ``settings.yaml`` stammt - dieses Modul liest keine Konfiguration, so
     wie es kein Netz kennt. Fehlt es, ist nichts eingeschraenkt.
 
-    ``zielbefunde`` (``group_id -> zielgruppe.Zielbefund``) kommt aus
-    demselben Grund von aussen: Die Einstufung braucht die Begriffe aus drei
-    Konfigurationsdateien. Fehlt eine Gruppe darin, bleibt es bei der Vorgabe
-    ``B`` - der Behandlung, die vor dem 13.09.2026 jede Gruppe bekam.
-    **Nicht** ``D``: Eine fehlende Angabe ist kein Ausschluss.
+    ``bezuege`` (``group_id -> bezug.Gruppenbezuege``) kommt aus demselben
+    Grund von aussen: Die Bezuege stehen im Marketingspeicher und werden dort
+    gesammelt. Fehlt eine Gruppe darin, sind ihre Bezuege ``[]`` - ohne
+    Folge, solange die Behandlung dafuer nicht festgelegt ist.
 
     ``heute_je_gruppe`` und ``gruppenlimit`` tragen die Tagesmenge **je
     Gruppe** herein (``limits.comments.je_gruppe_taeglich``). Sie stehen
@@ -1799,11 +1701,10 @@ def lies_fortschritt(
                     ruhend=ruhend,
                     mitgliedschaft_pflicht=mitgliedschaft_pflicht,
                     qualifikation_pflicht=qualifikation_pflicht,
-                    zielbefunde=zielbefunde or {},
+                    bezuege=bezuege or {},
                     regeln_pflicht=regeln_pflicht,
                     heute_je_gruppe=heute_je_gruppe or {},
                     gruppenlimit=gruppenlimit,
-                    klassen=klassen or BEARBEITBAR,
                     ziel_kommentare=ziel_kommentare,
                 )
             )
@@ -1847,11 +1748,10 @@ def _lies_kampagne(
     ruhend: set,
     mitgliedschaft_pflicht: bool,
     qualifikation_pflicht: bool,
-    zielbefunde: dict,
+    bezuege: dict,
     regeln_pflicht: bool,
     heute_je_gruppe: dict,
     gruppenlimit: int,
-    klassen: frozenset = BEARBEITBAR,
     ziel_kommentare: int = 0,
 ) -> Kampagnenfortschritt:
     """Den Stand **einer** Kampagne lesen - herausgeloest, damit sie fuer sich scheitern kann.
@@ -1915,16 +1815,8 @@ def _lies_kampagne(
             uebersprungen=(campaign_id, gid) in uebersprungen,
             uebersprungen_grund=uebersprungen.get((campaign_id, gid), ""),
             ruht=(campaign_id, gid) in ruhend,
-            zielprioritaet=(
-                zielbefunde[gid].prioritaet
-                if gid in zielbefunde
-                else Zielprioritaet.B
-            ),
-            zielprioritaet_grund=(
-                zielbefunde[gid].grund if gid in zielbefunde else "nicht eingestuft"
-            ),
-            zielregion=(
-                zielbefunde[gid].region if gid in zielbefunde else Region.UNBEKANNT
+            bezuege=(
+                tuple(b.value for b in bezuege[gid].bezuege) if gid in bezuege else ()
             ),
             regeln_noetig=regeln_pflicht,
             # Dieselbe Quelle wie das Urteil: ``group_marketing.
@@ -1936,8 +1828,6 @@ def _lies_kampagne(
             ),
             heute_in_gruppe=int(heute_je_gruppe.get(gid, 0)),
             gruppenlimit=gruppenlimit,
-            bearbeitbare_klassen=klassen,
-            note=(gruppen[gid].listenprioritaet or "") if gid in gruppen else "",
             **_urteil(
                 gid in ist_mitglied,
                 gid in angefragt,
@@ -2007,14 +1897,13 @@ def fortschrittstext(fortschritt: Lauffortschritt) -> str:
             f"{fortschritt.gruppen_uebersprungen} Gruppe(n) nach einem Fehlschlag "
             "beiseitegelegt - im naechsten Lauf sind sie wieder dabei.",
         ]
-    # Die Zahl, die am 21.09.2026 gefehlt hat. Sie nennt den Weg mit: Wer
-    # nicht weiss, dass es die Klassen gibt, sucht die fehlenden Gruppen
-    # sonst im Bestand, in der Zuordnung oder in der Mitgliedschaft.
-    if fortschritt.gruppen_ausserhalb:
+    # Gruppen ohne erkannten Bezug (23.09.2026): gezaehlt, noch nicht
+    # behandelt. Die Zahl steht hier, damit sichtbar ist, wie viele die noch
+    # festzulegende Sonderbehandlung betreffen wird.
+    if fortschritt.gruppen_ohne_bezug:
         zeilen += [
-            f"{fortschritt.gruppen_ausserhalb} Gruppe(n) ausserhalb der bearbeiteten "
-            "Zielklassen - sie werden nie besucht "
-            "(marketing.zielprioritaet.mindestrelevanz).",
+            f"{fortschritt.gruppen_ohne_bezug} Gruppe(n) ohne erkannten Bezug - "
+            "ihre Behandlung ist noch nicht festgelegt.",
         ]
     # **Der haeufigste Grund, warum ein Lauf mit offener Arbeit endet - und
     # der einzige, der bis zum 15.09.2026 nirgends stand.**

@@ -6,8 +6,9 @@ das andere. Geprueft wird deshalb nicht, was geaendert wurde, sondern was
 gelten soll:
 
 * Eine Kampagne wird nur ``completed``, wenn sie ihr Ziel **erreicht** hat.
-* A-Deutschland vor A-Europa vor B - und eine gescheiterte A-Gruppe oeffnet
-  B nicht die Tuer, solange eine andere A-Gruppe kann.
+* Eine gescheiterte Gruppe haelt die naechste nicht auf. Die Rangfolge
+  A-Deutschland vor A-Europa vor B ist seit dem 23.09.2026 entfallen
+  (Bezuege statt Zielklassen, ``tests/test_bezuege.py``).
 * Vor dem Schreiben steht die Frage, ob wir hier ueberhaupt duerfen.
 * Der naechste Lauf setzt fort, statt von vorn zu beginnen.
 """
@@ -28,7 +29,6 @@ from fbgroups.marketing.models import (
     PostStatus,
 )
 from fbgroups.marketing.store import MarketingStore
-from fbgroups.marketing.zielgruppe import Region, Zielprioritaet
 from fbgroups.models import Group
 from fbgroups.storage import SqliteStore
 
@@ -37,8 +37,6 @@ KAMPAGNE = "test_neu"
 
 def _gruppe(
     gid: str,
-    prio: Zielprioritaet = Zielprioritaet.A,
-    region: Region = Region.DE,
     *,
     uebersprungen: bool = False,
     mitglied: bool = True,
@@ -58,8 +56,6 @@ def _gruppe(
         mitglied=mitglied,
         mitgliedschaft_noetig=mitgliedschaft_noetig,
         regeln_noetig=False,
-        zielprioritaet=prio,
-        zielregion=region,
         uebersprungen=uebersprungen,
         post_status=post_status,
         beitritt_noetig=beitritt_noetig,
@@ -168,81 +164,28 @@ def test_ein_offener_lauf_wird_fortgesetzt(tmp_path: Path) -> None:
 
 # --- 2. Die Rangfolge ------------------------------------------------------
 
-def test_a_deutschland_vor_a_europa_vor_b() -> None:
-    """Die geforderte Reihenfolge, in einer Zeile."""
+def test_eine_gescheiterte_gruppe_haelt_die_naechste_nicht_auf() -> None:
+    """Faellt eine Gruppe aus, kommt die naechste in der Reihenfolge dran."""
     kampagne = _kampagne(
         [
-            _gruppe("b-de", Zielprioritaet.B, Region.DE),
-            _gruppe("a-eu", Zielprioritaet.A, Region.EU),
-            _gruppe("a-de", Zielprioritaet.A, Region.DE),
-        ]
-    )
-
-    assert [g.group_id for g in kampagne.arbeitsliste] == ["a-de", "a-eu", "b-de"]
-
-
-def test_eine_gescheiterte_a_gruppe_oeffnet_b_nicht_die_tuer() -> None:
-    """**Der Kern von Punkt 2.**
-
-    Faellt eine A-Gruppe technisch aus, kommt die **naechste A-Gruppe** dran -
-    nicht die erste B-Gruppe. Sonst waere ein einziger Fehlschlag genug, um
-    den Zielmarkt zu verlassen.
-    """
-    kampagne = _kampagne(
-        [
-            _gruppe("a-de-1", Zielprioritaet.A, Region.DE, uebersprungen=True),
-            _gruppe("a-de-2", Zielprioritaet.A, Region.DE),
-            _gruppe("a-eu-1", Zielprioritaet.A, Region.EU),
-            _gruppe("b-de-1", Zielprioritaet.B, Region.DE),
+            _gruppe("g1", uebersprungen=True),
+            _gruppe("g2"),
+            _gruppe("g3"),
         ]
     )
 
     assert kampagne.naechste_gruppe is not None
-    assert kampagne.naechste_gruppe.group_id == "a-de-2"
-
-
-def test_erst_wenn_alle_a_gruppen_ausfallen_kommt_b() -> None:
-    """Und dann auch wirklich - eine Kampagne soll nicht stehenbleiben."""
-    kampagne = _kampagne(
-        [
-            _gruppe("a-de", Zielprioritaet.A, Region.DE, uebersprungen=True),
-            _gruppe("a-eu", Zielprioritaet.A, Region.EU, uebersprungen=True),
-            _gruppe("b-de", Zielprioritaet.B, Region.DE),
-        ]
-    )
-
-    assert kampagne.naechste_gruppe is not None
-    assert kampagne.naechste_gruppe.group_id == "b-de"
+    assert kampagne.naechste_gruppe.group_id == "g2"
 
 
 def test_die_rangfolge_haengt_nicht_am_lauf() -> None:
-    """Sie wird gerechnet, nicht gespeichert - also ueberlebt sie jeden Neustart.
+    """``uebersprungen`` haengt an der ``lauf_id``; ein neuer Lauf findet
+    dieselben Gruppen in derselben Reihenfolge wieder vor."""
+    kampagne = _kampagne([_gruppe("g1"), _gruppe("g2"), _gruppe("g3")])
 
-    ``uebersprungen`` haengt an der ``lauf_id``; ein neuer Lauf findet
-    dieselben Gruppen in derselben Reihenfolge wieder vor.
-    """
-    ohne_uebersprung = _kampagne(
-        [
-            _gruppe("a-de", Zielprioritaet.A, Region.DE),
-            _gruppe("a-eu", Zielprioritaet.A, Region.EU),
-            _gruppe("b-de", Zielprioritaet.B, Region.DE),
-        ]
-    )
-
-    assert [g.group_id for g in ohne_uebersprung.arbeitsliste] == [
-        "a-de",
-        "a-eu",
-        "b-de",
-    ]
-    assert ohne_uebersprung.naechste_gruppe is not None
-    assert ohne_uebersprung.naechste_gruppe.group_id == "a-de", "wieder von vorn"
-
-
-def test_klasse_d_kommt_gar_nicht_dran() -> None:
-    """"Nicht bearbeiten" ist etwas anderes als "zuletzt"."""
-    kampagne = _kampagne([_gruppe("d1", Zielprioritaet.D, Region.DE)])
-
-    assert kampagne.naechste_gruppe is None
+    assert [g.group_id for g in kampagne.arbeitsliste] == ["g1", "g2", "g3"]
+    assert kampagne.naechste_gruppe is not None
+    assert kampagne.naechste_gruppe.group_id == "g1", "wieder von vorn"
 
 
 # --- 3. Beitrittsanfragen --------------------------------------------------
@@ -262,17 +205,17 @@ def test_ohne_mitgliedschaft_wird_nicht_geschrieben() -> None:
     assert _kampagne([wartend]).naechste_gruppe is None
 
 
-def test_nur_a_und_b_bekommen_eine_anfrage() -> None:
-    """Beitreten heisst "aktiv bearbeiten" - bei C ausgeschlossen."""
+def test_jede_gruppe_kann_eine_anfrage_bekommen() -> None:
+    """Die Anfrage hing an den Zielklassen A und B - die gibt es nicht mehr.
+
+    Der Weg gilt seit dem 23.09.2026 fuer jede Gruppe; abgeschaltet ist er
+    bis auf Weiteres in ``settings.yaml`` (``limits.join_requests.daily: 0``),
+    siehe ``tests/test_bezuege.py``.
+    """
     kampagne = _kampagne(
         [
             _gruppe(
-                "c1", Zielprioritaet.C, Region.DE, mitglied=False,
-                mitgliedschaft_noetig=True, beitritt_noetig=True,
-            ),
-            _gruppe(
-                "a1", Zielprioritaet.A, Region.DE, mitglied=False,
-                mitgliedschaft_noetig=True, beitritt_noetig=True,
+                "a1", mitglied=False, mitgliedschaft_noetig=True, beitritt_noetig=True,
             ),
         ]
     )
@@ -349,7 +292,9 @@ def test_drei_versuche_sind_drei_verschiedene_beitraege() -> None:
     Adressen herein und laesst sie aus."""
     import inspect
 
-    quelle = inspect.getsource(automatik.entscheide_und_kommentiere)
+    # Der Kern; ``entscheide_und_kommentiere`` haengt seit dem 23.09.2026 nur
+    # noch die Bezuege an den Ausgang.
+    quelle = inspect.getsource(automatik._entscheide_und_kommentiere)
 
     assert "gescheitert.add(gewaehlt.post_url)" in quelle
     assert "waehle_gelegenheit(gelegenheiten, gescheitert)" in quelle

@@ -198,10 +198,10 @@ class Group(BaseModel):
     # -- Von Hand gepflegte Einstufung aus der Mitgliederliste -------------
     # Zwei Angaben, die kein Programm errechnet hat: Ein Mensch hat die
     # Gruppe angesehen und sie eingestuft. Sie stehen deshalb **neben** dem
-    # Score und neben der gerechneten ``zielgruppe.Zielprioritaet`` und
-    # ersetzen keines von beiden - der Score beurteilt die Datenlage, die
-    # Zielprioritaet den Zielmarkt, und dies hier ist das Urteil dessen, der
-    # die Liste gefuehrt hat.
+    # Score und ersetzen ihn nicht - der Score beurteilt die Datenlage, dies
+    # hier ist das Urteil dessen, der die Liste gefuehrt hat. Seit dem
+    # 23.09.2026 entscheiden sie auch keine Schwelle und keine Reihenfolge
+    # mehr; sie sind Auskunft und Kampagnenfilter.
     #
     # ``listenprioritaet`` traegt "A++" bis "B" (siehe LISTENPRIORITAETEN),
     # ``aktivitaetsstufe`` "sehr_aktiv" | "aktiv" | "normal". Beide sind

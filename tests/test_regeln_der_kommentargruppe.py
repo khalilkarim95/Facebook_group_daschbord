@@ -67,7 +67,6 @@ def _gruppe(
         # Der Beitrag steht, damit allein der Kommentarweg uebrigbleibt -
         # genau die Lage im Protokoll.
         post_status=PostStatus.VEROEFFENTLICHT,
-        note="A++",
         heute_in_gruppe=heute_in_gruppe,
         gruppenlimit=1,
     )

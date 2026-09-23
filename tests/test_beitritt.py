@@ -191,7 +191,9 @@ def test_der_server_nennt_die_naechsten_gruppen(bestand: Path) -> None:
 
     daten = _client(bestand).post("/automatik/beitritt/naechste", json={}).json()
 
-    assert [g["group_id"] for g in daten["gruppen"]] == ["g1", "g2", "g3"]
+    # Bei ``0`` (abgeschaltet, seit dem 23.09.2026) nennt der Server keine -
+    # die Reihenfolge der uebrigen bleibt dieselbe.
+    assert [g["group_id"] for g in daten["gruppen"]] == ["g1", "g2", "g3"][:erwartet]
     assert daten["heute"] == 0
     assert daten["pro_tag"] == erwartet
 

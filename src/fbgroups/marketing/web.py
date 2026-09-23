@@ -298,6 +298,13 @@ class AutomatikErgebnis(BaseModel):
     Gruppe; im Protokoll muss der Unterschied trotzdem stehen.
     """
 
+    bezuege: list[tuple[str, list[str]]] = []
+    """Die Bezuege der gelesenen Beitraege: ``[[post_url, [bezug, ...]], ...]``.
+
+    Seit dem 23.09.2026. Schlagwoerter, nie der Text; ein aelterer
+    Arbeitsrechner sendet das Feld nicht, und dann bleibt es leer.
+    """
+
     beitrag_weg: bool = False
     """Die versuchten Adressen zeigen ins Leere - den Beitrag gibt es nicht mehr.
 
@@ -1187,7 +1194,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         ``fbgroups campaign automatik`` auf dem Rechner, an dem der Browser
         steht.
         """
-        from fbgroups.marketing import automatik, grenzen, lauf, qualifikation, zielgruppe
+        from fbgroups.marketing import automatik, grenzen, lauf, qualifikation
 
         with _store() as store:
             offen = store.offener_lauf()
@@ -1211,7 +1218,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 qualifikation_pflicht=qualifikation.pflicht(cfg),
                 kommentare_zuerst=automatik.kommentare_zuerst(cfg),
                 aktionen=lagen,
-                klassen=zielgruppe.bearbeitbare_klassen(cfg),
+                bezuege=store.gruppenbezuege(gruppen),
                 ziel_kommentare=automatik.ziel_kommentare(cfg),
             )
 
@@ -1337,7 +1344,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             grenzen,
             lauf,
             qualifikation,
-            zielgruppe,
         )
         from fbgroups.marketing.beitrag import mit_link
 
@@ -1387,7 +1393,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             # Sie muessen hier stehen und nicht auf dem Arbeitsrechner: Der
             # Server haelt den Bestand, und eine Rangfolge, die an zwei
             # Stellen gerechnet wird, ist zwei Rangfolgen.
-            zielregeln = zielgruppe.regeln_aus_config(cfg)
             heute = datetime.now(UTC).date().isoformat()
             fortschritt = lauf.lies_fortschritt(
                 store,
@@ -1397,10 +1402,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 qualifikation_pflicht=qualifikation.pflicht(cfg),
                 kommentare_zuerst=automatik.kommentare_zuerst(cfg),
                 aktionen=lagen,
-                zielbefunde={
-                    gid: zielgruppe.aus_group(g, zielregeln)
-                    for gid, g in gruppen.items()
-                },
+                bezuege=store.gruppenbezuege(gruppen),
                 regeln_pflicht=automatik.regeln_zuerst(cfg),
                 heute_je_gruppe=store.versuche_heute_je_gruppe(
                     heute, Texttyp.KOMMENTAR.value
@@ -1408,7 +1410,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 gruppenlimit=grenzen.einstellungen(cfg)
                 .fuer(grenzen.Aktion.KOMMENTAR)
                 .je_gruppe_taeglich,
-                klassen=zielgruppe.bearbeitbare_klassen(cfg),
                 ziel_kommentare=automatik.ziel_kommentare(cfg),
             )
             schritt = lauf.naechster_schritt(fortschritt)
@@ -1686,7 +1687,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 # liegt, wo gezaehlt wird; die reine Regel laeuft, wo der
                 # Browser steht.
                 erlaubnis = automatik.erlaubnis_fuer(store, schritt.group_id)
-                anspruch = automatik.anspruch_fuer(cfg, schritt.group_id)
+                anspruch = automatik.anspruch_aus_config(cfg)
                 vorgaben = {
                     "erlaubnis": {
                         "kommentare": erlaubnis.kommentare,
@@ -1789,6 +1790,11 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             link = store.link_for(meldung.campaign_id, meldung.group_id)
             if campaign is None or link is None:
                 raise HTTPException(status_code=404, detail="Kampagne oder Gruppe unbekannt")
+
+            # Die Bezuege zuerst: Gelesen wurde in jedem Fall, auch wenn am
+            # Ende kein Kommentar stand.
+            for post_url, bezuege in meldung.bezuege:
+                store.merke_bezuege(meldung.group_id, post_url, bezuege)
 
             if meldung.kein_anlass:
                 # **Nichts buchen.** Es ist ein Ergebnis, kein Fehlversuch:
@@ -2061,13 +2067,13 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             if campaign is None:
                 raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
 
-            reihe = arbeitsreihenfolge(store, campaign_id, gruppen, cfg)
+            reihe = arbeitsreihenfolge(store, campaign_id, gruppen)
             if not reihe:
                 # Der einzige verbliebene Grund, die Seite zu verschliessen.
                 # Pausiert und gestoppt halten nur noch das Veroeffentlichen
                 # an - Texte vorbereiten geht weiter.
                 bericht = _kette_automatisch(store, campaign, gruppen, cfg)
-                reihe = arbeitsreihenfolge(store, campaign_id, gruppen, cfg)
+                reihe = arbeitsreihenfolge(store, campaign_id, gruppen)
                 if not reihe:
                     return HTMLResponse(
                         render_sperre(Sperre(Grund.KEINE_GRUPPEN), campaign_id, bericht)

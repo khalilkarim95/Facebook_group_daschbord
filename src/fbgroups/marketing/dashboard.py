@@ -36,8 +36,9 @@ from pathlib import Path
 from typing import Any
 
 from fbgroups.config import AppConfig
-from fbgroups.marketing import qualifikation, zielgruppe
+from fbgroups.marketing import qualifikation
 from fbgroups.marketing.analytics import funnel, kennzahlen
+from fbgroups.marketing.bezug import Bezug
 from fbgroups.marketing.models import CampaignStatus, MarketingStatus
 from fbgroups.marketing.qualifikation import GRUND_BESCHRIFTUNG, Ablehnungsgrund
 from fbgroups.marketing.resonanz import resonanz_je_gruppe
@@ -91,6 +92,11 @@ def _regeln_von(stand) -> qualifikation.Regelbefund:  # noqa: ANN001 - GroupMark
         freigabe_noetig=stand.regel_freigabe_noetig,
         neue_ohne_links=stand.regel_neue_ohne_links,
     )
+
+
+#: Nur fuer die Sortierung der Spalte "Prioritaet": A++ zuerst, ohne Note
+#: dahinter. Seit dem 23.09.2026 keine Arbeitsreihenfolge mehr.
+_NOTENRANG: dict[str, int] = {"A++": 0, "A+": 1, "A": 2, "B+": 3, "B": 4}
 
 
 _STATUS_LABEL = {
@@ -232,11 +238,8 @@ def _gruppe_als_zeile(
     qualifikation_label: str = "",
     qualifikation_grund: str = "",
     regeln: str = "",
-    zielprioritaet: str = "",
-    zielprioritaet_label: str = "",
-    zielprioritaet_grund: str = "",
-    zielregion: str = "",
-    zielregion_label: str = "",
+    bezuege: list[str] | None = None,
+    bezuege_gelesen: int = 0,
     gruende: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Eine Tabellenzeile - bereits mit den Bezeichnungen der Konfiguration.
@@ -280,18 +283,16 @@ def _gruppe_als_zeile(
         "zielgruppen": zielgruppen,
         "kategorie": kategorie,
         # Die beiden von Hand gepflegten Einstufungen der Mitgliederliste.
-        # Sie stehen neben dem Score und neben der Zielklasse, nicht darin:
-        # Der Score beurteilt die Datenlage, die Zielklasse den Zielmarkt,
-        # und dies hier ist das Urteil dessen, der die Liste gefuehrt hat.
-        # Leer heisst **nicht eingestuft** - und genau das soll man filtern
-        # koennen, sonst bleibt die Luecke unsichtbar.
+        # Seit dem 23.09.2026 **entscheiden sie nichts mehr** (weder Schwelle
+        # noch Reihenfolge); sie stehen hier als Auskunft und als
+        # Kampagnenfilter. Leer heisst **nicht eingestuft** - und genau das
+        # soll man filtern koennen, sonst bleibt die Luecke unsichtbar.
         "prioritaet": group.listenprioritaet or "",
-        # Zum Sortieren: A++ ist 0, B ist 4, ohne Note 5. Alphabetisch stuende
-        # "A" vor "A+" vor "A++" - genau verkehrt herum, und eine Spalte, die
-        # die Arbeitsreihenfolge zeigt, muss sie auch sortieren koennen.
-        # Dieselbe Rangfolge wie in ``lauf.arbeitsliste`` (``notenrang``) -
-        # zwei Reihenfolgen fuer dieselbe Frage waeren zwei Wahrheiten.
-        "notenrang": zielgruppe.notenrang(group.listenprioritaet),
+        # Zum Sortieren der Spalte: A++ ist 0, B ist 4, ohne Note 5.
+        # Alphabetisch stuende "A" vor "A+" vor "A++" - genau verkehrt herum.
+        "notenrang": _NOTENRANG.get(
+            (group.listenprioritaet or "").strip().upper(), len(_NOTENRANG)
+        ),
         "aktivitaetsstufe": group.aktivitaetsstufe or "",
         "aktivitaetsstufe_label": AKTIVITAET_LABEL.get(
             group.aktivitaetsstufe or "", group.aktivitaetsstufe or ""
@@ -312,21 +313,15 @@ def _gruppe_als_zeile(
         # verbietendes gefunden", nicht "nicht nachgesehen"; das sagt die
         # Stufe selbst (``in Bewertung``).
         "regeln": regeln,
-        # Die vierte Achse (13.09.2026): **gehoert** diese Gruppe zum
-        # Zielmarkt? Neben "wo stehen wir?" (marketing), "arbeiten wir
-        # daran?" (bearbeiten) und "darf hier etwas stehen?"
-        # (qualifikation) - vier Fragen, vier Spalten. Sie wird bei jedem
-        # Aufruf gerechnet (``zielgruppe.aus_group``) und ist deshalb nie
-        # veraltet; der Grund faehrt mit, wie ueberall.
-        "zielprioritaet": zielprioritaet,
-        "zielprioritaet_label": zielprioritaet_label or zielprioritaet,
-        "zielprioritaet_grund": zielprioritaet_grund,
-        # Das Land steht neben der Klasse und nicht darin: "worum geht es
-        # dort?" und "wo ist das?" sind zwei Fragen. In der Zelle stehen sie
-        # trotzdem zusammen ("A·DE") - es ist eine Rangfolge, und getrennt
-        # muesste man sie im Kopf wieder zusammensetzen.
-        "zielregion": zielregion,
-        "zielregion_label": zielregion_label or zielregion,
+        # Die Bezuege der Gruppe (23.09.2026) - gesammelt aus den gelesenen
+        # Beitraegen (``bezug.fuer_gruppe``). Sie ersetzen die Zielklasse
+        # (A-D) und die Region als Grundlage, auf der eine Gruppe beurteilt
+        # wird. ``bezuege_gelesen`` trennt "gelesen, nichts gefunden" (``[]``
+        # bei > 0) von "noch nie gelesen" (0) - die spaetere Behandlung der
+        # Gruppen ohne Bezug wird beides unterscheiden muessen.
+        "bezuege": list(bezuege or []),
+        "bezuege_anzahl": len(bezuege or []),
+        "bezuege_gelesen": bezuege_gelesen,
         # Was Facebook auf unsere Versuche geantwortet hat - gezaehlt je
         # Einstufung ("link_rejected": 2). Der Fehlertext selbst steht
         # weiterhin im Protokoll; hier steht, was sich ueber 314 Gruppen
@@ -507,11 +502,9 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
         for g in groups
     }
 
-    # Die Zielprioritaet je Gruppe - ebenfalls gerechnet und nicht gelesen.
-    # Sie beantwortet die vierte Frage der Uebersicht: Gehoert diese Gruppe
-    # ueberhaupt zum Zielmarkt der Kampagne (Reise und Versand nach Syrien)?
-    zielregeln = zielgruppe.regeln_aus_config(config)
-    zielbefunde = {g.group_id: zielgruppe.aus_group(g, zielregeln) for g in groups}
+    # Die Bezuege je Gruppe - aus den gelesenen Beitraegen gesammelt.
+    with MarketingStore(db_path) as store:
+        bezuege_je_gruppe = store.gruppenbezuege()
 
     # Was Facebook geantwortet hat - je Gruppe gezaehlt. Aus dem
     # Versuchsprotokoll, das es ohnehin gibt; ein Zaehler daneben waere eine
@@ -543,30 +536,25 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             if g.group_id in marketing
             and marketing[g.group_id].regeln_gelesen_am is not None
             else "",
-            zielprioritaet=zielbefunde[g.group_id].prioritaet.value,
-            zielprioritaet_label=zielbefunde[g.group_id].beschriftung,
-            zielprioritaet_grund=zielbefunde[g.group_id].grund,
-            zielregion=zielbefunde[g.group_id].region.value,
-            zielregion_label=zielbefunde[g.group_id].region_beschriftung,
+            bezuege=[
+                b.value for b in bezuege_je_gruppe[g.group_id].bezuege
+            ] if g.group_id in bezuege_je_gruppe else [],
+            bezuege_gelesen=(
+                bezuege_je_gruppe[g.group_id].beitraege
+                if g.group_id in bezuege_je_gruppe
+                else 0
+            ),
             gruende=gruende_je_gruppe.get(g.group_id, {}),
         )
         for g in groups
     ]
 
-    # Die Verteilung ueber die Prioritaetsklassen - aus **denselben**
-    # Befunden wie die Zeilen. Ein zweiter Lauf ueber die Gruppen koennte
-    # davon abweichen, und dann naennte die Kachel eine andere Zahl als die
-    # gefilterte Tabelle darunter.
-    ziel_zaehler: dict[str, int] = {}
-    for befund in zielbefunde.values():
-        ziel_zaehler[befund.prioritaet.value] = ziel_zaehler.get(befund.prioritaet.value, 0) + 1
-        # Die A-Gruppen noch einmal nach Land. Das ist die Frage, wegen der
-        # es die zweite Achse gibt: "20 A-Gruppen" beantwortet nicht, ob
-        # genug davon in Deutschland stehen - und genau dort wird zuerst
-        # gearbeitet.
-        if befund.prioritaet.value == "a":
-            schluessel = f"a_{befund.region.value}"
-            ziel_zaehler[schluessel] = ziel_zaehler.get(schluessel, 0) + 1
+    # Die Verteilung ueber die Bezuege - aus **denselben** Zeilen wie die
+    # Tabelle. Ein zweiter Lauf ueber die Gruppen koennte davon abweichen,
+    # und dann naennte die Kachel eine andere Zahl als die gefilterte Tabelle.
+    mit_bezug = sum(1 for z in zeilen if z["bezuege"])
+    ungelesen = sum(1 for z in zeilen if not z["bezuege_gelesen"])
+    ohne_bezug = len(zeilen) - mit_bezug - ungelesen
 
     # Auswahllisten fuer das Kampagnenformular - seit dem 20.09.2026 aus dem
     # **Bestand**. Vorher standen sie in ``audiences.yaml``/``cities.yaml``,
@@ -668,15 +656,12 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
         "kampagnen": kampagnen,
         "auswahl": auswahl,
         "trichter": trichter,
-        # Die Verteilung ueber die Prioritaetsklassen. C und D stehen
-        # zusammen, weil sie dasselbe bedeuten: nicht der Ort, an dem
-        # gearbeitet wird. Sie zu trennen brauchte eine vierte Kachel fuer
-        # eine Unterscheidung, die man in der Spalte nachsieht.
-        "ziel_a": ziel_zaehler.get("a", 0),
-        "ziel_a_de": ziel_zaehler.get("a_de", 0),
-        "ziel_a_eu": ziel_zaehler.get("a_eu", 0),
-        "ziel_b": ziel_zaehler.get("b", 0),
-        "ziel_cd": ziel_zaehler.get("c", 0) + ziel_zaehler.get("d", 0),
+        # Die Verteilung ueber die Bezuege: mit, ohne (gelesen, nichts
+        # gefunden), noch nie gelesen. Die mittlere Zahl betrifft die
+        # Behandlung, die fuer ``[]`` noch festgelegt wird.
+        "bezug_mit": mit_bezug,
+        "bezug_ohne": ohne_bezug,
+        "bezug_ungelesen": ungelesen,
         "kennzahlen": {
             "gesamt": len(zeilen),
             "bewertet": len(bewertet),
@@ -815,24 +800,12 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
                 f"{k['bestwert']:.1f}".replace(".", ",") if k["bestwert"] is not None else "–",
                 "Bestwert",
             ),
-            # Die Prioritaetsverteilung (13.09.2026). Sie beantwortet die
-            # Frage, wegen der es die Einstufung gibt: Haben wir ueberhaupt
-            # genug Gruppen im Zielmarkt, oder arbeitet die Kampagne
-            # hauptsaechlich in Gemeinschaftsgruppen? "20 A-Gruppen" ist eine
-            # Auskunft, "314 Gruppen" ist keine.
-            # Seit dem 14.09.2026 mit dem Land daneben. "20 A-Gruppen"
-            # beantwortet nicht, ob genug davon in Deutschland stehen - und
-            # dort wird zuerst gearbeitet. Die dritte Zahl (A ohne genanntes
-            # Land) steht nicht als eigene Kachel: Sie ist der Rest der
-            # ersten und liesse sich nur zusammen mit den anderen beiden
-            # lesen; wer sie braucht, filtert danach.
-            _kachel(
-                f"{daten['ziel_a_de']} / {daten['ziel_a_eu']}",
-                "A – Deutschland / Europa",
-            ),
-            _kachel(str(daten["ziel_a"]), "A – gesamt"),
-            _kachel(str(daten["ziel_b"]), "B – Gemeinschaft"),
-            _kachel(str(daten["ziel_cd"]), "C/D – nachrangig"),
+            # Die Bezuege der Gruppen (23.09.2026) - an Stelle der Kacheln
+            # A / B / C+D. "ohne Bezug" heisst gelesen und nichts gefunden,
+            # "ungelesen" heisst, dass noch kein Beitrag gelesen wurde.
+            _kachel(str(daten["bezug_mit"]), "mit Bezügen"),
+            _kachel(str(daten["bezug_ohne"]), "ohne Bezug"),
+            _kachel(str(daten["bezug_ungelesen"]), "noch nicht gelesen"),
             _kachel(str(k["tracking_links"]), "Tracking-Links"),
             _kachel(str(k["beitraege_veroeffentlicht"]), "Beiträge"),
             _kachel(str(k["beitraege_offen"]), "offen"),
@@ -936,6 +909,16 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
         f'<option value="{html.escape(e["id"])}">'
         f'{html.escape(e["label"])} ({e["anzahl"]})</option>'
         for e in (daten.get("auswahl") or {}).get("aktivitaet", [])
+    )
+    # Jeder einzelne Bezug als Filter, mit der Zahl der Gruppen dahinter -
+    # in der festen Reihenfolge der Aufzaehlung, nicht nach Haeufigkeit.
+    je_bezug = {
+        b.value: sum(1 for g in daten.get("gruppen") or [] if b.value in g["bezuege"])
+        for b in Bezug
+    }
+    bezug_optionen = "".join(
+        f'<option value="{html.escape(wert)}">{html.escape(wert)} ({anzahl})</option>'
+        for wert, anzahl in je_bezug.items()
     )
 
     # Ausgeblendet wird per CSS, nicht entfernt: Das Skript sucht mehrere
@@ -1308,31 +1291,21 @@ So bleiben zwei Auswertungen vergleichbar.">Anteil</th><th></th>
        drei waren also in jeder der 17 Zeilen leer - drei Filter, die nichts
        filtern, und drei Spalten Breite fuer einen Gedankenstrich. Wer die
        Felder eines Tages pflegt, holt Spalte und Filter mit einer Zeile
-       zurueck; die Daten selbst sind unberuehrt und wirken weiter in Score
-       und Zielklasse. -->
-  <select id="f-zielprio"
-          title="Gehoert die Gruppe zum Zielmarkt? A wird zuerst bearbeitet, D gar nicht.">
-    <option value="">Jede Zielklasse</option>
-    <option value="a">A – Reise &amp; Versand</option>
-    <option value="b">B – Gemeinschaft</option>
-    <option value="c">C – allgemein</option>
-    <option value="d">D – ohne Bezug</option>
+       zurueck; die Daten selbst sind unberuehrt und wirken weiter im Score. -->
+  <!-- Die Bezuege (23.09.2026) an Stelle von Zielklasse und Land. -->
+  <select id="f-bezug"
+          title="Welche Bezuege in den gelesenen Beitraegen der Gruppe vorkommen.
+'keine Bezuege' heisst: gelesen, nichts gefunden - die Behandlung dieser
+Gruppen ist noch nicht festgelegt.">
+    <option value="">Jeder Bezug</option>
+    <option value="+">mit Bezügen</option>
+    <option value="-">keine Bezüge</option>
+    <option value="?">noch nicht gelesen</option>
+    {bezug_optionen}
   </select>
-  <select id="f-zielregion"
-          title="Wo arbeitet die Gruppe? Gearbeitet wird Deutschland zuerst,
-dann das uebrige Europa. Eine Gruppe, die nur ein Land ausserhalb Europas
-nennt, faellt aus dem Zielmarkt heraus - ihre Strecke ist nicht unsere.">
-    <option value="">Jedes Land</option>
-    <option value="de">Deutschland</option>
-    <option value="eu">übriges Europa</option>
-    <option value="unbekannt">Land unbekannt</option>
-    <option value="ausserhalb">außerhalb Europas</option>
-  </select>
-  <!-- Die beiden gepflegten Einstufungen der Mitgliederliste. Sie stehen
-       neben der Zielklasse und nicht in ihr: Jene ist gerechnet (A-D), diese
-       ist das Urteil eines Menschen (A++ bis B). Deshalb heisst das Feld
-       daneben seit dem 21.09.2026 "Zielklasse" - zweimal "Prioritaet" in
-       derselben Leiste waere ein Raetsel und keine Auskunft. -->
+  <!-- Die beiden gepflegten Einstufungen der Mitgliederliste - eine
+       Auskunft und ein Kampagnenfilter, seit dem 23.09.2026 keine
+       Entscheidungsgrundlage mehr. -->
   <select id="f-note"
           title="Die Note aus der Mitgliederliste - von Hand vergeben, nicht
 gerechnet. 'nicht eingestuft' ist eine eigene Wahl und kein Randfall: Es ist
@@ -1416,16 +1389,14 @@ genau die Liste, die noch zu beurteilen ist.">
     <th data-sort="name">Gruppe</th>
     <th data-sort="notenrang"
         title="Die Note aus der Mitgliederliste (A++ bis B) und darunter die
-Aktivitaetsstufe - beides von Hand vergeben. Sie entscheidet seit dem
-21.09.2026, wie viel ein Beitrag in dieser Gruppe hergeben muss (A-Noten:
-mittel, B-Noten: hoch) und in welcher Reihenfolge gearbeitet wird. In den
-Score geht sie nicht ein. Leer heisst: noch nicht eingestuft - dann
-entscheidet die gerechnete Zielklasse daneben.">Priorität</th>
-    <th data-sort="zielprioritaet"
-        title="Gehoert diese Gruppe zum Zielmarkt? A = Reise und Versand nach
-Syrien, B = syrische/arabische Gemeinschaft in Deutschland, C = allgemein,
-D = ohne Bezug. Gerechnet aus Name, Beschreibung, Kategorie, Zielgruppe und
-Stadt - nicht gespeichert. A wird zuerst bearbeitet, D gar nicht.">Ziel</th>
+Aktivitaetsstufe - beides von Hand vergeben. Seit dem 23.09.2026 eine
+Auskunft und ein Kampagnenfilter: Schwelle und Reihenfolge haengen nicht mehr
+daran. Leer heisst: noch nicht eingestuft.">Priorität</th>
+    <th data-sort="bezuege_anzahl"
+        title="Die Bezuege, die in den gelesenen Beitraegen dieser Gruppe
+erkannt wurden (Reisender, Mitnahme, Gepaeck ...). Sie ersetzen die
+Zielklasse A-D. 'keine' heisst gelesen und nichts gefunden, 'ungelesen'
+heisst, dass noch kein Beitrag gelesen wurde.">Bezüge</th>
     <th data-sort="kampagnen_text"
         title="Zu welchen Kampagnen diese Gruppe gehoert. Zuordnen vergibt einen
 Tracking-Code - der wird nie zurueckgenommen, er steht spaeter in
@@ -1612,7 +1583,7 @@ let seite = 1, proSeite = 25;
 // nicht den Filter von gestern.
 const MERKER = "fbgroups-uebersicht";
 const MERK_FELDER = ["f-marketing",
-                     "f-zielprio", "f-zielregion", "f-beitrag", "f-suche", "f-mitglieder",
+                     "f-bezug", "f-beitrag", "f-suche", "f-mitglieder",
                      "f-aktivitaet", "f-konfidenz", "f-note", "f-stufe"];
 const MERK_SCHALTER = ["f-bewertet", "f-bearbeitet"];
 
@@ -1689,8 +1660,7 @@ fuelleSammelKampagnen();
 function gefiltert() {{
   const stand = document.getElementById("f-marketing").value;
   const qual = document.getElementById("f-qualifikation").value;
-  const zielprio = document.getElementById("f-zielprio").value;
-  const zielregion = document.getElementById("f-zielregion").value;
+  const bezug = document.getElementById("f-bezug").value;
   const suche = document.getElementById("f-suche").value.trim().toLowerCase();
   const nurBewertet = document.getElementById("f-bewertet").checked;
   const nurBearbeitet = document.getElementById("f-bearbeitet").checked;
@@ -1756,8 +1726,7 @@ function gefiltert() {{
     passtKonfidenz(z) &&
     (!stand || z.marketing_label === stand) &&
     (!qual || z.qualifikation_label === qual) &&
-    (!zielprio || z.zielprioritaet === zielprio) &&
-    (!zielregion || z.zielregion === zielregion) &&
+    passtBezug(z, bezug) &&
     (!nurBewertet || z.score !== null) &&
     (!suche || z.name.toLowerCase().includes(suche) ||
                z.beschreibung.toLowerCase().includes(suche))
@@ -1783,7 +1752,7 @@ function sortiert(liste) {{
 // verschwunden. Die Zeile nennt deshalb den Grund und bietet den Weg zurueck.
 function aktiveFilter() {{
   const felder = [
-    ["f-zielprio", "Ziel"], ["f-zielregion", "Land"], ["f-marketing", "Stand"],
+    ["f-bezug", "Bezug"], ["f-marketing", "Stand"],
     ["f-qualifikation", "Darf"], ["f-beitrag", "Beitrag"], ["f-mitglieder", "Groesse"],
     ["f-aktivitaet", "Aktivitaet"], ["f-konfidenz", "Datenqualitaet"],
     ["f-note", "Prioritaet"], ["f-stufe", "Aktivitaetsstufe"],
@@ -1804,8 +1773,8 @@ function aktiveFilter() {{
 }}
 
 function filterZuruecksetzen() {{
-  for (const id of ["f-zielprio",
-                    "f-zielregion", "f-marketing", "f-qualifikation", "f-beitrag",
+  for (const id of ["f-bezug",
+                    "f-marketing", "f-qualifikation", "f-beitrag",
                     "f-mitglieder", "f-aktivitaet", "f-konfidenz",
                     "f-note", "f-stufe"]) {{
     const feld = document.getElementById(id);
@@ -1881,7 +1850,7 @@ function zeichne() {{
                rel="noopener noreferrer">${{esc(z.name)}}</a>${{codes}}${{ausGrund}}
           </td>
           <td>${{noteZelle(z)}}</td>
-          <td>${{zielZelle(z)}}</td>
+          <td>${{bezugZelle(z)}}</td>
           <td class="kampagnen-zelle">${{kampagnenZelle(z)}}</td>
           <td>${{standZelle(z)}}</td>
           <td>${{qualZelle(z)}}</td>
@@ -2115,32 +2084,29 @@ const QUAL_FARBE = {{
   ungeeignet: "#dc2626",
 }};
 
-const ZIEL_FARBE = {{
-  a: "#16a34a",
-  b: "#2563eb",
-  c: "#ca8a04",
-  d: "#9ca3af",
-}};
+// Die Bezuege der Gruppe (23.09.2026). In der Zelle die Zahl, im Titel die
+// Namen: Die Spalte steht in jeder Zeile, und 21 moegliche Namen waeren
+// breiter als der Gruppenname.
+function bezugZelle(z) {{
+  if (!z.bezuege_gelesen) {{
+    return `<span style="color:#9ca3af" title="Noch kein Beitrag dieser Gruppe gelesen">`
+      + `ungelesen</span>`;
+  }}
+  if (!z.bezuege.length) {{
+    const leer = z.bezuege_gelesen + " Beitraege gelesen, kein Bezug erkannt";
+    return `<span style="color:#ca8a04" title="${{esc(leer)}}">keine</span>`;
+  }}
+  const titel = z.bezuege.join(", ") + " · " + z.bezuege_gelesen + " Beitraege gelesen";
+  return `<span style="color:#16a34a;font-weight:600" title="${{esc(titel)}}">`
+    + esc(String(z.bezuege.length)) + `</span>`;
+}}
 
-// Das Land in zwei Zeichen. Nur bei den Gruppen, bei denen es die
-// Reihenfolge aendert - "unbekannt" ist der Regelfall und bekommt deshalb
-// kein Zeichen: Ein Vermerk, der in zwei Dritteln der Zeilen steht, sagt
-// nichts mehr.
-const REGION_KURZ = {{de: "DE", eu: "EU", ausserhalb: "✗"}};
-
-function zielZelle(z) {{
-  // Nur der Buchstabe, mit der Begruendung im Titel: Die Spalte steht in
-  // jeder der 314 Zeilen, und "A - Reise & Versand" waere dort breiter als
-  // der Gruppenname. Wer den Grund braucht, faehrt darueber.
-  const kurz = (z.zielprioritaet || "").toUpperCase() || "–";
-  const farbe = ZIEL_FARBE[z.zielprioritaet] || "#9ca3af";
-  const land = REGION_KURZ[z.zielregion] || "";
-  const titel = [z.zielprioritaet_label, z.zielregion_label,
-                 z.zielprioritaet_grund, z.facebook_antwort]
-    .filter(Boolean).join(" · ");
-  return `<span style="color:${{farbe}};font-weight:600" title="${{esc(titel)}}">`
-    + esc(kurz) + `</span>`
-    + (land ? `<span style="color:#6b7280;font-size:11px"> ${{esc(land)}}</span>` : "");
+function passtBezug(z, wahl) {{
+  if (!wahl) return true;
+  if (wahl === "?") return !z.bezuege_gelesen;
+  if (wahl === "-") return z.bezuege_gelesen > 0 && !z.bezuege.length;
+  if (wahl === "+") return z.bezuege.length > 0;
+  return z.bezuege.includes(wahl);
 }}
 
 function qualZelle(z) {{

@@ -161,7 +161,14 @@ def import_mitglieder_command(
             f"Reiseziel, nicht den Sitz der Gruppe. Steht als Hinweis in den Notizen.[/dim]"
         )
 
-    _zielprioritaet_zeigen(config, gruppen)
+    # Bis zum 22.09.2026 stand hier die Zielprioritaet je Gruppe (A-D). Sie
+    # ist als Entscheidungsgrundlage entfallen; beurteilt wird eine Gruppe
+    # nach den Bezuegen in ihren Beitraegen, und die kennt ein Import nicht -
+    # er liest keinen einzigen Beitrag.
+    console.print(
+        "[dim]Bezuege: noch keine - sie entstehen aus den Beitraegen, die der "
+        "Lauf in einer Gruppe liest.[/dim]"
+    )
 
     if dry_run:
         console.print("[cyan]--dry-run:[/cyan] es wurde nichts gespeichert.")
@@ -184,59 +191,6 @@ def import_mitglieder_command(
         console.print(
             f"[green]Arbeitsstand:[/green] {gesetzt}x auf 'mitglied' gesetzt"
             + (f", {schon_weiter} waren bereits weiter" if schon_weiter else "")
-        )
-
-
-def _zielprioritaet_zeigen(config: AppConfig, gruppen: list) -> None:
-    """Zeigt je Gruppe Klasse und Land - und warnt vor Klasse D.
-
-    Die Einstufung wird **gerechnet und nicht gespeichert**; sie taucht sonst
-    erst in der Uebersicht auf, wenn die Gruppen schon im Bestand stehen.
-    Hier steht sie direkt neben dem Import, denn sie entscheidet mehr als der
-    Score: ``Gruppenfortschritt.bearbeitbar`` schliesst Klasse **D ganz aus**.
-    Eine Gruppe mit 480.000 Mitgliedern, die als D hereinkommt, wird nie
-    bearbeitet - und niemand saehe, warum.
-
-    Gerechnet wird ueber ``zielgruppe.aus_group`` mit denselben Regeln, die
-    der Lauf benutzt. Eine zweite Rechnung koennte davon abweichen, und dann
-    naennte der Import eine andere Klasse als die Arbeitsliste.
-    """
-    from fbgroups.marketing import zielgruppe
-
-    regeln = zielgruppe.regeln_aus_config(config)
-    befunde = {g.group_id: zielgruppe.aus_group(g, regeln) for g in gruppen}
-
-    tabelle = Table(title="Zielprioritaet", header_style="bold")
-    tabelle.add_column("Klasse", width=8)
-    tabelle.add_column("Score", justify="right", width=9)
-    tabelle.add_column("Kategorie", width=10)
-    tabelle.add_column("Grund", width=30, no_wrap=True, overflow="ellipsis")
-    # Arabische Gruppennamen sind lang und tragen Emoji-Ketten. Ohne feste
-    # Breite bricht rich sie auf eine Zeile je Zeichen um, und die Tabelle
-    # wird unlesbar - die Klasse links ist ohnehin die Auskunft.
-    tabelle.add_column("Gruppe", width=30, no_wrap=True, overflow="ellipsis")
-
-    for gruppe in sorted(gruppen, key=lambda g: befunde[g.group_id].rang):
-        befund = befunde[gruppe.group_id]
-        klasse = befund.prioritaet.value.upper()
-        farbe = {"A": "green", "B": "cyan", "C": "yellow", "D": "red"}[klasse]
-        region = befund.region.value if befund.region.value != "unbekannt" else ""
-        tabelle.add_row(
-            f"[{farbe}]{klasse}[/{farbe}] {region}",
-            f"{gruppe.score:g}/{gruppe.score_max:g}" if gruppe.score is not None else "-",
-            gruppe.category or "-",
-            befund.grund[:34],
-            (gruppe.name or "[dim](ohne Namen)[/dim]")[:38],
-        )
-    console.print(tabelle)
-
-    ausgeschlossen = [g for g in gruppen if befunde[g.group_id].prioritaet.value == "d"]
-    if ausgeschlossen:
-        console.print(
-            f"[red]{len(ausgeschlossen)} Gruppe(n) in Klasse D - sie werden "
-            f"NICHT bearbeitet[/red] (kein erkennbarer Bezug in Name und "
-            f"Beschreibung). Abhilfe: Kategorie und Name im Bestand pflegen, "
-            f"oder die Begriffe in marketing.zielprioritaet erweitern."
         )
 
 
@@ -415,167 +369,30 @@ def config_check_command() -> None:
     else:
         console.print(f"[green]Beitragsvorlagen in Ordnung:[/green] {anzahl} Fassungen.")
 
-    # --- Zielprioritaet (13.09.2026) ---------------------------------------
+    # --- Bezuege statt Zielklassen (23.09.2026) ---------------------------
     #
-    # Geprueft wird dasselbe wie bei den Score-Gewichten: ein Name, den es
-    # nicht gibt, ist ein Tippfehler und keine Erweiterung. Er faellt hier
-    # schwerer auf als dort - die Klasse A verschwaende still, und die
-    # Kampagne arbeitete wieder in den Gemeinschaftsgruppen, ohne dass etwas
-    # eine Fehlermeldung gaebe.
-    from fbgroups.marketing import zielgruppe
+    # Die Zielprioritaet (A-D), die Region und die Note entscheiden nichts
+    # mehr. Was bleibt, ist eine Schwelle fuer alle Gruppen und die feste
+    # Liste der Bezuege. Ein alter ``marketing.zielprioritaet``-Block wird
+    # nicht mehr gelesen - gesagt wird es, damit niemand dort etwas aendert
+    # und sich wundert, dass es nichts bewirkt.
+    from fbgroups.marketing import automatik as _automatik
+    from fbgroups.marketing.bezug import Bezug
 
-    block = config.get("marketing", "zielprioritaet", default={}) or {}
-    kategorien = {str(k) for k in (block.get("kategorien") or [])}
-    audiences = {str(a) for a in (block.get("audiences") or [])}
-    # Gegengeprueft wird gegen den **Bestand**: ``categories.yaml`` und
-    # ``audiences.yaml`` gibt es nicht mehr, und welche Kategorien vorkommen,
-    # weiss seither allein der Bestand. Ist er leer (frische Datei), wird
-    # nicht gewarnt - sonst meldete ein jungfraeuliches Projekt jeden
-    # richtigen Eintrag als Tippfehler.
-    from fbgroups.storage import SqliteStore as _Store
-
-    try:
-        with _Store(config.path("sqlite_path")) as _gs:
-            _gruppen = _gs.load_groups()
-    except Exception:  # noqa: BLE001 - ohne Bestand wird eben nicht gegengeprueft
-        _gruppen = []
-
-    vorhandene_kat = {(g.category or "").strip() for g in _gruppen if g.category}
-    vorhandene_aud = {t for g in _gruppen for t in (g.audience_tags or [])}
-    unbekannte_kat = sorted(kategorien - vorhandene_kat) if vorhandene_kat else []
-    unbekannte_aud = sorted(audiences - vorhandene_aud) if vorhandene_aud else []
-
-    if not block:
+    if config.get("marketing", "zielprioritaet", default=None):
         console.print(
-            "[yellow]Hinweis: marketing.zielprioritaet fehlt - dann gilt jede "
-            "Gruppe als Klasse D und der Lauf bearbeitet keine.[/yellow]"
+            "[yellow]Hinweis: marketing.zielprioritaet wird seit dem 23.09.2026 "
+            "nicht mehr gelesen (Zielklassen A-D, Region und Note sind entfallen) "
+            "und kann aus settings.yaml entfernt werden.[/yellow]"
         )
-    if unbekannte_kat:
-        console.print(
-            f"[yellow]Warnung: Kategorien aus marketing.zielprioritaet.kategorien "
-            f"kommen im Bestand nicht vor: {', '.join(unbekannte_kat)}. "
-            f"Im Bestand stehen: {', '.join(sorted(vorhandene_kat))}.[/yellow]"
-        )
-    if unbekannte_aud:
-        console.print(
-            f"[yellow]Warnung: Zielgruppen aus marketing.zielprioritaet.audiences "
-            f"kommen im Bestand nicht vor: {', '.join(unbekannte_aud)}.[/yellow]"
-        )
-    if not _gruppen:
-        console.print(
-            "[dim]Der Bestand ist leer - Kategorien und Zielgruppen wurden "
-            "nicht gegengeprueft.[/dim]"
-        )
-    if block and not unbekannte_kat and not unbekannte_aud:
-        zielregeln_vorab = zielgruppe.regeln_aus_config(config)
-        anspruch = zielgruppe.anspruch_aus_config(config)
-        stufen = ", ".join(
-            f"{klasse.value.upper()} ab {stufe.value}"
-            + (" + Strecke" if strecke else "")
-            for klasse, (stufe, strecke) in sorted(anspruch.items(), key=lambda kv: kv[0].value)
-        )
-        console.print(
-            f"[green]Zielprioritaet in Ordnung:[/green] A = "
-            f"{', '.join(sorted(kategorien))} + Ziel, B = {', '.join(sorted(audiences))} "
-            f"+ Deutschland."
-        )
-        klassen = zielgruppe.bearbeitbare_klassen(config)
-        console.print(
-            f"[dim]Mindestrelevanz je Klasse: {stufen}. "
-            + (
-                "In D wird nicht geantwortet."
-                if zielgruppe.Zielprioritaet.D not in klassen
-                else "D steht dabei - auch Gruppen ohne erkennbaren Bezug "
-                "werden besucht, mit der strengsten Schwelle."
-            )
-            + "[/dim]"
-        )
-
-        # --- Die Woerter, an denen Thema und Zielgruppe im Namen haengen --
-        #
-        # Gezaehlt und nicht nur genannt, und zwar aus dem teuersten Anlass
-        # des Projekts (21.09.2026): Ohne ``kategoriebegriffe`` erreicht eine
-        # Gruppe die Klasse A nur mit **gepflegter** Kategorie - und die
-        # Mitgliederliste traegt in ``category`` fast durchgehend
-        # "Unbekannt". Im Betrieb war damit keine einzige Gruppe mehr A,
-        # jede verlangte "hoch + Strecke", und neun von dreizehn fielen als
-        # D ganz aus der Runde. Eine leere Liste sieht dabei vollkommen
-        # richtig aus - sie meldet nichts, sie liefert nur nie ein Thema.
-        leere_listen = [
-            name
-            for name, liste in (
-                ("kategoriebegriffe", zielregeln_vorab.kategoriebegriffe),
-                ("audiencebegriffe", zielregeln_vorab.audiencebegriffe),
-            )
-            if not liste
-        ]
-        if leere_listen:
-            console.print(
-                f"[yellow]Warnung: marketing.zielprioritaet."
-                f"{' und .'.join(leere_listen)} ist leer. Dann zaehlt nur die "
-                f"gepflegte Kategorie bzw. der gepflegte Tag - eine Gruppe ohne "
-                f"beides faellt aus dem Zielmarkt heraus.[/yellow]"
-            )
-        else:
-            console.print(
-                f"[dim]Im Namen erkannt: {len(zielregeln_vorab.kategoriebegriffe)} "
-                f"Themenwoerter, {len(zielregeln_vorab.audiencebegriffe)} "
-                f"Zielgruppenwoerter. Die gepflegte Angabe geht ihnen vor.[/dim]"
-            )
-
-        # --- Der geografische Vorrang (14.09.2026) ------------------------
-        #
-        # Die beiden Laenderlisten werden gezaehlt und nicht nur genannt.
-        # Eine leere ``ausserhalb``-Liste ist der stillste Fehler, den es
-        # hier gibt: Es sieht alles richtig aus, nur faellt keine einzige
-        # Gruppe mehr aus dem Zielmarkt heraus - "نقل من لبنان إلى سورية"
-        # stuende wieder vor den deutschen Gruppen. Dasselbe gilt fuer
-        # ``europa``: ohne sie ist jede oesterreichische Gruppe "Land
-        # unbekannt" und rutscht hinter die, die Deutschland nennen.
-        zielregeln = zielgruppe.regeln_aus_config(config)
-        fehlend = [
-            name
-            for name, liste in (
-                ("europa", zielregeln.europa),
-                ("ausserhalb", zielregeln.ausserhalb),
-            )
-            if not liste
-        ]
-        if fehlend:
-            console.print(
-                f"[yellow]Warnung: marketing.zielprioritaet.{' und .'.join(fehlend)} "
-                f"ist leer. Dann entscheidet allein die Klasse, und eine Gruppe "
-                f"mit einer Strecke ausserhalb Europas steht wieder vor den "
-                f"deutschen.[/yellow]"
-            )
-        else:
-            # Ein Wort, das in beiden Listen steht, waere ein Widerspruch mit
-            # stiller Aufloesung: ``bestimme_region`` fragt Europa zuerst,
-            # also gewaenne es immer - und die zweite Liste saehe aus, als
-            # taete sie etwas.
-            doppelt = sorted(set(zielregeln.europa) & set(zielregeln.ausserhalb))
-            if doppelt:
-                console.print(
-                    f"[yellow]Warnung: in europa UND ausserhalb: "
-                    f"{', '.join(doppelt)}. Europa gewinnt - der Eintrag in "
-                    f"ausserhalb wirkt nie.[/yellow]"
-                )
-            # Und ein Ziel, das zugleich als "ausserhalb" gilt, nimmt den
-            # ganzen Zielmarkt mit: Jede Gruppe nennt ihr Ziel.
-            ziel_kollision = sorted(set(zielregeln.ziele) & set(zielregeln.ausserhalb))
-            if ziel_kollision:
-                console.print(
-                    f"[red]Fehler: {', '.join(ziel_kollision)} steht in ziele UND "
-                    f"ausserhalb. Damit faellt jede Gruppe des Zielmarkts aus "
-                    f"Klasse A heraus.[/red]"
-                )
-            console.print(
-                f"[dim]Geografischer Vorrang: Deutschland "
-                f"({len(zielregeln.herkunft)} Woerter) vor Europa "
-                f"({len(zielregeln.europa)}) vor unbekannt. "
-                f"{len(zielregeln.ausserhalb)} Woerter nehmen eine Gruppe "
-                f"aus Klasse A heraus.[/dim]"
-            )
+    console.print(
+        f"[green]Bezuege:[/green] {len(Bezug)} festgelegt - "
+        f"{', '.join(b.value for b in Bezug)}."
+    )
+    console.print(
+        f"[dim]Mindestrelevanz fuer jede Gruppe: "
+        f"{_automatik.mindestrelevanz(config).value} (marketing.mindestrelevanz).[/dim]"
+    )
 
     # --- Grenzen je Aktion ------------------------------------------------
     #

@@ -9,7 +9,7 @@ die niemand mehr erteilen muss.
 from __future__ import annotations
 
 from fbgroups.config import AppConfig
-from fbgroups.marketing import lauf, zielgruppe
+from fbgroups.marketing import automatik, lauf
 from fbgroups.marketing.entscheidung import (
     LINKMODUS,
     Anspruch,
@@ -39,7 +39,6 @@ def _gruppe(gid: str, *, veroeffentlicht: int = 0) -> Gruppenfortschritt:
         mitglied=True,
         regeln_gelesen=True,
         post_status=PostStatus.VEROEFFENTLICHT,
-        note="A++",
     )
 
 
@@ -117,10 +116,11 @@ def test_niedrig_ist_die_schwaechste_schwelle_und_heisst_mittel(
 
     class _Niedrig:
         def get(self, *_pfad, default=None):  # noqa: ANN002, ANN003
-            return {"mindestrelevanz": {"a": "niedrig", "b": "niedrig", "c": "niedrig"}}
+            return "niedrig"
 
-    tabelle = zielgruppe.anspruch_aus_config(_Niedrig())
-    assert tabelle[zielgruppe.Zielprioritaet.A][0] is Relevanz.MITTEL
+    # Seit dem 23.09.2026 eine Schwelle fuer alle Gruppen
+    # (``marketing.mindestrelevanz``) statt einer je Zielklasse.
+    assert automatik.mindestrelevanz(_Niedrig()) is Relevanz.MITTEL
 
 
 # --- 5. Das Kampagnenziel -------------------------------------------------

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -344,6 +345,24 @@ CREATE TABLE IF NOT EXISTS automatik_lauf_uebersprungen (
 
 CREATE INDEX IF NOT EXISTS idx_automatik_lauf_status
     ON automatik_lauf(status);
+
+-- Die Bezuege je gelesenem Beitrag (23.09.2026) - die Grundlage, auf der
+-- eine Gruppe seither beurteilt wird (``bezug.fuer_gruppe``).
+--
+-- **Kein Text, kein Autor**: ``bezuege`` haelt Schlagwoerter wie
+-- ``reisender,mitnahme`` - das Urteil, nie den Satz. Dieselbe Grenze wie bei
+-- ``group_posts``, das keine Textspalte hat.
+--
+-- Je Beitrag eine Zeile und nicht je Gruppe ein Zaehler: Derselbe Beitrag
+-- wird in jedem Durchgang wieder gelesen, und ein Zaehler zaehlte ihn jedes
+-- Mal mit. Eine Zeile je Adresse ueberschreibt sich selbst.
+CREATE TABLE IF NOT EXISTS beitrag_bezuege (
+    group_id    TEXT NOT NULL,
+    post_url    TEXT NOT NULL,
+    bezuege     TEXT NOT NULL DEFAULT '',
+    gelesen_am  TEXT NOT NULL,
+    PRIMARY KEY (group_id, post_url)
+);
 """
 
 # Zweiter Teil: Ereignisse, Empfehlungen, Praemien. Getrennt gehalten, weil er
@@ -2602,6 +2621,57 @@ class MarketingStore:
             (lauf_id, _iso(datetime.now(UTC))),
         ).fetchall()
         return {(str(r["campaign_id"]), str(r["group_id"])) for r in rows}
+
+    def merke_bezuege(
+        self, group_id: str, post_url: str, bezuege: Iterable[str]
+    ) -> None:
+        """Die Bezuege **eines** gelesenen Beitrags festhalten (23.09.2026).
+
+        Auch ein Beitrag **ohne** Bezug bekommt seine Zeile: Er ist gelesen
+        worden, und "gelesen, nichts gefunden" ist etwas anderes als "nie
+        gelesen" - die spaetere Behandlung der Gruppen ohne Bezug wird beides
+        unterscheiden muessen.
+
+        Derselbe Beitrag ueberschreibt seine Zeile: Er wird in jedem
+        Durchgang wieder gelesen und darf nicht mehrfach zaehlen.
+        """
+        if not post_url:
+            return
+        self.conn.execute(
+            "INSERT INTO beitrag_bezuege (group_id, post_url, bezuege, gelesen_am) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(group_id, post_url) DO UPDATE SET "
+            "bezuege = excluded.bezuege, gelesen_am = excluded.gelesen_am",
+            (
+                group_id,
+                post_url,
+                ",".join(sorted({str(b) for b in bezuege})),
+                _iso(datetime.now(UTC)),
+            ),
+        )
+        self.conn.commit()
+
+    def gruppenbezuege(self, group_ids: Iterable[str] | None = None) -> dict:
+        """``group_id -> bezug.Gruppenbezuege`` - gesammelt aus den Beitraegen.
+
+        Eine Gruppe ohne eine einzige gelesene Zeile fehlt im Ergebnis; der
+        Aufrufer behandelt sie wie ``[]`` mit ``gelesen = False``.
+        """
+        from fbgroups.marketing.bezug import fuer_gruppe
+
+        rows = self.conn.execute(
+            "SELECT group_id, bezuege FROM beitrag_bezuege"
+        ).fetchall()
+        gesucht = set(group_ids) if group_ids is not None else None
+        je_gruppe: dict[str, list[list[str]]] = {}
+        for r in rows:
+            gid = str(r["group_id"])
+            if gesucht is not None and gid not in gesucht:
+                continue
+            je_gruppe.setdefault(gid, []).append(
+                [b for b in str(r["bezuege"] or "").split(",") if b]
+            )
+        return {gid: fuer_gruppe(beitraege) for gid, beitraege in je_gruppe.items()}
 
     def naechste_rueckkehr(self, lauf_id: int) -> tuple[int, str] | None:
         """Wie viele Gruppen ruhen und wann die erste zurueckkommt.
