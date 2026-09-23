@@ -802,6 +802,33 @@ def fetch_group_html(context: BrowserContext, group_url: str) -> str:
         page.close()
 
 
+def mit_bildtexten(text: str, bildtexte: list[str | None]) -> str:
+    """Der Artikeltext, ergaenzt um die Bildbeschreibungen (``alt``).
+
+    In den Reisegruppen steht die Ankuendigung oft **im Bild**: ein Foto mit
+    "نازل ع الشام 27/9 - معي وزن" darauf und kein Wort daneben. Der
+    Artikeltext ist dann leer, und ``inhalt.lies`` meldete ``UNLESBAR`` -
+    fuer den Beitrag, der am deutlichsten eine Gelegenheit ist. Facebook
+    schreibt die erkannte Schrift in das ``alt`` des Bildes ("قد تكون صورة
+    ‏نص‏ '...'"); aus der Musterliste des Nutzers vom 23.09.2026.
+
+    **Dieselbe Grenze wie fuer den Text:** durchgereicht, nicht gespeichert.
+    Die Bildbeschreibung wandert mit dem Text zu ``inhalt.lies`` und endet
+    dort. Doppelte Beschriftungen fallen weg (ein Beitrag mit vier Bildern
+    traegt oft viermal dieselbe), und der Anteil ist gedeckelt, damit ein
+    Album den eigentlichen Text nicht verdraengt.
+    """
+    gesehen: list[str] = []
+    for alt in bildtexte:
+        alt = (alt or "").strip()
+        if alt and alt not in gesehen:
+            gesehen.append(alt)
+    if not gesehen:
+        return text
+    anhang = " ".join(gesehen)[:300]
+    return f"{text}\n{anhang}" if text else anhang
+
+
 def _artikel_auswerten(article, group_id: str) -> dict | None:
     """Aus **einem** Artikel Adresse, Kennzahlen und der Text - oder ``None``.
 
@@ -833,6 +860,12 @@ def _artikel_auswerten(article, group_id: str) -> dict | None:
         return None
 
     text_content = article.inner_text()
+    try:
+        bildtexte = article.eval_on_selector_all(
+            "img[alt]", "els => els.map(e => e.getAttribute('alt'))"
+        )
+    except Exception:  # noqa: BLE001 - ohne Bildtexte bleibt der Artikeltext
+        bildtexte = []
 
     comments_match = re.search(
         r"(\d[\d.,\s]*(?:[kKmM]|Tsd\.?|Mio\.?)?)\s*(?:Kommentare?|comments?|تعليقات|تعليق)",
@@ -859,8 +892,9 @@ def _artikel_auswerten(article, group_id: str) -> dict | None:
         "comments": comments_count,
         # Durchgereicht, nicht gespeichert - siehe Docstring. Gekuerzt, weil
         # fuer die Themenerkennung der Anfang genuegt und ein ganzer
-        # Kommentarbaum nur Rauschen mitbraechte.
-        "text": text_content[:600],
+        # Kommentarbaum nur Rauschen mitbraechte. Die Bildtexte kommen nach
+        # dem Schnitt dazu, sonst fielen sie bei einem langen Text weg.
+        "text": mit_bildtexten(text_content[:600], bildtexte),
     }
 
 

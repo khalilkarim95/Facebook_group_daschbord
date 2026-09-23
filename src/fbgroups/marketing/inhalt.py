@@ -221,6 +221,11 @@ _REISE = (
     *_BEWEGUNG,
     "وزن", "مطار", "بالمطار", "عالطيارة", "بالطائرة", "حجز", "ترانزيت",
     "رحلتي", "وصلت",
+    # 23.09.2026, aus der Musterliste des Nutzers: die Mehrzahlformen. Der
+    # Teilstringabgleich traegt nur in eine Richtung - "رحلة" wird zu
+    # "رحله" normalisiert und steckt nicht in "رحلات", "حقيبة" nicht in
+    # "حقائب". "شنط" deckt "شنطة" gleich mit ab.
+    "رحلات", "حقائب", "حقايب", "شنط",
 )
 _WOHNUNG = (
     "wohnung", "wohnungen", "zimmer", "wg", "miete", "mieten", "apartment",
@@ -354,6 +359,10 @@ _DOKUMENTE = (
     "dokument", "dokumente", "unterlagen", "papiere", "urkunde", "vollmacht",
     "document", "documents", "papers",
     "وثيقة", "وثائق", "اوراق", "ورقة", "شهادة", "وكالة", "معاملة ورق",
+    # 23.09.2026: Pass und "Unterlagen" fehlten. Unbedenklich, weil diese
+    # Liste nur **innerhalb** des Versandthemas gefragt wird - ein Beitrag
+    # ueber einen abgelaufenen Pass bleibt ein Behoerdengang.
+    "جواز", "مستندات",
 )
 
 #: Freier Platz im Gepaeck - der Halbsatz, der aus einer Reiseankuendigung
