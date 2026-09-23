@@ -1,4 +1,4 @@
-# Facebook Groups Finder – Germany
+# Facebook-Gruppen – Kampagnen und Tracking
 
 Verwaltet Facebook-Gruppen für Marketing-Kooperationen in Deutschland.
 Zielmarkt: syrische und arabische Communities.
@@ -8,13 +8,9 @@ Zielgruppe stehen in der Datenbank und werden von Hand oder über die Übersicht
 gesetzt. Darauf setzt die Marketing-Erweiterung auf — Kampagnen, Tracking-Codes,
 Textvorlagen, Arbeitsseite und Kommentarautomatik.
 
-> **Entfernt am 20.09.2026 — die Entdeckungsschicht.** Suche, Suchanbieter,
-> Anfragepläne, Klassifikation aus Begriffslisten, Seed-Import, Gruppenseiten-
-> Abruf, Bericht und Export sind aus dem Projekt genommen, ebenso die fünf
-> Konfigurationsdateien, an denen sie hingen (`audiences.yaml`, `cities.yaml`,
-> `categories.yaml`, `queries.yaml`, `providers.yaml`). Was davon noch gebraucht
-> wurde, ist in `settings.yaml` bzw. in den Bestand gezogen — nichts wurde
-> nachgebaut.
+Beurteilt wird eine Gruppe nach den **Bezügen**, die in ihren Beiträgen
+tatsächlich vorkommen (Reisender, Mitnahme, Gepäckplatz, Dokumente …,
+`marketing/bezug.py`) — nicht nach einer Klasse aus ihrem Namen.
 
 ## Projektgrenzen
 
@@ -69,16 +65,12 @@ Drei Spalten bedeuten etwas anderes, als ihr Name verspricht:
 
 | Spalte | Inhalt | Ergebnis |
 |---|---|---|
-| `category` | Anzeigename („Reise & Transport") | Kennung `reise` — sonst greift die Zielpriorität nie |
+| `category` | Anzeigename („Reise & Transport") | Kennung `reise` |
 | `city` | **Reiseziel** („Damaskus") | verworfen, steht als Hinweis in den Notizen |
 | `activity` | Kopf der Gruppenseite | Sichtbarkeit, Mitgliederzahl, Beiträge/Tag |
 
 Aus `activity` wird nur übernommen, was ausdrücklich dasteht. „25 ungelesene
 Beiträge" ist der eigene Postfachstand und **keine** Beitragszahl je Tag.
-
-Der Befehl zeigt anschließend die Zielpriorität je Gruppe. Klasse **D wird
-nicht bearbeitet** — steht dort eine Gruppe, die bearbeitet werden soll, fehlt
-ihr Kategorie oder Bezug im Namen.
 
 ## Validierung, Status und Score
 
@@ -123,7 +115,7 @@ Alles Fachliche liegt in `config/` – Codeänderungen sind dafür nicht nötig:
 
 | Datei | Inhalt | Pflicht |
 |---|---|---|
-| `settings.yaml` | Scoring-Gewichte, Pfade, Grenzen je Aktion, Zielpriorität | ja |
+| `settings.yaml` | Scoring-Gewichte, Pfade, Grenzen je Aktion, Mindestrelevanz | ja |
 | `textvorlagen.yaml` | Beitrags- und Kommentarvorlagen, Anlasstexte | nein |
 | `rewards.yaml` | Prämienregeln (liest `marketing/rewards.py` selbst) | nein |
 

@@ -2,14 +2,7 @@
 
 paths:
   data_dir: data
-  seeds_dir: data/seeds
-  exports_dir: data/exports
-  runs_dir: data/runs
   sqlite_path: data/groups.sqlite
-  # Dauerhafter Anfragespeicher: eine bereits erfolgreich beantwortete Anfrage
-  # geht nie ein zweites Mal an den Suchdienst. Bewusst eine eigene Datei -
-  # der Bestand (groups.sqlite) bleibt loeschbar, ohne Guthaben zu verlieren.
-  query_cache_path: data/query_cache.sqlite
 
 marketing:
   # Basis-URL der Anwendung, die den Tracking-Link entgegennimmt.
@@ -263,49 +256,6 @@ watchdog:
     # unbeantworteten endet `ssh` - erst dadurch merkt der Waechter, dass er
     # neu aufmachen muss.
     lebenszeichen: 30
-
-dedupe:
-  # Unscharfer Namensabgleich: ab diesem Wert (0-100) gilt ein Paar als
-  # Dublettenverdacht. Es wird NICHT automatisch zusammengefuehrt,
-  # sondern nur im Report gemeldet.
-  fuzzy_threshold: 88
-  # Sehr kurze Namen erzeugen zu viele Falschtreffer.
-  fuzzy_min_name_length: 8
-
-classification:
-  # Treffer im Gruppennamen wiegt schwerer als im Beschreibungstext.
-  name_confidence: 1.0
-  snippet_confidence: 0.5
-  # Ab welcher Konfidenz eine Stadt uebernommen wird.
-  city_min_confidence: 0.5
-
-# Abruf der oeffentlich erreichbaren Gruppenseite auf facebook.com
-# (fbgroups enrich). Bis zum 27.08.2026 war jeder Zugriff auf facebook.com
-# ausgeschlossen; der Nutzer hat die Grenze an diesem Tag ausdruecklich fuer
-# das LESEN oeffentlicher Gruppenseiten geoeffnet, weil Mitgliederzahl und
-# Aktivitaet zusammen die Haelfte des Scores tragen und nirgends sonst zu
-# bekommen sind - in 147 gespeicherten Serper-Antworten kommt keine einzige
-# Mitgliederzahl vor.
-#
-# Was weiterhin ausgeschlossen bleibt: Login, Sitzungsuebernahme, Umgehung
-# von Sperren, Personendaten. Siehe extract/gruppenseite.py.
-enrich:
-  # Sekunden zwischen zwei Abrufen. Bewusst gross: Der Lauf soll langsam und
-  # erkennbar sein, nicht schnell und unauffaellig. Bei 313 Gruppen sind 6
-  # Sekunden gut eine halbe Stunde - das ist der Preis dafuer, dass niemand
-  # den Abruf fuer einen Angriff haelt.
-  mindestabstand_sekunden: 6.0
-
-  # Hoechstens so viele Abrufe je Lauf, wenn --alle gesetzt ist. Eine harte
-  # Obergrenze wie max_queries_per_run bei der Suche: Wer sich vertippt, soll
-  # nicht den ganzen Bestand abrufen.
-  max_pro_lauf: 100
-
-  # Nach so vielen Tagen gilt ein Befund als veraltet und wird erneut geholt.
-  # Eine Mitgliederzahl von vor einem Jahr ist keine Mitgliederzahl von heute;
-  # jeden Tag neu zu fragen waere aber genau der Betrieb, den eine Sperre
-  # ausloest.
-  hoechstalter_tage: 30
 
 scoring:
   # Summe der Gewichte = 100. Der Score ist die Summe der tatsaechlich

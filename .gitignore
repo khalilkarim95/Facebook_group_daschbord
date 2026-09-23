@@ -22,6 +22,7 @@ data/cache/
 data/runs/
 data/exports/
 data/backups/
+data/backup/
 data/browser_state/
 # Die Sperre eines laufenden `campaign automatik` - Laufzeit, kein Code.
 data/*.lock
@@ -31,6 +32,7 @@ data/*.sqlite-wal
 data/*.sqlite-shm
 # Sicherungskopien des Bestands (bak-vor-reset, bak-vor-zuordnung ...)
 data/*.sqlite.bak*
+data/*.sqlite.alt
 data/*.bak-*
 *.bak
 test_results.txt
@@ -39,7 +41,3 @@ test_results.txt
 # gehoeren wie alles unter data/ nicht ins Repository - `ausrollen.sh
 # --mitglieder` traegt sie eigens hinueber.
 data/from_lokal/
-
-# Seeds: Beispieldatei bleibt versioniert, echte Seeds nicht
-data/seeds/*
-!data/seeds/example_seeds.csv

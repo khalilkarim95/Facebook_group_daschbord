@@ -115,8 +115,8 @@ def _stores(config: AppConfig) -> tuple[SqliteStore, MarketingStore]:
     pfad = config.path("sqlite_path")
     if not pfad.exists():
         console.print(
-            "[yellow]Noch keine Datenbank. Zuerst 'fbgroups import-seeds' "
-            "oder 'fbgroups search' ausfuehren.[/yellow]"
+            "[yellow]Noch keine Datenbank. Zuerst 'fbgroups import-mitglieder' "
+            "ausfuehren.[/yellow]"
         )
         raise typer.Exit(code=1)
     return SqliteStore(pfad), MarketingStore(pfad)
