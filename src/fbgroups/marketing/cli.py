@@ -828,6 +828,12 @@ def campaign_kurzlinks(
     campaign_id: str = typer.Argument(
         "", help="Nur diese Kampagne. Ohne Angabe: der ganze Bestand."
     ),
+    lesbar: bool = typer.Option(
+        False,
+        "--lesbar",
+        help="Noch nicht veroeffentlichten Zuordnungen einen lesbaren Namen geben "
+        "(b-tarikak.de/t/safar-sham-12).",
+    ),
 ) -> None:
     """Traegt die oeffentlichen Kurzcodes nach - fuer Zuordnungen von frueher.
 
@@ -843,6 +849,17 @@ def campaign_kurzlinks(
     with MarketingStore(config.path("sqlite_path")) as store:
         if campaign_id:
             _kampagne_oder_ende(store, campaign_id)
+        store.merke_link_basis(str(config.get("marketing", "link_basis", default="") or ""))
+        if lesbar:
+            if not store.link_basis():
+                console.print("[red]marketing.link_basis ist nicht gesetzt.[/red]")
+                raise typer.Exit(code=1)
+            umgestellt = store.lesbar_machen(campaign_id)
+            console.print(
+                f"[green]{umgestellt}[/green] noch nicht veroeffentlichte Zuordnung(en) "
+                f"tragen jetzt einen lesbaren Namen unter {store.link_basis()}/ . "
+                "Veroeffentlichte behalten ihre Adresse."
+            )
         anzahl = store.kurzcodes_nachtragen(campaign_id)
 
     umfang = f"Kampagne {campaign_id}" if campaign_id else "dem ganzen Bestand"

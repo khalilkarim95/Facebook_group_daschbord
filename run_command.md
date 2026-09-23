@@ -92,7 +92,22 @@ fbgroups campaign sync batreeq-syrian-germany                    # Codes vergebe
 fbgroups campaign status batreeq-syrian-germany active           # ohne 'active' kein Lauf
 fbgroups campaign text batreeq-syrian-germany --aus-vorlage --ja # Beitrag + Kommentar
 fbgroups campaign kurzlinks                                      # Kurzcodes nachtragen
+fbgroups campaign kurzlinks --lesbar                             # b-tarikak.de/t/safar-sham-12
 ```
+
+Lesbare Adressen brauchen einmalig eine nginx-Regel im `server`-Block von
+**b-tarikak.de** (nicht go.b-tarikak.de), vor der Regel fuer `/`:
+
+```nginx
+location /t/ {
+    proxy_pass http://127.0.0.1:8090/t/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Danach `sudo nginx -t && sudo systemctl reload nginx`.
 
 `sync` vergibt Tracking-Codes, und **ein vergebener Code wird nie
 zurueckgenommen** - erst `--dry-run` lesen.

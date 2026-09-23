@@ -20,6 +20,14 @@ marketing:
   # einen Dienst, der dort nicht mehr antwortet.
   app_base_url: https://go.b-tarikak.de
 
+  # Der Vorspann der **lesbaren** Adresse im Beitrag (23.09.2026):
+  #   https://b-tarikak.de/t/safar-sham-12   statt   go.b-tarikak.de/r/wr4s9xw
+  # nginx auf b-tarikak.de reicht /t/ an den Dienst weiter (127.0.0.1:8090/t/).
+  # Leer: es bleibt beim Kurzcode unter /r/. Bestehende Zuordnungen stellt
+  # `fbgroups campaign kurzlinks --lesbar` um - nur die, deren Text noch nicht
+  # veroeffentlicht ist.
+  link_basis: https://b-tarikak.de/t
+
   tracking:
     prefix: FB        # Kanal, erster Teil des Codes: FB-SYR-BER-001
     path: r           # ergibt {APP_BASE_URL}/r/{code}

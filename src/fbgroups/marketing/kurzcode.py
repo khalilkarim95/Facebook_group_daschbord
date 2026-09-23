@@ -70,6 +70,51 @@ def kurzcode(tracking_code: str, salt: str, *, runde: int = 0, laenge: int = LAE
     return "".join(zeichen)
 
 
+#: Die Woerter des lesbaren Decknamens (23.09.2026): ``safar-sham-12``.
+#:
+#: Umschrift, wie sie in den Gruppen selbst geschrieben wird - Reise, Orte,
+#: Mitnahme. Kein Wort, das fuer sich wie Werbung klingt, und keines, das
+#: eine Gruppe, Stadt in Deutschland oder laufende Nummer verraet: Der Name
+#: ist wie der Kurzcode ein **Deckname**, abgeleitet aus Code und Geheimnis,
+#: und sagt einem Leser nichts ueber den Aufbau der Kampagne.
+#:
+#: **Hinten anhaengen ist gefahrlos, umsortieren nicht**: Die Ableitung waehlt
+#: nach Position. Ein vergebener Name steht aber gespeichert in der Spalte
+#: und aendert sich dadurch nicht - betroffen waeren nur kuenftige.
+WOERTER: tuple[str, ...] = (
+    "safar", "sham", "halab", "homs", "hama", "tartus", "ladqiye", "daraa",
+    "shanta", "hadiye", "amana", "tariq", "rihla", "musafer", "matar", "ahl",
+    "bait", "zyara", "awde", "wusul", "jisr", "yasmin", "zaytun", "qahwe",
+)
+
+
+def lesbarer_code(tracking_code: str, salt: str, *, runde: int = 0) -> str:
+    """Ein lesbarer Deckname: zwei Woerter und eine Zahl (``safar-sham-12``).
+
+    Dieselbe Ableitung wie ``kurzcode`` (HMAC aus Code, Runde und Geheimnis),
+    nur mit Woertern statt Zeichen: gleiche Eingabe, gleiches Ergebnis, und
+    ``runde`` ist der Ausweg aus einem Zusammenstoss. 24 x 23 x 90 sind rund
+    50.000 Namen - bei einigen hundert Zuordnungen genug, und ein
+    Zusammenstoss wird trotzdem behandelt.
+
+    Die beiden Woerter sind verschieden ("sham-sham" liest sich wie ein
+    Fehler), die Zahl ist zweistellig (10-99), damit sie nicht wie eine
+    laufende Nummer aussieht.
+    """
+    roh = hmac.new(
+        salt.encode("utf-8"),
+        f"lesbar|{tracking_code}#{runde}".encode(),
+        hashlib.sha256,
+    ).digest()
+    zahl = int.from_bytes(roh, "big")
+    zahl, erster = divmod(zahl, len(WOERTER))
+    zahl, zweiter = divmod(zahl, len(WOERTER) - 1)
+    if zweiter >= erster:
+        zweiter += 1
+    zahl, nummer = divmod(zahl, 90)
+    return f"{WOERTER[erster]}-{WOERTER[zweiter]}-{nummer + 10}"
+
+
 def ist_kurzcode(code: str) -> bool:
     """Ob eine Zeichenfolge nach einem Kurzcode aussieht.
 
@@ -85,4 +130,4 @@ def ist_kurzcode(code: str) -> bool:
     )
 
 
-__all__ = ["ALPHABET", "LAENGE", "ist_kurzcode", "kurzcode"]
+__all__ = ["ALPHABET", "LAENGE", "WOERTER", "ist_kurzcode", "kurzcode", "lesbarer_code"]

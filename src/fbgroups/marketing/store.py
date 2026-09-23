@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from fbgroups.marketing.kurzcode import kurzcode
+from fbgroups.marketing.kurzcode import kurzcode, lesbarer_code
 from fbgroups.marketing.models import (
     MARKETING_FORTSCHRITT,
     POST_STATUS_ZU_JOB,
@@ -58,6 +58,11 @@ from fbgroups.marketing.queue import darf_arbeiten, pruefe_uebergang, zustand_sc
 #: selben Speicher. Beide sind Eigenschaften **dieser** Datenbank: Wer die
 #: Datei umzieht, nimmt sie mit, und die Adressen bleiben dieselben.
 _KURZCODE_SALT = "kurzcode_salt"
+#: Der Vorspann der oeffentlichen Adresse (``https://b-tarikak.de/t``). Steht
+#: im Speicher und nicht nur in der Konfiguration, weil ``vergib_kurzcodes``
+#: keine Konfiguration kennt; geschrieben wird er vom Dienst beim Start und
+#: von der Kommandozeile (``merke_link_basis``).
+_LINK_BASIS = "link_basis"
 
 
 @dataclass(frozen=True)
@@ -3081,6 +3086,20 @@ class MarketingStore:
             self.set_meta(_KURZCODE_SALT, salt)
         return salt
 
+    def merke_link_basis(self, basis: str) -> None:
+        """Haelt den Vorspann der lesbaren Adressen fest (``marketing.link_basis``).
+
+        Leer heisst: keine lesbaren Namen, es bleibt beim Kurzcode unter
+        ``/r/``. Geschrieben nur, wenn sich etwas aendert - der Dienst ruft
+        das bei jedem Start.
+        """
+        basis = (basis or "").strip().rstrip("/")
+        if (self.meta(_LINK_BASIS) or "") != basis:
+            self.set_meta(_LINK_BASIS, basis)
+
+    def link_basis(self) -> str:
+        return (self.meta(_LINK_BASIS) or "").strip().rstrip("/")
+
     def vergib_kurzcodes(self, campaign_id: str, group_id: str) -> CampaignGroup | None:
         """Legt die oeffentlichen Kurzcodes dieses Paares an - einmal, endgueltig.
 
@@ -3105,6 +3124,11 @@ class MarketingStore:
             return None
 
         salt = self.kurzcode_salt()
+        # **Lesbare Namen unter eigener Adresse** (23.09.2026):
+        # ``https://b-tarikak.de/t/safar-sham-12`` statt
+        # ``go.b-tarikak.de/r/wr4s9xw``. Nur fuer neue Decknamen - ein
+        # vergebener bleibt, wie er ist.
+        lesbar_basis = self.link_basis()
         for spalte, url_spalte, code, alt_url, vorhanden in (
             ("public_code", "public_url", link.tracking_code, link.tracking_url, link.public_code),
             (
@@ -3117,17 +3141,22 @@ class MarketingStore:
         ):
             if not code or vorhanden:
                 continue
-            kurz = self._freier_kurzcode(code, salt)
-            basis = alt_url.rsplit("/r/", 1)[0] if "/r/" in alt_url else ""
+            if lesbar_basis:
+                kurz = self._freier_kurzcode(code, salt, lesbar=True)
+                url = f"{lesbar_basis}/{kurz}"
+            else:
+                kurz = self._freier_kurzcode(code, salt)
+                basis = alt_url.rsplit("/r/", 1)[0] if "/r/" in alt_url else ""
+                url = f"{basis}/r/{kurz}" if basis else ""
             self.conn.execute(
                 f"UPDATE campaign_groups SET {spalte} = ?, {url_spalte} = ? "  # noqa: S608
                 f"WHERE campaign_id = ? AND group_id = ? AND {spalte} IS NULL",
-                (kurz, f"{basis}/r/{kurz}" if basis else "", campaign_id, group_id),
+                (kurz, url, campaign_id, group_id),
             )
         self.conn.commit()
         return self.link_for(campaign_id, group_id)
 
-    def _freier_kurzcode(self, tracking_code: str, salt: str) -> str:
+    def _freier_kurzcode(self, tracking_code: str, salt: str, *, lesbar: bool = False) -> str:
         """Der abgeleitete Kurzcode - und bei einem Zusammenstoss der naechste.
 
         Siebenstellig aus 29 Zeichen: Ein Zusammenstoss ist bei dreihundert
@@ -3136,7 +3165,11 @@ class MarketingStore:
         gut - und das faellt in keiner Auswertung auf.
         """
         for runde in range(50):
-            kandidat = kurzcode(tracking_code, salt, runde=runde)
+            kandidat = (
+                lesbarer_code(tracking_code, salt, runde=runde)
+                if lesbar
+                else kurzcode(tracking_code, salt, runde=runde)
+            )
             belegt = self.conn.execute(
                 "SELECT 1 FROM campaign_groups "
                 "WHERE public_code = ? OR public_code_browser = ? "
@@ -3146,6 +3179,54 @@ class MarketingStore:
             if belegt is None:
                 return kandidat
         raise RuntimeError(f"Kein freier Kurzcode fuer {tracking_code} gefunden.")
+
+    def lesbar_machen(self, campaign_id: str = "") -> int:
+        """Gibt den **noch nicht veroeffentlichten** Paaren einen lesbaren Namen.
+
+        Nur wo nichts hinausgegangen ist - weder der Beitrag noch eine
+        Kommentarfassung: Dort kann der alte Kurzcode in keinem Beitrag
+        stehen, und ihn zu ersetzen kostet keinen Klick. Ein Paar mit
+        veroeffentlichtem Text behaelt seine Adresse, denn sie steht in einer
+        Gruppe.
+
+        Ohne ``link_basis`` geschieht nichts. Returns: wie viele Paare.
+        """
+        if not self.link_basis():
+            return 0
+        bedingung = (
+            "cg.post_status <> 'veroeffentlicht' AND NOT EXISTS ("
+            "SELECT 1 FROM campaign_group_texte t WHERE t.campaign_id = cg.campaign_id "
+            "AND t.group_id = cg.group_id AND t.status = 'veroeffentlicht')"
+        )
+        werte: tuple = ()
+        if campaign_id:
+            bedingung += " AND cg.campaign_id = ?"
+            werte = (campaign_id,)
+        paare = self.conn.execute(
+            f"SELECT cg.campaign_id, cg.group_id FROM campaign_groups cg WHERE {bedingung}",  # noqa: S608
+            werte,
+        ).fetchall()
+        basis = self.link_basis()
+        anzahl = 0
+        for zeile in paare:
+            link = self.link_for(zeile["campaign_id"], zeile["group_id"])
+            if link is None:
+                continue
+            if link.public_url.startswith(basis + "/") and (
+                not link.tracking_code_browser
+                or link.public_url_browser.startswith(basis + "/")
+            ):
+                continue
+            self.conn.execute(
+                "UPDATE campaign_groups SET public_code = NULL, public_url = '', "
+                "public_code_browser = NULL, public_url_browser = '' "
+                "WHERE campaign_id = ? AND group_id = ?",
+                (zeile["campaign_id"], zeile["group_id"]),
+            )
+            self.conn.commit()
+            self.vergib_kurzcodes(zeile["campaign_id"], zeile["group_id"])
+            anzahl += 1
+        return anzahl
 
     def kurzcodes_nachtragen(self, campaign_id: str = "") -> int:
         """Traegt fehlende Kurzcodes nach. Returns: fuer wie viele Paare.

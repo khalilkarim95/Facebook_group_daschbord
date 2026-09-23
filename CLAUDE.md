@@ -284,6 +284,16 @@ Code (`FB-SYR-DUE-004`). **Gespeichert und ausgewertet wird nur der innere
 Code** (`aufloesen` ist die eine Stelle). Abgeleitet aus Code + Geheimnis
 (`marketing_meta`), aber gespeichert. Alphabet ohne `0/o`, `1/l/i`, `u/v`.
 Ein vergebener Kurzcode ändert sich nie; der alte lange Link bleibt gültig.
+
+**Lesbare Namen seit dem 23.09.2026:** Ist `marketing.link_basis` gesetzt
+(`https://b-tarikak.de/t`), bekommt jede neue Zuordnung statt `wr4s9xw` einen
+Namen aus zwei Wörtern und einer Zahl (`kurzcode.lesbarer_code`,
+`safar-sham-12`) unter `b-tarikak.de/t/…`. Der Dienst beantwortet `/t/{name}`
+wie `/r/{code}`; nginx auf b-tarikak.de reicht `/t/` an 127.0.0.1:8090 weiter.
+Die Basis steht zusätzlich im Speicher (`marketing_meta.link_basis`, beim
+Dienststart geschrieben), weil `vergib_kurzcodes` keine Konfiguration kennt.
+`campaign kurzlinks --lesbar` stellt Zuordnungen **ohne** veröffentlichten
+Text um; veröffentlichte behalten ihre Adresse.
 Fehlt der Kurzcode, geht die lange Adresse hinaus — und der Lauf sagt es
 (`campaign kurzlinks` trägt nach).
 

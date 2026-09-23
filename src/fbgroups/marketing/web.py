@@ -1070,6 +1070,14 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
     def _store() -> MarketingStore:
         return MarketingStore(pfad)
 
+    # Der Vorspann der lesbaren Adressen (``marketing.link_basis``) muss dort
+    # stehen, wo die Namen vergeben werden - im Speicher. Beim Start
+    # geschrieben, damit jede Zuordnung danach ihn kennt, auch die ueber die
+    # Kommandozeile auf dem Server.
+    if pfad.exists():
+        with MarketingStore(pfad) as _anfang:
+            _anfang.merke_link_basis(str(cfg.get("marketing", "link_basis", default="") or ""))
+
     def _pruefe_token(request: Request) -> None:
         """Prueft ``X-Events-Token`` - fuer die Wege, die die Zielanwendung ruft.
 
@@ -3010,6 +3018,11 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             }
         )
 
+    # ``/t/`` ist dieselbe Weiterleitung unter dem lesbaren Namen
+    # (``b-tarikak.de/t/safar-sham-12``, 23.09.2026); nginx auf b-tarikak.de
+    # reicht den Pfad hierher. ``/r/`` bleibt fuer jeden Link, der schon in
+    # einer Gruppe steht.
+    @app.get("/t/{tracking_code}")
     @app.get("/r/{tracking_code}")
     def redirect(tracking_code: str, request: Request):  # noqa: ANN202
         """Zaehlt den Klick und leitet weiter.
