@@ -508,10 +508,13 @@ def test_kein_anlass_wird_gemeldet_und_nicht_als_fehlschlag_gebucht() -> None:
 
     web = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
     endpunkt = web.split("def automatik_ergebnis(", 1)[1].split("\n    @app.", 1)[0]
-    assert "if meldung.kein_anlass:" in endpunkt
+    # Seit dem 23.09.2026 zusammen mit dem ``erschoepft`` eines aelteren
+    # Arbeitsrechners - beides heisst "hier ist gerade nichts zu tun".
+    bedingung = "if meldung.kein_anlass or meldung.erschoepft:"
+    assert bedingung in endpunkt
     assert "ueberspringe_gruppe" in endpunkt
     # Und zwar **vor** der Buchung - sonst zaehlte der Versuch trotzdem.
-    assert endpunkt.index("if meldung.kein_anlass:") < endpunkt.index("melde_vorschlag(")
+    assert endpunkt.index(bedingung) < endpunkt.index("melde_vorschlag(")
 
 
 def test_kein_anlass_zaehlt_nicht_gegen_den_technikwaechter() -> None:

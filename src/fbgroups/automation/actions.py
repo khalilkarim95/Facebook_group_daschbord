@@ -803,6 +803,19 @@ def mit_bildtexten(text: str, bildtexte: list[str | None]) -> str:
     return f"{text}\n{anhang}" if text else anhang
 
 
+#: Wie lange ein einzelner Artikel auf sich warten lassen darf, in ms.
+#:
+#: Playwright wartet sonst 30 Sekunden auf ein Element - und Facebooks
+#: Beitragsstrom haengt Artikel beim Scrollen wieder aus. Im Log vom
+#: 23.09.2026 stand deshalb mehrmals "Error parsing article: Locator.
+#: get_attribute: Timeout 30000ms exceeded": eine halbe Minute je Artikel,
+#: der gar nicht mehr da war.
+ARTIKEL_FRIST_MS = 3000
+
+#: Alle Werte eines Attributs **auf einmal** - ohne Warten je Element.
+_ATTRIBUTE_JS = "(els, name) => els.map(e => e.getAttribute(name))"
+
+
 def _artikel_auswerten(article, group_id: str) -> dict | None:
     """Aus **einem** Artikel Adresse, Kennzahlen und der Text - oder ``None``.
 
@@ -826,18 +839,26 @@ def _artikel_auswerten(article, group_id: str) -> dict | None:
     from fbgroups.textnorm import parse_member_count
     from fbgroups.urls import beitragslinks
 
+    # **Die Adressen in einem Zug** (23.09.2026). Vorher wurde jeder Link
+    # einzeln gefragt (``get_attribute`` je Element) - und war der Artikel
+    # beim Scrollen schon wieder ausgehaengt, wartete jeder Aufruf 30
+    # Sekunden auf ein Element, das nicht mehr kam. ``evaluate_all`` liest,
+    # was gerade da ist, und wartet auf nichts.
     kandidaten = beitragslinks(
-        [link.get_attribute("href") for link in article.locator("a[href]").all()],
+        article.locator("a[href]").evaluate_all(_ATTRIBUTE_JS, "href"),
         group_id,
     )
     if not kandidaten:
         return None
 
-    text_content = article.inner_text()
+    text_content = article.inner_text(timeout=ARTIKEL_FRIST_MS)
+    # **Die Bildtexte - und diesmal wirklich** (23.09.2026). Seit dem Morgen
+    # desselben Tages stand hier ``article.eval_on_selector_all(...)``; einen
+    # ``Locator`` hat diese Methode aber nicht (nur Seite und ElementHandle).
+    # Der Fehler verschwand im ``except`` - gelesen wurde nie ein Bildtext,
+    # und niemand merkte es, weil "keine Bildtexte" genau so aussieht.
     try:
-        bildtexte = article.eval_on_selector_all(
-            "img[alt]", "els => els.map(e => e.getAttribute('alt'))"
-        )
+        bildtexte = article.locator("img[alt]").evaluate_all(_ATTRIBUTE_JS, "alt")
     except Exception:  # noqa: BLE001 - ohne Bildtexte bleibt der Artikeltext
         bildtexte = []
 
@@ -855,7 +876,7 @@ def _artikel_auswerten(article, group_id: str) -> dict | None:
     ).first
     interactions_count = 0
     if reactions_locator.count() > 0:
-        aria = reactions_locator.get_attribute("aria-label") or ""
+        aria = reactions_locator.get_attribute("aria-label", timeout=ARTIKEL_FRIST_MS) or ""
         num_match = re.search(r"(\d[\d.,\s]*(?:[kKmM]|Tsd\.?|Mio\.?)?)", aria)
         if num_match:
             interactions_count = parse_member_count(num_match.group(1)) or 0

@@ -685,14 +685,21 @@ automatik:
   # einen neuen Beitrag bekommt - und der ist der einzige Grund, es noch
   # einmal zu versuchen.
   #
-  # Gilt fuer "kein Anlass" und fuer eine geloeschte Beitragsadresse. Ein
-  # technischer Fehlschlag ruht NICHT: Dort wird die Gruppe aus der Kampagne
-  # genommen (siehe "Ein technischer Fehlschlag schliesst die Gruppe aus").
+  # Gilt fuer jeden Besuch ohne Kommentar: "kein Anlass", "alle sichtbaren
+  # Beitraege schon kommentiert", "keine Beitraege gefunden", eine geloeschte
+  # Beitragsadresse und - seit dem 21.09.2026 - auch den technischen
+  # Fehlschlag. Aus der Kampagne faellt dadurch keine Gruppe.
+  #
+  # **Seit dem 23.09.2026 ordnet die Ruhe nicht mehr, sie haelt nur an.** Die
+  # Reihenfolge ist die Runde (lauf.Kampagnenfortschritt.rundenwahl): jede
+  # Gruppe einmal, der Reihe nach, dann wieder von vorn. Vorher stand eine
+  # Gruppe nach ihrer Ruhe wieder vorn, und bei elf Gruppen kamen nur die
+  # ersten vier dran. Die Ruhe ist damit die Ruhephase zwischen zwei Runden:
+  # Bei vielen Gruppen ist sie um, bevor die Runde es ist; bei wenigen wird
+  # sie abgewartet.
   #
   # **Am 21.09.2026 vom Nutzer auf 2 gesetzt** ("2 Min reichen schon, die
-  # Gruppen muessen mehr leisten"). Damit sieht der Lauf dieselbe
-  # Gruppenseite bis zu dreissigmal in der Stunde an, wenn dort nichts
-  # Passendes steht - das ist der Preis, und er ist bewusst bezahlt: Ein
-  # Seitenabruf ist keine Handlung in der Gruppe, und der Takt der
-  # Kommentare (delays.comment) bleibt davon unberuehrt.
+  # Gruppen muessen mehr leisten"). Ein Seitenabruf ist keine Handlung in der
+  # Gruppe, und der Takt der Kommentare (delays.comment) bleibt davon
+  # unberuehrt.
   ruhe_minuten: 2

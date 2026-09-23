@@ -833,10 +833,14 @@ def test_die_schleife_arbeitet_alle_gruppen_ab(bestand: Path) -> None:
     assert len(gesehen) == 2 * voll, "zwei Gruppen a zehn Kommentare"
     assert fortschritt.fertig
     assert fortschritt.kommentare_veroeffentlicht == 2 * voll
-    # Erst die eine Gruppe ganz, dann die andere - nicht abwechselnd.
-    assert gesehen[:voll] == [gesehen[0]] * voll
-    assert gesehen[voll:] == [gesehen[voll]] * voll
-    assert gesehen[0] != gesehen[voll]
+    # **Runde um Runde, also abwechselnd** (23.09.2026). Bis dahin stand hier
+    # das Gegenteil - "erst die eine Gruppe ganz, dann die andere". Die
+    # Anweisung des Nutzers lautet: jede Gruppe der Reihe nach, dann wieder
+    # von vorn; eine Gruppe, die alle zehn nacheinander bekommt, laesst die
+    # anderen warten (``test_runden.py``).
+    erste, zweite = gesehen[0], gesehen[1]
+    assert erste != zweite
+    assert gesehen == [erste, zweite] * voll
 
 
 def _beitragstexte_anlegen(store: MarketingStore, campaign_id: str, gruppen: list[str]) -> None:
@@ -1047,7 +1051,15 @@ def test_dauerhafte_fehlschlaege_erschoepfen_die_gruppe(bestand: Path) -> None:
 
 
 def test_ein_erschoepfter_schritt_haelt_die_gruppe_nicht_fest(bestand: Path) -> None:
-    """Meldet der Schritt 'keine Beitraege mehr', geht es zur naechsten Gruppe."""
+    """Meldet der Schritt 'keine Beitraege mehr', geht es zur naechsten Gruppe.
+
+    **Und die Gruppe ruht nur** (23.09.2026). Bis dahin stand sie danach als
+    erschoepft fest - fuer immer draussen, weil Facebook in diesem Augenblick
+    keinen Beitrag anzeigte. Gemeldet wird hier wie von einem aelteren
+    Arbeitsrechner (``erschoepft=True``); es gilt wie "kein Anlass". Der Lauf
+    wird am ersten Warten angehalten: Die Ruhezeit laeuft nach der echten
+    Uhr.
+    """
     from fbgroups.marketing import automatik
 
     with MarketingStore(bestand) as store:
@@ -1068,11 +1080,21 @@ def test_ein_erschoepfter_schritt_haelt_die_gruppe_nicht_fest(bestand: Path) -> 
             erfolg=False, fehler="keine Beitraege zum Kommentieren gefunden", erschoepft=True
         )
 
-    automatik.fuehre_lauf_aus(_Konfig(bestand), ausfuehren=leer, max_schritte=20)
+    class _Wartet(Exception):
+        """Der Lauf will auf die Rueckkehr warten - genau das ist der Befund."""
 
-    # Je Gruppe genau ein Anlauf: Danach steht sie als erschoepft fest.
-    assert sorted(set(gesehen)) == sorted(GRUPPEN)
-    assert len(gesehen) == 2
+    def warte(_sekunden: float) -> None:
+        raise _Wartet
+
+    with pytest.raises(_Wartet):
+        automatik.fuehre_lauf_aus(
+            _Konfig(bestand), ausfuehren=leer, max_schritte=20, warte=warte
+        )
+
+    # Je Gruppe genau ein Anlauf in dieser Runde - und danach ruht sie.
+    assert sorted(gesehen) == sorted(GRUPPEN)
+    with MarketingStore(bestand) as store:
+        assert store.erschoepfte_gruppen(KAMPAGNE) == {}
 
 
 # --- Erst der Beitrag, dann die Kommentare --------------------------------
@@ -2096,7 +2118,11 @@ def test_die_meldung_bucht_auf_dem_server(bestand: Path) -> None:
 
 
 def test_der_naechste_schritt_zaehlt_nach_der_meldung_weiter(bestand: Path) -> None:
-    """Fassung 1 gemeldet, also kommt Fassung 2 - der Stand lebt auf dem Server."""
+    """Fassung 1 gemeldet, also kommt dort Fassung 2 - der Stand lebt auf dem Server.
+
+    Seit dem 23.09.2026 **nach der Runde**: erst die andere Gruppe, dann
+    wieder diese.
+    """
     with MarketingStore(bestand) as store:
         _texte_anlegen(store, KAMPAGNE, list(GRUPPEN))
 
@@ -2112,9 +2138,20 @@ def test_der_naechste_schritt_zaehlt_nach_der_meldung_weiter(bestand: Path) -> N
         },
     )
     zweiter = _hole_schritt(client)["schritt"]
+    assert zweiter["group_id"] != erster["group_id"], "die Runde geht weiter"
+    client.post(
+        "/automatik/ergebnis",
+        json={
+            "campaign_id": zweiter["campaign_id"],
+            "group_id": zweiter["group_id"],
+            "nummer": zweiter["nummer"],
+            "erfolg": True,
+        },
+    )
+    dritter = _hole_schritt(client)["schritt"]
 
-    assert zweiter["group_id"] == erster["group_id"]
-    assert zweiter["nummer"] == 2
+    assert dritter["group_id"] == erster["group_id"]
+    assert dritter["nummer"] == 2
 
 
 def test_der_server_gibt_die_beitrittsanfrage_zuerst_heraus(bestand: Path) -> None:

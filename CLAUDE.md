@@ -122,6 +122,9 @@ Browser prüfbar.
   „Link in Kommentar"), zählt.
 - **Tests laufen nicht gegen die `.env` des Rechners** — die autouse-Fixture
   `_ohne_env_datei` in `tests/conftest.py` setzt die Schlüssel je Test auf leer.
+- **Kein Test schläft länger als zehn Sekunden** (`_kein_langer_schlaf`): Ein
+  Treiber ohne `warte=`, der in eine Ruhezeit läuft, scheitert statt zu
+  hängen — am 23.09.2026 blieb die ganze Testfolge so ohne Meldung stehen.
 
 ## Bestand und Score
 
@@ -373,14 +376,17 @@ anlaesse: <sprache>: <anlass>: [Fassungen]
 ### Die Reihenfolge steht an einer Stelle: `lauf.naechster_schritt`
 
 ```
-Kampagne (sequentiell) → Beitrittsanfragen (derzeit 0) → Arbeitsliste
-   → je Gruppe: Kommentare und Beitrag → nächste Gruppe → nächste Kampagne
+Kampagne (sequentiell) → Beitrittsanfragen (derzeit 0)
+   → Runde 1: Gruppe 1 → 2 → … → N   (jede einmal, gleich mit welchem Ausgang)
+   → Runde 2: Gruppe 1 → 2 → … → N   → … bis die Kampagne erreicht ist
+   → nächste Kampagne
 ```
 
 Kommandozeile, Dienst und Fernbetrieb fragen alle dort; keiner kennt die
 Reihenfolge selbst.
 
-- **Arbeitsliste**: die Score-Reihenfolge (`sort_by_rank`).
+- **Arbeitsliste**: die Score-Reihenfolge (`sort_by_rank`). Sie ordnet die
+  Runde, sie wählt nicht mehr — siehe „Die Runde".
 - **Entfernt am 23.09.2026** (Anweisung des Nutzers): das Lesen der
   Gruppenregeln (`Schrittart.REGELN`, `marketing regeln`), die Neubewertung im
   Lauf (`Schrittart.BEWERTEN`, `rescoring.py`) und die ganze Qualifikation
@@ -404,12 +410,41 @@ Reihenfolge selbst.
 - `automatik.mitgliedschaft_pflicht: false` — Gruppen ohne vermerkte
   Mitgliedschaft werden versucht (der Vermerk ist unser Arbeitsstand).
 
+### Die Runde: jede Gruppe einmal, der Reihe nach (23.09.2026)
+
+`Kampagnenfortschritt.rundenwahl` gibt die nächste Gruppe der laufenden Runde
+heraus, die noch nicht dran war; sind alle durch, beginnt die nächste Runde
+bei Gruppe 1. Gespeichert ist allein, wer in welcher Runde dran war
+(`automatik_lauf_besuche`, Schritt 27, `store.merke_besuch`); die Runde
+selbst wird gerechnet.
+
+- **Vermerkt wird der Besuch, wenn der Schritt hinausgeht** — örtlich vor dem
+  Browser, im Fernbetrieb in `/automatik/naechster`. Der Ausgang spielt keine
+  Rolle: Erfolg, kein Anlass, technischer Fehlschlag, ein Absturz — die Gruppe
+  war dran, die nächste ist an der Reihe.
+- **Nur die Ruhezeit übergeht eine Gruppe**, und nur für ihre Dauer; danach
+  holt sie ihren Platz **in derselben Runde** nach. Ruhen alle, wartet der
+  Lauf (`naechste_rueckkehr`). Die Ruhe ist so zugleich die Ruhephase
+  zwischen zwei Runden.
+- **Nicht in der Runde** (`Gruppenfortschritt.rundenfaehig`): voll,
+  erschöpft, an der Tagesmenge je Gruppe, ohne offene Fassung, für den Lauf
+  beiseite. Eine erschöpfte Gruppe mit offenem Beitrag bekommt deshalb keinen
+  Kommentarschritt mehr — vorher blieb sie über `bearbeitbar` darin.
+- **Der Beitrag gehört nicht zur Runde**: `_beitragsschritt` nimmt die erste
+  Gruppe mit offenem Beitrag (vorher nur die erste Gruppe überhaupt).
+- **Der Anlass** war ein Lauf über elf Gruppen, in dem nur die ersten vier dran
+  kamen und eine davon gut fünfzigmal hintereinander („alle sichtbaren
+  Beiträge sind bereits kommentiert"). Gewählt wurde die erste Gruppe, die
+  gerade durfte, und nach zwei Minuten Ruhe durfte sie wieder. Festgehalten
+  in `tests/test_runden.py` (11 Gruppen → alle 11 → Runde 2 → wieder alle 11,
+  örtlich und im Fernbetrieb).
+
 ### Ausgänge und was sie kosten
 
 | Ausgang | Folge |
 |---|---|
 | Erfolg | zählt (Tagesmenge, Gruppe, Takt) |
-| kein Anlass (`kein_anlass`) | nichts gebucht, Gruppe **ruht** (`automatik.ruhe_minuten`, 2) |
+| kein Anlass (`kein_anlass`), auch „alle sichtbaren Beiträge sind bereits kommentiert" und „keine Beiträge gefunden" | nichts gebucht, Gruppe **ruht** (`automatik.ruhe_minuten`, 2) — bis 23.09.2026 hieß das `erschoepft` und war ein Urteil über die Gruppe; ein älterer Arbeitsrechner sendet es noch, es gilt wie `kein_anlass` |
 | tote Beitragsadresse (`beitrag_weg`) | nächster Beitrag im selben Schritt, dann Ruhe |
 | technischer Fehlschlag | bis zu drei Beiträge im Schritt (`MAX_BEITRAEGE_JE_SCHRITT`), dann Ruhe — **kein Ausschluss** |
 | Ablehnung durch die Gruppe | Gruppe beiseite für diesen Lauf (keine dauerhafte Sperre) |
@@ -511,6 +546,13 @@ technisch), `Ablehnungsgrund` die des Menschen in der Übersicht
 - `post_to_group` wartet auf die Vorschaukarte, nimmt dann die nackte Adresse
   aus dem Text (`trenne_adresse`: nur genau eine, nur am Zeilenende) und
   meldet über `Beitragsausgang`, wenn die Karte das nicht überlebt.
+- `_artikel_auswerten` liest Links und Bildtexte **in einem Zug**
+  (`Locator.evaluate_all`) und gibt dem Artikeltext eine kurze Frist
+  (`ARTIKEL_FRIST_MS`, 3 s). Der Beitragsstrom hängt Artikel beim Scrollen
+  wieder aus; `get_attribute` je Link wartete dann 30 s auf ein Element, das
+  nicht mehr kam. Ein `Locator` hat **kein** `eval_on_selector_all` — damit
+  wurden die Bildtexte vom 23.09.2026 morgens bis abends nie gelesen, und
+  das `except` verschwieg es (Test: `test_die_bildtexte_kommen_wirklich_im_artikel_an`).
 
 ### Der Wächter (`watchdog.py`)
 

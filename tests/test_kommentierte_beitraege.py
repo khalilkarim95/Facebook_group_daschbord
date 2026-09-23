@@ -121,10 +121,13 @@ def test_der_naechste_unkommentierte_beitrag_wird_genommen(config) -> None:
 
 
 def test_sind_alle_passenden_kommentiert_wird_die_gruppe_uebersprungen(config) -> None:
-    """Punkt 24, zweiter Teil: Dann ist hier nichts mehr zu holen.
+    """Punkt 24, zweiter Teil: Dann ist hier gerade nichts zu holen.
 
-    **Kein Fehlschlag** - es liegt nichts gegen die Gruppe vor, sie ist nur
-    durch. Der Lauf geht zur naechsten, statt einen Versuch zu buchen.
+    **Kein Fehlschlag** - es liegt nichts gegen die Gruppe vor. Der Lauf geht
+    zur naechsten, statt einen Versuch zu buchen. Seit dem 23.09.2026 ist es
+    ``kein_anlass`` und nicht mehr ``erschoepft``: Facebook zeigt oft nur
+    einen einzigen Beitrag an, und die Gruppe ist in der naechsten Runde
+    wieder dabei (``test_runden.py``).
     """
     posts = [_post("p/A"), _post("p/B")]
     zaehler = _Zaehler()
@@ -133,7 +136,8 @@ def test_sind_alle_passenden_kommentiert_wird_die_gruppe_uebersprungen(config) -
 
     assert zaehler.versucht == []
     assert ergebnis.erfolg is False
-    assert ergebnis.erschoepft, "alle sichtbaren Beitraege sind bereits kommentiert"
+    assert ergebnis.kein_anlass, "alle sichtbaren Beitraege sind bereits kommentiert"
+    assert not ergebnis.erschoepft, "ein Augenblick, kein Urteil ueber die Gruppe"
 
 
 # --- 4. Nur der Erfolg sperrt --------------------------------------------

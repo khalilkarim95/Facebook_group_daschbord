@@ -63,8 +63,12 @@ class Schrittergebnis:
     erfolg: bool
     fehler: str = ""
     post_url: str = ""
-    # Die Gruppe gibt nichts mehr her - kein Fehlschlag, sondern ein Ende.
-    # Der Unterschied entscheidet, ob wiederholt oder weitergegangen wird.
+    # **Wird seit dem 23.09.2026 nicht mehr gesetzt.** Es stand fuer "keine
+    # Beitraege gefunden" und "alle sichtbaren schon kommentiert" - zwei
+    # Aussagen ueber diesen Augenblick (Facebook zeigt oft nur einen einzigen
+    # Beitrag an), die als dauerhaftes Urteil ueber die Gruppe gebucht
+    # wurden. Beide sind jetzt ``kein_anlass``. Das Feld bleibt, weil ein
+    # aelterer Arbeitsrechner es noch sendet; es gilt dann wie ``kein_anlass``.
     erschoepft: bool = False
 
     text: str = ""
@@ -628,6 +632,16 @@ def fuehre_lauf_aus(
                 )
                 continue
 
+            # **Die Runde zaehlt den Besuch, nicht den Ausgang** (23.09.2026).
+            # Vermerkt wird, bevor der Browser anfaengt: Was immer dort
+            # geschieht - Erfolg, kein Anlass, ein Absturz -, die Gruppe war
+            # in dieser Runde dran, und beim naechsten Durchgang ist die
+            # naechste an der Reihe.
+            if schritt.runde and not trocken:
+                store.merke_besuch(
+                    lauf_id, schritt.campaign_id, schritt.group_id, schritt.runde
+                )
+
         try:
             fertig = _fuehre_schritt_aus(
                 config,
@@ -916,6 +930,11 @@ def _text_schritt(
         f"[bold]{schritt.gruppe_name}[/bold] - {_zweck(schritt)} "
         f"{schritt.kommentar_nr}/{schritt.kommentar_ziel} (Fassung {schritt.nummer})"
     )
+    if schritt.runde:
+        console.print(
+            f"[dim]  Runde {schritt.runde} - Gruppe {schritt.runde_platz} "
+            f"von {schritt.runde_gruppen}[/dim]"
+        )
 
     if ohne_kurzcode:
         console.print(
@@ -948,7 +967,8 @@ def _text_schritt(
     # irgendwann gegen die Gruppe - obwohl nichts gegen sie vorliegt. Sie
     # wird stattdessen fuer diesen Lauf beiseitegelegt; morgen stehen dort
     # andere Beitraege.
-    if ergebnis.kein_anlass:
+    # Ein ``erschoepft`` gilt wie "kein Anlass" (23.09.2026) - siehe das Feld.
+    if ergebnis.kein_anlass or ergebnis.erschoepft:
         console.print(f"[dim]  kein Anlass: {ergebnis.fehler}[/dim]")
         with MarketingStore(pfad) as store:
             # **Auf Zeit, nicht fuer den ganzen Lauf** (20.09.2026). "Hier
@@ -1138,10 +1158,6 @@ def _buche(store: MarketingStore, campaign, link, schritt: lauf.Schritt, ergebni
                 f"{grenzen.backoff_minuten(stufe)} Min. Andere Aktionen laufen "
                 f"weiter.[/yellow]"
             )
-    if ergebnis.erschoepft:
-        store.setze_kommentar_erschoepft(
-            schritt.campaign_id, schritt.group_id, ergebnis.fehler or "keine Beitraege mehr"
-        )
 
 
 def _stand_fortschreiben(
@@ -1222,8 +1238,10 @@ def browser_schritt(
 
     roh = fetch_top_posts(context, gruppen_url, group_id, limit=10)
     if not roh:
+        # Kein Urteil ueber die Gruppe (23.09.2026): Die Seite hat gerade
+        # nichts hergegeben - die Gruppe ruht, die Runde geht weiter.
         return Schrittergebnis(
-            erfolg=False, fehler="keine Beitraege zum Kommentieren gefunden", erschoepft=True
+            erfolg=False, fehler="keine Beitraege zum Kommentieren gefunden", kein_anlass=True
         )
 
     # **Die rohen Funde gehen weiter, nicht die gespeicherten.** Nur sie
@@ -1490,10 +1508,19 @@ def _entscheide_und_kommentiere(
     bisherige = set(bisherige or ())
     unkommentiert = [p for p in roh if p["post_url"] not in bisherige]
     if not unkommentiert:
+        # **Ein Befund ueber diesen Augenblick, nicht ueber die Gruppe**
+        # (23.09.2026). Facebook zeigt oft nur einen einzigen Beitrag an
+        # ("Found 1 post(s) ... articles last seen: 3"), und unter dem steht
+        # schon unser Kommentar. Bis dahin hiess das ``erschoepft``: Der
+        # Server vermerkte die Gruppe als erschoepft, legte sie aber nicht
+        # beiseite - und weil ihr Beitrag noch offen war, bot er sie sofort
+        # wieder an. Im Betrieb stand dieselbe Gruppe so gut fuenfzigmal
+        # hintereinander, waehrend die hinteren nie drankamen. Jetzt gilt es
+        # wie "kein Anlass": Die Gruppe ruht, die Runde geht weiter.
         return Schrittergebnis(
             erfolg=False,
             fehler="alle sichtbaren Beitraege sind bereits kommentiert",
-            erschoepft=True,
+            kein_anlass=True,
         )
 
     # Ohne einen einzigen lesbaren Text ist keine Entscheidung moeglich -
@@ -2144,7 +2171,16 @@ def fuehre_lauf_fern_aus(
                 f"{'Beitrag' if texttyp == 'post' else 'Kommentar'} "
                 f"{s['kommentar_nr']}/{s['kommentar_ziel']} (Fassung {s['nummer']})"
             )
-            if daten.get("fortschritt"):
+            if s.get("runde"):
+                # **Die Runde statt der Kampagnenzahl** (23.09.2026). Hier
+                # stand nach jedem Schritt "Kampagnen: 0 / 1" - dieselbe
+                # Zeile, und sie beantwortete nicht, worum es im Protokoll
+                # geht: Kommt jede Gruppe dran?
+                console.print(
+                    f"[dim]  Runde {s['runde']} - Gruppe {s.get('runde_platz', '?')} "
+                    f"von {s.get('runde_gruppen', '?')}[/dim]"
+                )
+            elif daten.get("fortschritt"):
                 console.print(f"[dim]{daten['fortschritt'].splitlines()[2].strip()}[/dim]")
 
             # ``vorgaben`` traegt die Entscheidungsgrundlagen des Servers:
@@ -2363,8 +2399,10 @@ def browser_schritt_fern(
 
     roh = fetch_top_posts(context, gruppen_url, group_id, limit=10)
     if not roh:
+        # Kein Urteil ueber die Gruppe (23.09.2026): Die Seite hat gerade
+        # nichts hergegeben - die Gruppe ruht, die Runde geht weiter.
         return Schrittergebnis(
-            erfolg=False, fehler="keine Beitraege zum Kommentieren gefunden", erschoepft=True
+            erfolg=False, fehler="keine Beitraege zum Kommentieren gefunden", kein_anlass=True
         )
 
     erlaubnis, anspruch, verbrauchte = vorgaben_lesen(vorgaben)

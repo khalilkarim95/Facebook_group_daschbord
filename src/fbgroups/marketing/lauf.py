@@ -248,6 +248,59 @@ class Gruppenfortschritt:
     Konfiguration zu lesen.
     """
 
+    runde: int = 0
+    """In welcher Runde dieses Laufs die Gruppe zuletzt dran war - ``0``: noch nie.
+
+    **Die Runde ist die Reihenfolge** (23.09.2026). Bis dahin nahm der Lauf
+    immer die *erste* Gruppe der ``arbeitsliste``, die gerade durfte. Nach
+    "kein Anlass" ruhte sie zwei Minuten (``automatik.ruhe_minuten``) und
+    stand danach wieder vorn - bei elf Gruppen und gut einer halben Minute je
+    Schritt kamen so nur die ersten vier an die Reihe, und Gruppe fuenf bis
+    elf sahen den Lauf nie. Vermerkt wird hier, **dass** die Gruppe dran war,
+    gleich mit welchem Ausgang (``store.merke_besuch``); gewaehlt wird in
+    ``Kampagnenfortschritt.rundenwahl``.
+    """
+
+    @property
+    def naechste_fassung(self) -> int | None:
+        """Die Kommentarfassung, die hier als naechste ansteht - oder keine."""
+        return naechste_nummer(
+            set(range(1, self.veroeffentlicht + 1)),
+            set(self.gescheiterte_fassungen),
+        )
+
+    @property
+    def rundenfaehig(self) -> bool:
+        """Gehoert die Gruppe zur Kommentarrunde - auch wenn sie gerade ruht?
+
+        Nicht dabei ist, wer mit den Kommentaren **durch** ist (voll oder
+        erschoepft), heute seine Tagesmenge hat, keine Fassung mehr offen hat,
+        fuer den ganzen Lauf beiseite liegt oder auf die Mitgliedschaft
+        wartet. Eine **ruhende** Gruppe gehoert dazu: Sie ist nur jetzt nicht
+        dran und kommt in derselben Runde zurueck.
+        """
+        if self.uebersprungen and not self.ruht:
+            return False
+        return (
+            (self.mitglied or not self.mitgliedschaft_noetig)
+            and not self.kommentare_fertig
+            and not self.tageslimit_erreicht
+            and self.naechste_fassung is not None
+        )
+
+    @property
+    def kommentierbar(self) -> bool:
+        """Kann **jetzt** ein Kommentarschritt hierher gehen?
+
+        ``rundenfaehig`` ohne die Ruhe. Anders als ``bearbeitbar`` fragt es
+        ausdruecklich nach den **Kommentaren**: Eine erschoepfte Gruppe mit
+        offenem Beitrag ist ``bearbeitbar`` (der Beitrag darf noch), bekam
+        bis zum 23.09.2026 aber trotzdem Kommentarschritte - und stand damit
+        im Kreis, sobald ``automatik.kommentare_zuerst`` den Beitrag hinter
+        die Kommentare stellte.
+        """
+        return self.rundenfaehig and not self.uebersprungen
+
     @property
     def tageslimit_erreicht(self) -> bool:
         """Nimmt diese Gruppe heute nichts mehr an?
@@ -562,8 +615,71 @@ class Kampagnenfortschritt:
         return next((g for g in self.arbeitsliste if g.bearbeitbar), None)
 
     @property
+    def runde(self) -> int:
+        """Die laufende Runde: die hoechste, in der schon eine Gruppe dran war.
+
+        ``0`` heisst: In diesem Lauf war noch keine Gruppe dran. Gerechnet und
+        nicht gespeichert - gespeichert ist allein, wer in welcher Runde dran
+        war (``automatik_lauf_besuche``).
+        """
+        return max((g.runde for g in self.gruppen), default=0)
+
+    @property
+    def rundenteilnehmer(self) -> list[Gruppenfortschritt]:
+        """Die Gruppen der Kommentarrunde, in der Reihenfolge der Arbeitsliste.
+
+        Auch die, die gerade ruhen: Sie gehoeren zur Runde und holen ihren
+        Platz darin nach, sobald die Ruhe um ist.
+        """
+        return [g for g in self.arbeitsliste if g.rundenfaehig]
+
+    @property
+    def runde_geprueft(self) -> int:
+        """Wie viele Gruppen in der laufenden Runde schon dran waren."""
+        runde = self.runde
+        if not runde:
+            return 0
+        return sum(1 for g in self.rundenteilnehmer if g.runde >= runde)
+
+    @property
+    def rundenwahl(self) -> tuple[Gruppenfortschritt, int] | None:
+        """Welche Gruppe als naechste kommentiert wird - und fuer welche Runde.
+
+        **Jede Gruppe einmal je Runde, der Reihe nach** (Anforderung vom
+        23.09.2026)::
+
+            Runde 1:  1 → 2 → 3 → ... → 11
+            Runde 2:  1 → 2 → 3 → ... → 11
+
+        Zuerst kommen die Gruppen, die in der laufenden Runde noch nicht dran
+        waren - in der Reihenfolge der Arbeitsliste. Sind alle durch, beginnt
+        die naechste Runde wieder bei der ersten.
+
+        **Der Ausgang spielt keine Rolle.** Erfolg, "kein Anlass", alle
+        Beitraege schon kommentiert, technischer Fehlschlag: Dran war die
+        Gruppe, und die naechste ist an der Reihe. Genau das fehlte vorher -
+        eine Gruppe, in der gerade nichts ging, stand nach ihrer Ruhe wieder
+        vorn, und die hinteren kamen nie dran.
+
+        **Nur eine Ruhezeit uebergeht eine Gruppe**, und nur fuer ihre Dauer
+        (``automatik.ruhe_minuten``): Sie kommt danach in **derselben** Runde
+        dran. Ruhen alle, gibt es keinen Schritt; der Treiber wartet auf die
+        erste Rueckkehr (``store.naechste_rueckkehr``). Die Ruhe ist damit
+        zugleich die Ruhephase zwischen zwei Runden: Bei elf Gruppen ist sie
+        um, bevor die Runde es ist; bei einer einzigen wird sie abgewartet.
+        """
+        frei = [g for g in self.arbeitsliste if g.kommentierbar]
+        if not frei:
+            return None
+        runde = self.runde
+        offen = [g for g in frei if g.runde < runde]
+        if offen:
+            return offen[0], runde
+        return frei[0], runde + 1
+
+    @property
     def naechste_kommentargruppe(self) -> Gruppenfortschritt | None:
-        """Die erste Gruppe, in der **heute noch ein Kommentar** darf.
+        """Die Gruppe, in der als naechstes kommentiert wird - nach der Runde.
 
         Neben ``naechste_gruppe`` und aus einem genauen Grund (15.09.2026):
         Seit die Tagesmenge je Gruppe nur noch den Kommentar sperrt, kann
@@ -571,11 +687,12 @@ class Kampagnenfortschritt:
         Beitrag offen hat. Ist der Beitrag gerade getaktet, stuende der Lauf
         vor ihr still - obwohl in der naechsten Gruppe ein Kommentar
         hinausgehen koennte.
+
+        Seit dem 23.09.2026 entscheidet die Runde (``rundenwahl``) und nicht
+        mehr die erste Gruppe, die gerade darf.
         """
-        return next(
-            (g for g in self.arbeitsliste if g.bearbeitbar and not g.tageslimit_erreicht),
-            None,
-        )
+        wahl = self.rundenwahl
+        return wahl[0] if wahl else None
 
     @property
     def abgeschlossen(self) -> bool:
@@ -963,6 +1080,14 @@ class Schritt:
     kommentar_nr: int = 0
     kommentar_ziel: int = ZIEL_JE_GRUPPE
 
+    # Die Runde (23.09.2026): fuer welche sie zaehlt und an welcher Stelle
+    # darin der Schritt steht. ``runde`` schreibt der Treiber als Besuch fest
+    # (``store.merke_besuch``); bei Beitrag und Beitritt bleibt es ``0`` - sie
+    # gehoeren nicht zur Kommentarrunde.
+    runde: int = 0
+    runde_platz: int = 0
+    runde_gruppen: int = 0
+
 
 def vorlage_zu_nummer(nummer: int, *, vorlagen: int = VORLAGEN_JE_TOPF) -> int:
     """Welche der fuenf Vorlagen der n-te Kommentar traegt.
@@ -1023,12 +1148,13 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
        gleichzeitig.
     2. Darin die **Beitrittsanfragen** an ihre Gruppen, solange die
        Tagesmenge es zulaesst (derzeit 0, siehe ``beitritt_kandidaten``).
-    3. Dann die erste Gruppe der ``arbeitsliste``, in der gearbeitet werden
-       kann - in Score-Reihenfolge.
-    4. Darin Beitrag und Kommentare in der Reihenfolge von
-       ``kommentare_zuerst``. Scheitert der eine, geht es mit dem anderen
-       weiter - ein Fehlschlag laesst die Gruppe nicht ausfallen.
-    5. Erst wenn die Kampagne durch ist, kommt die naechste.
+    3. Dann die Kommentare **Runde um Runde**: jede Gruppe der
+       ``arbeitsliste`` einmal, der Reihe nach, gleich mit welchem Ausgang
+       (``Kampagnenfortschritt.rundenwahl``, seit 23.09.2026).
+    4. Beitrag und Kommentar in der Reihenfolge von ``kommentare_zuerst``.
+       Gibt der eine nichts her, wird der andere gefragt - ein Fehlschlag
+       laesst die Gruppe nicht ausfallen.
+    5. Erst wenn die Kampagne erreicht ist, kommt die naechste.
 
     Gruppenregeln lesen und Neubewertung waren bis zum 23.09.2026 eigene
     Schritte; sie sind entfallen.
@@ -1084,11 +1210,6 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
             kommentar_ziel=1,
         )
 
-    # Die erste Gruppe, in der gearbeitet werden kann.
-    gruppe = kampagne.naechste_gruppe
-    if gruppe is None:
-        return None
-
     # 6. Jede Art an ihrer eigenen Grenze. Ist der Beitrag gebremst, kommen
     #    die Kommentare trotzdem dran - und umgekehrt. Nur so bleibt die
     #    Zusage aus Punkt 8 wahr: Ein Limit fuer eine Aktion ist keines fuer
@@ -1099,13 +1220,20 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
     def _beitragsschritt() -> Schritt | None:
         if not darf_post:
             return None
-        post_nummer = gruppe.post_nummer
-        if post_nummer is None:
+        # **Die erste Gruppe mit offenem Beitrag - nicht die erste Gruppe.**
+        # Bis zum 23.09.2026 fragte der Beitrag allein ``naechste_gruppe``:
+        # Stand dort schon ein Beitrag, ging in keiner anderen Gruppe einer
+        # hinaus, solange die erste bearbeitbar blieb.
+        gruppe = next(
+            (g for g in kampagne.arbeitsliste if g.bearbeitbar and g.post_offen),
+            None,
+        )
+        if gruppe is None or gruppe.post_nummer is None:
             return None
         return Schritt(
             campaign_id=kampagne.campaign_id,
             group_id=gruppe.group_id,
-            nummer=post_nummer,
+            nummer=gruppe.post_nummer,
             texttyp=Texttyp.POST,
             gruppe_name=gruppe.name,
             # Beim Beitrag gibt es nur einen: 1 von 1, und nicht die
@@ -1121,28 +1249,22 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
             # sie unveraendert vor.
             return None
 
-        # **Fuer den Kommentar wird die Gruppe neu gewaehlt.** Seit die
-        # Tagesmenge je Gruppe nur noch den Kommentar sperrt (und nicht mehr
-        # die ganze Gruppe), kann ``naechste_gruppe`` eine liefern, die
-        # **nur** noch ihren Beitrag offen hat. Ist der gerade getaktet,
-        # stuende der Lauf vor ihr still - obwohl in der naechsten Gruppe ein
-        # Kommentar hinausgehen koennte. Die Rangfolge bleibt dieselbe (beide
-        # lesen ``arbeitsliste``), nur die Frage ist eine andere: "wer darf
-        # heute noch kommentieren?"
-        ziel_gruppe = kampagne.naechste_kommentargruppe
-        if ziel_gruppe is None:
+        # **Die Gruppe waehlt die Runde** (23.09.2026): die naechste, die in
+        # dieser Runde noch nicht dran war. Bis dahin war es die erste, die
+        # gerade durfte - und eine Gruppe, in der nichts ging, stand nach
+        # zwei Minuten Ruhe wieder vorn, waehrend die hinteren nie
+        # drankamen. Eine Gruppe ohne offene Fassung, eine erschoepfte und
+        # eine an ihrer Tagesmenge sind gar nicht erst in der Runde
+        # (``Gruppenfortschritt.rundenfaehig``) - sie halten also auch keine
+        # andere auf.
+        wahl = kampagne.rundenwahl
+        if wahl is None:
             return None
-
-        nummer = naechste_nummer(
-            set(range(1, ziel_gruppe.veroeffentlicht + 1)),
-            set(ziel_gruppe.gescheiterte_fassungen),
-        )
+        ziel_gruppe, runde = wahl
+        nummer = ziel_gruppe.naechste_fassung
         if nummer is None:
-            # Alle Fassungen sind heraus oder aufgegeben, die Gruppe gilt
-            # aber noch nicht als fertig: Dann ist sie erschoepft, und der
-            # Treiber traegt das ein. Ein Schritt waere hier eine
-            # Endlosschleife.
             return None
+        teilnehmer = kampagne.rundenteilnehmer
         return Schritt(
             campaign_id=kampagne.campaign_id,
             group_id=ziel_gruppe.group_id,
@@ -1151,6 +1273,9 @@ def naechster_schritt(fortschritt: Lauffortschritt) -> Schritt | None:
             gruppe_name=ziel_gruppe.name,
             kommentar_nr=ziel_gruppe.veroeffentlicht + 1,
             kommentar_ziel=ziel_gruppe.ziel,
+            runde=runde,
+            runde_platz=sum(1 for g in teilnehmer if g.runde >= runde) + 1,
+            runde_gruppen=len(teilnehmer),
         )
 
     # **Welcher von beiden zuerst** (21.09.2026). Die Vorgabe ist der Beitrag
@@ -1297,6 +1422,9 @@ def lies_fortschritt(
         if hasattr(store, "ruhende_gruppen")
         else set()
     )
+    # Wer in welcher Runde dran war (23.09.2026). Ein aelterer Speicher kennt
+    # die Frage nicht; dann war niemand dran, und die Runde beginnt vorn.
+    besuche = store.besuche(lauf_id) if hasattr(store, "besuche") else {}
     kampagnen: list[Kampagnenfortschritt] = []
 
     for zeile in store.lauf_kampagnen(lauf_id):
@@ -1311,6 +1439,7 @@ def lies_fortschritt(
                     ist_mitglied=ist_mitglied,
                     uebersprungen=uebersprungen,
                     ruhend=ruhend,
+                    besuche=besuche,
                     mitgliedschaft_pflicht=mitgliedschaft_pflicht,
                     bezuege=bezuege or {},
                     heute_je_gruppe=heute_je_gruppe or {},
@@ -1355,6 +1484,7 @@ def _lies_kampagne(
     ruhend: set,
     mitgliedschaft_pflicht: bool,
     bezuege: dict,
+    besuche: dict | None = None,
     heute_je_gruppe: dict,
     gruppenlimit: int,
     ziel_kommentare: int = 0,
@@ -1418,6 +1548,7 @@ def _lies_kampagne(
             ),
             heute_in_gruppe=int(heute_je_gruppe.get(gid, 0)),
             gruppenlimit=gruppenlimit,
+            runde=int((besuche or {}).get((campaign_id, gid), 0)),
         )
         for gid in reihenfolge
     ]
@@ -1514,7 +1645,15 @@ def fortschrittstext(fortschritt: Lauffortschritt) -> str:
             ]
             if fortschritt.beitritt_wartezeit:
                 zeilen += [f"Abstandsregel:     {fortschritt.beitritt_wartezeit}"]
-        gruppe = kampagne.naechste_gruppe
+        if phase is Phase.ARBEIT and kampagne.rundenteilnehmer:
+            # **Die Runde steht dabei** (23.09.2026): "kommt jede Gruppe
+            # dran?" ist die Frage, die man an diese Anzeige hat.
+            zeilen += [
+                f"Runde:             {max(kampagne.runde, 1)} - "
+                f"{kampagne.runde_geprueft} / {len(kampagne.rundenteilnehmer)} "
+                "Gruppen geprueft",
+            ]
+        gruppe = kampagne.naechste_kommentargruppe or kampagne.naechste_gruppe
         if gruppe is not None and phase is Phase.ARBEIT:
             zeilen += [
                 f"Aktuelle Gruppe:   {gruppe.name}",

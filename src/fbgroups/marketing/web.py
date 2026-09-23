@@ -259,6 +259,13 @@ class AutomatikErgebnis(BaseModel):
     fehler: str = ""
     post_url: str = ""
     erschoepft: bool = False
+    """Nur noch von einem aelteren Arbeitsrechner gesendet - gilt wie ``kein_anlass``.
+
+    Seit dem 23.09.2026 kein Urteil mehr: "keine Beitraege gefunden" und
+    "alle sichtbaren schon kommentiert" sind Aussagen ueber diesen
+    Augenblick. Als Erschoepfung gebucht, bot der Server die Gruppe trotzdem
+    sofort wieder an, solange ihr Beitrag offen war.
+    """
 
     gruppe_beiseite: bool = False
     """Diese Gruppe fuer **diesen Lauf** beiseitelegen - ohne Urteil.
@@ -1205,7 +1212,12 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             )
 
         aktuell = fortschritt.naechste_kampagne
-        gruppe = aktuell.naechste_gruppe if aktuell else None
+        # Die Gruppe, die die Runde als naechste nimmt (23.09.2026) - nicht
+        # die erste, die gerade bearbeitbar ist; das waere eine Auskunft ueber
+        # eine Reihenfolge, die es nicht mehr gibt.
+        gruppe = (
+            (aktuell.naechste_kommentargruppe or aktuell.naechste_gruppe) if aktuell else None
+        )
         return JSONResponse(
             {
                 "status": fortschritt.status.value,
@@ -1257,6 +1269,17 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     if (lage := fortschritt.lage(aktion)) is not None
                 },
                 "gruppen_uebersprungen": fortschritt.gruppen_uebersprungen,
+                # Die Runde der laufenden Kampagne: jede Gruppe einmal, der
+                # Reihe nach (23.09.2026).
+                "runde": (
+                    {
+                        "nummer": max(aktuell.runde, 1),
+                        "geprueft": aktuell.runde_geprueft,
+                        "gruppen": len(aktuell.rundenteilnehmer),
+                    }
+                    if aktuell
+                    else None
+                ),
                 "aktuelle_gruppe": gruppe.name if gruppe else "",
                 "aktuelle_kommentare": (
                     f"{gruppe.veroeffentlicht} / {gruppe.ziel}" if gruppe else ""
@@ -1633,6 +1656,15 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     ),
                 }
 
+                # **Der Besuch zaehlt fuer die Runde** (23.09.2026) - vermerkt,
+                # wenn der Schritt hinausgeht, nicht wenn er gemeldet wird: Was
+                # immer der Arbeitsrechner daraus macht, die Gruppe war dran,
+                # und der naechste Aufruf nimmt die naechste der Runde.
+                if schritt.runde:
+                    store.merke_besuch(
+                        lauf_id, schritt.campaign_id, schritt.group_id, schritt.runde
+                    )
+
         return JSONResponse(
             {
                 "schritt": {
@@ -1650,6 +1682,11 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     "texttyp": schritt.texttyp.value,
                     "kommentar_nr": schritt.kommentar_nr,
                     "kommentar_ziel": schritt.kommentar_ziel,
+                    # Die Runde (23.09.2026) - nur zur Anzeige; gewaehlt und
+                    # vermerkt hat der Server.
+                    "runde": schritt.runde,
+                    "runde_platz": schritt.runde_platz,
+                    "runde_gruppen": schritt.runde_gruppen,
                     "ziel": ziel,
                     "tracking_code": link.code_fuer(ziel),
                     "text": text,
@@ -1695,7 +1732,9 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             for post_url, bezuege in meldung.bezuege:
                 store.merke_bezuege(meldung.group_id, post_url, bezuege)
 
-            if meldung.kein_anlass:
+            # Ein ``erschoepft`` eines aelteren Arbeitsrechners gilt genauso
+            # (23.09.2026) - siehe das Feld.
+            if meldung.kein_anlass or meldung.erschoepft:
                 # **Nichts buchen.** Es ist ein Ergebnis, kein Fehlversuch:
                 # Die Gruppe wird fuer diesen Lauf beiseitegelegt - genau
                 # wie es ``automatik._fuehre_schritt_aus`` oertlich tut -,
@@ -1751,12 +1790,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 ausgeloest_von="automatik",
                 sitzung="fern",
             )
-            if meldung.erschoepft:
-                store.setze_kommentar_erschoepft(
-                    meldung.campaign_id,
-                    meldung.group_id,
-                    meldung.fehler or "keine Beitraege mehr",
-                )
             if meldung.gruppe_beiseite and meldung.lauf_id:
                 # Gebucht ist der Ausgang bereits (oben, ueber
                 # ``melde_vorschlag``) - das hier ist die Fehlerisolierung,

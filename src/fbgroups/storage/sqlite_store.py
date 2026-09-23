@@ -22,7 +22,7 @@ from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEM
 from fbgroups.marketing.store import SCHEMA_VORSCHLAEGE as MARKETING_VORSCHLAEGE_SCHEMA
 from fbgroups.models import Group, GroupPost, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 
 def _iso_oder_none(zeitpunkt: datetime | None) -> str | None:
@@ -463,6 +463,10 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
     # abloest. Rein additiv: eine neue Tabelle, die im Marketing-Schema
     # steht und deshalb mit ihm angelegt wird.
     26: (MARKETING_SCHEMA,),
+    # Die Runde des Laufs (23.09.2026): wer in welcher Runde dran war. Rein
+    # additiv - eine neue Tabelle im Marketing-Schema; ein Lauf, der schon
+    # offen ist, beginnt damit bei Runde 1.
+    27: (MARKETING_SCHEMA,),
 }
 
 SCHEMA = """

@@ -342,6 +342,28 @@ CREATE TABLE IF NOT EXISTS automatik_lauf_uebersprungen (
     FOREIGN KEY (lauf_id) REFERENCES automatik_lauf(lauf_id) ON DELETE CASCADE
 );
 
+-- Wer in welcher Runde dran war (23.09.2026) - die Reihenfolge des Laufs.
+--
+-- Je Gruppe **eine** Zeile: die Runde, in der sie zuletzt dran war, und
+-- wann. Mehr braucht die Runde nicht - welche als naechste kommt, wird
+-- daraus gerechnet (``lauf.Kampagnenfortschritt.rundenwahl``), und der
+-- Ausgang jedes Besuchs steht ohnehin im Protokoll (``post_versuche``,
+-- ``automatik_lauf_uebersprungen``).
+--
+-- Der Anlass ist ein Lauf ueber elf Gruppen, in dem nur die ersten vier je
+-- an die Reihe kamen: Gewaehlt wurde immer die erste, die gerade durfte, und
+-- nach zwei Minuten Ruhe durfte sie wieder. Haengt an der ``lauf_id`` wie
+-- die Uebersprungsliste - ein neuer Lauf beginnt mit Runde 1.
+CREATE TABLE IF NOT EXISTS automatik_lauf_besuche (
+    lauf_id      INTEGER NOT NULL,
+    campaign_id  TEXT NOT NULL,
+    group_id     TEXT NOT NULL,
+    runde        INTEGER NOT NULL DEFAULT 0,
+    besucht_am   TEXT NOT NULL,
+    PRIMARY KEY (lauf_id, campaign_id, group_id),
+    FOREIGN KEY (lauf_id) REFERENCES automatik_lauf(lauf_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_automatik_lauf_status
     ON automatik_lauf(status);
 
@@ -2588,6 +2610,37 @@ class MarketingStore:
             (lauf_id, _iso(datetime.now(UTC))),
         ).fetchall()
         return {(str(r["campaign_id"]), str(r["group_id"])) for r in rows}
+
+    def merke_besuch(
+        self, lauf_id: int, campaign_id: str, group_id: str, runde: int
+    ) -> None:
+        """Haelt fest, dass die Gruppe in dieser Runde dran war (23.09.2026).
+
+        Geschrieben, **wenn der Schritt hinausgeht** - nicht, wenn sein
+        Ausgang zurueckkommt: Was immer im Browser geschieht, Erfolg, "kein
+        Anlass", ein Absturz, ein Ausgang, der nie gemeldet wird - die Gruppe
+        war dran, und die naechste ist an der Reihe. Die Runde geht nie
+        zurueck (``MAX``); ein zweiter Aufruf fuer dieselbe schreibt nur die
+        Zeit fort.
+        """
+        self.conn.execute(
+            "INSERT INTO automatik_lauf_besuche "
+            "(lauf_id, campaign_id, group_id, runde, besucht_am) VALUES (?,?,?,?,?) "
+            "ON CONFLICT (lauf_id, campaign_id, group_id) DO UPDATE SET "
+            "  runde = MAX(automatik_lauf_besuche.runde, excluded.runde), "
+            "  besucht_am = excluded.besucht_am",
+            (lauf_id, campaign_id, group_id, int(runde), _iso(datetime.now(UTC))),
+        )
+        self.conn.commit()
+
+    def besuche(self, lauf_id: int) -> dict[tuple[str, str], int]:
+        """``(campaign_id, group_id) -> Runde``, in der die Gruppe zuletzt dran war."""
+        rows = self.conn.execute(
+            "SELECT campaign_id, group_id, runde FROM automatik_lauf_besuche "
+            "WHERE lauf_id = ?",
+            (lauf_id,),
+        ).fetchall()
+        return {(str(r["campaign_id"]), str(r["group_id"])): int(r["runde"]) for r in rows}
 
     def merke_bezuege(
         self, group_id: str, post_url: str, bezuege: Iterable[str]
