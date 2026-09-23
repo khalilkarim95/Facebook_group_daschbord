@@ -262,8 +262,9 @@ def test_ohne_gelesene_regeln_bleibt_die_erlaubnis_vorsichtig(bestand: Path) -> 
         erlaubnis = automatik.erlaubnis_fuer(store, GID)
 
     assert not erlaubnis.regeln_gelesen
+    # Vorsichtig heisst seit dem 21.09.2026 noch genau eines: kein **Link**.
+    # Kommentiert wird trotzdem - die App wird dann genannt, nicht verlinkt.
     assert not erlaubnis.links
-    assert not erlaubnis.werbung
 
 
 def test_der_beitragstext_wird_nicht_gespeichert(bestand: Path) -> None:

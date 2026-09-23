@@ -95,7 +95,6 @@ def test_fehlende_vorgaben_ergeben_die_vorsichtige_erlaubnis() -> None:
     erlaubnis, anspruch, verbraucht = automatik.vorgaben_lesen(None)
 
     assert erlaubnis.links is False
-    assert erlaubnis.werbung is False
     assert erlaubnis.regeln_gelesen is False
     assert anspruch.mindestrelevanz is Relevanz.MITTEL
     assert verbraucht == set()
@@ -116,7 +115,7 @@ def test_die_vorgaben_werden_vollstaendig_uebersetzt() -> None:
 
     assert erlaubnis == Erlaubnis(
         kommentare=True, beitraege=False, links=True,
-        werbung=True, privatkontakt=True, regeln_gelesen=True,
+        privatkontakt=True, regeln_gelesen=True,
     )
     assert anspruch == Anspruch(mindestrelevanz=Relevanz.HOCH, verlangt_strecke=True)
     assert verbraucht == {"ar/anlaesse/geschenk/hadiye"}
@@ -143,7 +142,7 @@ def test_der_passendste_beitrag_schlaegt_den_lautesten(config) -> None:
         # ``werbung`` erlaubt: Sonst bliebe es beim privaten Hinweis, und
         # fuer den gibt es bewusst keinen Vorrat - dann wird gar nicht
         # kommentiert. Hier geht es um die **Auswahl**, nicht um die Stufe.
-        erlaubnis=Erlaubnis(werbung=True, regeln_gelesen=True),
+        erlaubnis=Erlaubnis(regeln_gelesen=True),
         anspruch=Anspruch(),
         link_url=LINK_URL,
     )
@@ -168,7 +167,7 @@ def test_ohne_anlass_wird_nicht_kommentiert(config) -> None:
         "Rueckfalltext {link}",
         kommentieren=kommentator,
         bisherige=[],
-        erlaubnis=Erlaubnis(werbung=True, regeln_gelesen=True),
+        erlaubnis=Erlaubnis(regeln_gelesen=True),
         anspruch=Anspruch(),
         link_url=LINK_URL,
     )
@@ -193,7 +192,7 @@ def test_eine_gruppe_ohne_links_bekommt_einen_text_ohne_link(config) -> None:
         "Rueckfall {link}",
         kommentieren=kommentator,
         bisherige=[],
-        erlaubnis=Erlaubnis(links=False, werbung=True, regeln_gelesen=True),
+        erlaubnis=Erlaubnis(links=False, regeln_gelesen=True),
         anspruch=Anspruch(),
         link_url=LINK_URL,
     )
@@ -204,21 +203,25 @@ def test_eine_gruppe_ohne_links_bekommt_einen_text_ohne_link(config) -> None:
     assert "http" not in text
 
 
-def test_ein_werbeverbot_haelt_den_runner_an() -> None:
-    """Punkt 4: Der Runner darf nicht einfach trotzdem werben.
+def test_ein_werbeverbot_haelt_den_runner_nicht_mehr_an() -> None:
+    """Seit dem 21.09.2026 - Anweisung des Nutzers.
 
-    ``UNGEEIGNET`` entsteht aus einem Werbeverbot der Gruppe und schliesst
-    **beides** aus - auch die blosse hilfreiche Antwort. Geschrieben haetten
-    wir sonst trotzdem.
+    Das Werbeverbot macht kein ``UNGEEIGNET`` mehr (siehe
+    ``qualifikation.beurteile``), und damit bleibt die Erlaubnis die einer
+    gewoehnlichen Gruppe. Was weiterhin sperrt, ist ``UNGEEIGNET`` aus
+    **Beobachtung**: wiederholt abgelehnte Beitraege und Kommentare.
     """
     from fbgroups.marketing.qualifikation import Qualifikation, Regelbefund
 
     erlaubnis = Erlaubnis.aus_regeln(
-        Regelbefund(gelesen=True, keine_werbung=True), Qualifikation.UNGEEIGNET
+        Regelbefund(gelesen=True, keine_werbung=True), Qualifikation.GEEIGNET
     )
+    assert erlaubnis.kommentare is True
 
-    assert erlaubnis.kommentare is False
-    assert erlaubnis.werbung is False
+    beobachtet = Erlaubnis.aus_regeln(
+        Regelbefund(gelesen=True), Qualifikation.UNGEEIGNET
+    )
+    assert beobachtet.kommentare is False
 
 
 def test_der_fernbetrieb_bricht_bei_einem_kommentarverbot_ab(monkeypatch) -> None:
@@ -291,7 +294,7 @@ def test_die_entscheidung_faellt_vor_dem_kommentar(config) -> None:
         "Rueckfall {link}",
         kommentieren=kommentator,
         bisherige=[],
-        erlaubnis=Erlaubnis(werbung=True, regeln_gelesen=True),
+        erlaubnis=Erlaubnis(regeln_gelesen=True),
         anspruch=Anspruch(mindestrelevanz=Relevanz.HOCH),
         link_url=LINK_URL,
     )
@@ -314,7 +317,7 @@ def test_die_entscheidung_steht_im_ergebnis(config) -> None:
         "Rueckfall {link}",
         kommentieren=_Kommentator(),
         bisherige=[],
-        erlaubnis=Erlaubnis(links=True, werbung=True, regeln_gelesen=True),
+        erlaubnis=Erlaubnis(links=True, regeln_gelesen=True),
         anspruch=Anspruch(),
         link_url=LINK_URL,
     )
@@ -424,7 +427,7 @@ def test_der_abgesetzte_text_traegt_die_adresse_und_nicht_den_platzhalter(
         "Rueckfall {link}",
         kommentieren=kommentator,
         bisherige=[],
-        erlaubnis=Erlaubnis(links=True, werbung=True, regeln_gelesen=True),
+        erlaubnis=Erlaubnis(links=True, regeln_gelesen=True),
         anspruch=Anspruch(),
         link_url=LINK_URL,
     )
@@ -457,7 +460,7 @@ def test_ohne_adresse_wird_lieber_nicht_kommentiert(config) -> None:
         "Rueckfall {link}",
         kommentieren=kommentator,
         bisherige=[],
-        erlaubnis=Erlaubnis(links=True, werbung=True, regeln_gelesen=True),
+        erlaubnis=Erlaubnis(links=True, regeln_gelesen=True),
         anspruch=Anspruch(),
         link_url="",
     )
@@ -483,7 +486,7 @@ def test_ein_text_ohne_link_geht_weiterhin_hinaus(config) -> None:
         "Rueckfall {link}",
         kommentieren=kommentator,
         bisherige=[],
-        erlaubnis=Erlaubnis(links=False, werbung=True, regeln_gelesen=True),
+        erlaubnis=Erlaubnis(links=False, regeln_gelesen=True),
         anspruch=Anspruch(),
         link_url="",
     )

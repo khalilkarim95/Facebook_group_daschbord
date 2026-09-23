@@ -231,17 +231,26 @@ def test_eine_regel_gegen_links_wird_gelesen(text: str) -> None:
     assert befund.verbietet_links
 
 
-def test_eine_regel_gegen_werbung_macht_die_gruppe_ungeeignet() -> None:
-    """Punkt 11: "Keine Werbung" trifft nicht den Link, sondern den Zweck.
+def test_eine_regel_gegen_werbung_wird_gelesen_und_sperrt_nicht_mehr() -> None:
+    """Umgekehrt zum Stand bis zum 21.09.2026 - Anweisung des Nutzers.
 
-    Dort noch den Beitrag ohne Link zu setzen waere kein Ausweg, sondern
-    genau die Umgehung, die dieses Projekt nicht betreibt.
+    "Keine Werbung" machte aus der Gruppe ein ``UNGEEIGNET`` und schloss
+    damit Beitrag **und** Kommentar aus. Im Betrieb war das die haeufigste
+    Ursache dafuer, dass eine Runde durch dreizehn ausgesuchte Gruppen null
+    Kommentare schrieb.
+
+    Gelesen wird die Regel weiterhin, und sie steht in der Zusammenfassung:
+    Sie ist eine Auskunft ueber die Gruppe, nur keine Sperre mehr. Was die
+    **Annahme** betrifft - Links, wiederholte Ablehnungen -, bindet
+    unveraendert.
     """
     regeln = lies_regeln("1. Keine Werbung. 2. Freundlich bleiben.")
     assert regeln.keine_werbung
+    assert "keine Werbung" in regeln.zusammenfassung()
+
     befund = beurteile(mitglied=True, regeln=regeln)
-    assert befund.qualifikation is Qualifikation.UNGEEIGNET
-    assert not darf(befund.qualifikation, Texttyp.KOMMENTAR, mit_link=False)
+    assert befund.qualifikation is not Qualifikation.UNGEEIGNET
+    assert darf(befund.qualifikation, Texttyp.KOMMENTAR, mit_link=False)
 
 
 def test_nicht_gelesen_ist_etwas_anderes_als_nichts_verboten() -> None:

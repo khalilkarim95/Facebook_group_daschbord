@@ -272,11 +272,17 @@ def test_der_lauf_kommt_zu_einer_ruhenden_gruppe_zurueck(bestand: Path) -> None:
     assert fortschritt.kommentare_veroeffentlicht >= 1
 
 
-def test_ein_technischer_fehlschlag_holt_die_gruppe_nicht_zurueck(bestand: Path) -> None:
-    """Dort ist der Schlussstrich richtig - sie faellt ohnehin aus der Kampagne.
+def test_ein_technischer_fehlschlag_laesst_die_gruppe_ruhen(bestand: Path) -> None:
+    """Seit dem 21.09.2026 ruht auch sie - sie faellt nicht mehr heraus.
 
-    Der Unterschied ist der ganze Zweck der Ruhezeit: "hier steht gerade
-    nichts" ruht, "hier ging es nicht" nicht.
+    Anweisung des Nutzers: "keine der zugewiesenen Gruppen darf dauerhaft
+    uebersprungen werden". Vorher zog ein technischer Fehlschlag einen
+    Schlussstrich fuer den Lauf und den Ausschluss aus der Kampagne; jetzt
+    kostet er eine Ruhezeit, danach ist die Gruppe wieder dabei.
+
+    Der Lauf wird am ersten Warten angehalten: Die Ruhezeit laeuft nach der
+    echten Uhr, und ein Treiber, dessen ``warte`` nicht schlaeft, dreht sonst
+    bis zu ihrem Ende im Kreis.
     """
     with MarketingStore(bestand) as store:
         _texte_anlegen(store, KAMPAGNE, list(GRUPPEN))
@@ -295,19 +301,22 @@ def test_ein_technischer_fehlschlag_holt_die_gruppe_nicht_zurueck(bestand: Path)
             erfolg=False, fehler="Kommentarfeld nicht gefunden", gruppe_beiseite=True
         )
 
-    geschlafen: list[float] = []
+    class _Wartet(Exception):
+        """Der Lauf will auf eine Rueckkehr warten - genau das ist der Befund."""
 
-    fortschritt = automatik.fuehre_lauf_aus(
-        Konfig(bestand),
-        ausfuehren=ausfuehren,
-        max_schritte=10,
-        warte=geschlafen.append,
-    )
+    def warte(_sekunden: float) -> None:
+        raise _Wartet
 
-    assert not geschlafen, "hier gibt es nichts abzuwarten"
+    with pytest.raises(_Wartet):
+        automatik.fuehre_lauf_aus(
+            Konfig(bestand), ausfuehren=ausfuehren, max_schritte=100, warte=warte
+        )
+
     assert sorted(set(versuche)) == sorted(GRUPPEN), "jede Gruppe genau einmal"
     assert len(versuche) == len(GRUPPEN)
-    assert not fortschritt.fertig
+    with MarketingStore(bestand) as store:
+        lauf_id = _offener_lauf(store)
+        assert store.ruhende_gruppen(lauf_id) == {(KAMPAGNE, g) for g in GRUPPEN}
 
 
 # --- Hilfen ---------------------------------------------------------------

@@ -1845,6 +1845,7 @@ def campaign_automatik(
                 gruppen,
                 aktionen=lagen,
                 klassen=zielgruppe.bearbeitbare_klassen(config),
+                ziel_kommentare=automatik.ziel_kommentare(config),
             )
         console.print(Panel(lauf.fortschrittstext(fortschritt), title="Automatik"))
 
@@ -1967,6 +1968,7 @@ def campaign_automatik(
                 gruppen,
                 aktionen=lagen,
                 klassen=zielgruppe.bearbeitbare_klassen(config),
+                ziel_kommentare=automatik.ziel_kommentare(config),
             )
             schritt = lauf.naechster_schritt(fortschritt)
         console.print(Panel(lauf.fortschrittstext(fortschritt), title="Automatik (dry-run)"))
@@ -3754,7 +3756,6 @@ def campaign_pruefe_inhalt(
             f"Gruppe: {urteil.beschriftung} - {urteil.grund}\n"
             f"Erlaubt: Kommentare {'ja' if erlaubnis.kommentare else 'nein'} · "
             f"Links {'ja' if erlaubnis.links else 'nein'} · "
-            f"Werbung {'ja' if erlaubnis.werbung else 'nein'} · "
             f"Regeln {'gelesen' if erlaubnis.regeln_gelesen else 'UNGELESEN'}",
             title="Angenommene Gruppe",
         )

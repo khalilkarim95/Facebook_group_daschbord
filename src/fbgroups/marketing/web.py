@@ -1212,6 +1212,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 kommentare_zuerst=automatik.kommentare_zuerst(cfg),
                 aktionen=lagen,
                 klassen=zielgruppe.bearbeitbare_klassen(cfg),
+                ziel_kommentare=automatik.ziel_kommentare(cfg),
             )
 
         aktuell = fortschritt.naechste_kampagne
@@ -1408,6 +1409,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 .fuer(grenzen.Aktion.KOMMENTAR)
                 .je_gruppe_taeglich,
                 klassen=zielgruppe.bearbeitbare_klassen(cfg),
+                ziel_kommentare=automatik.ziel_kommentare(cfg),
             )
             schritt = lauf.naechster_schritt(fortschritt)
 
@@ -1690,7 +1692,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                         "kommentare": erlaubnis.kommentare,
                         "beitraege": erlaubnis.beitraege,
                         "links": erlaubnis.links,
-                        "werbung": erlaubnis.werbung,
                         "privatkontakt": erlaubnis.privatkontakt,
                         "regeln_gelesen": erlaubnis.regeln_gelesen,
                     },
@@ -1851,46 +1852,24 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     meldung.group_id,
                     meldung.fehler or "keine Beitraege mehr",
                 )
-            if meldung.gruppe_beiseite:
+            if meldung.gruppe_beiseite and meldung.lauf_id:
                 # Gebucht ist der Ausgang bereits (oben, ueber
-                # ``melde_vorschlag``) - das hier ist die Fehlerisolierung.
+                # ``melde_vorschlag``) - das hier ist die Fehlerisolierung,
+                # und sie gilt fuer **diesen** Durchgang.
                 #
-                # **Zwei Stufen, und die zweite ist neu** (20.09.2026):
-                #
-                # 1. Die Gruppe kommt in **diesem** Lauf nicht wieder dran.
-                #    Das braucht die ``lauf_id``; ohne sie faellt der Vermerk
-                #    weg - und genau dann lief der Lauf in derselben Gruppe
-                #    im Kreis.
-                # 2. Sie wird **aus der Kampagne ausgeschlossen**. Das
-                #    braucht keine ``lauf_id`` und wirkt deshalb auch dort,
-                #    wo Stufe 1 ins Leere liefe. Anweisung des Nutzers nach
-                #    einem Lauf, der dieselbe Gruppe Dutzende Male anfasste.
-                if meldung.lauf_id:
-                    # Eine tote Adresse ist kein Fehler der Gruppe: Sie ruht
-                    # und kommt zurueck. Ein technischer Fehlschlag legt sie
-                    # fuer den Lauf beiseite - sie wird gleich darunter
-                    # ohnehin aus der Kampagne genommen.
-                    store.ueberspringe_gruppe(
-                        meldung.lauf_id,
-                        meldung.campaign_id,
-                        meldung.group_id,
-                        f"technisch: {meldung.fehler}"[:160],
-                        ruhe_minuten=(
-                            automatik.ruhe_minuten(cfg) if meldung.beitrag_weg else 0
-                        ),
-                    )
-                # **Nicht bei einer toten Adresse und nicht bei einer
-                # Anmeldewand.** Dieselbe Bedingung wie oertlich: Das eine
-                # ist ein Beitrag, den es nicht mehr gibt, das andere unsere
-                # eigene Sitzung - die Gruppe kann in beiden Faellen voellig
-                # in Ordnung sein. Eine abgemeldete Sitzung haette sonst eine
-                # Kampagne Gruppe fuer Gruppe leergeraeumt.
-                if not meldung.beitrag_weg and not automatik.ist_sitzungsfehler(
-                    meldung.fehler
-                ):
-                    store.schliesse_gruppe_aus(
-                        meldung.group_id, f"automatisch: {meldung.fehler}"
-                    )
+                # **Die Gruppe ruht, sie faellt nicht heraus** (21.09.2026,
+                # dieselbe Aenderung wie im oertlichen Lauf). Bis dahin kam
+                # dazu ein Ausschluss aus der Kampagne ueber
+                # ``bearbeiten = 0``; die Anweisung des Nutzers lautet aber:
+                # keine zugewiesene Gruppe dauerhaft ueberspringen. Von Hand
+                # bleibt der Ausschluss ein Haken in der Uebersicht.
+                store.ueberspringe_gruppe(
+                    meldung.lauf_id,
+                    meldung.campaign_id,
+                    meldung.group_id,
+                    f"technisch: {meldung.fehler}"[:160],
+                    ruhe_minuten=automatik.ruhe_minuten(cfg),
+                )
 
             if isinstance(ergebnis, Sperre):
                 return JSONResponse({"ok": False, "grund": ergebnis.grund})

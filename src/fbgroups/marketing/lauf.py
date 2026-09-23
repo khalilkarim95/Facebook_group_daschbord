@@ -638,6 +638,21 @@ class Kampagnenfortschritt:
             if g.tageslimit_erreicht and not g.fertig and not g.uebersprungen
         )
 
+    ziel_kommentare: int = 0
+    """Wie viele erfolgreiche Kommentare diese Kampagne erreichen soll.
+
+    ``0`` heisst **kein eigenes Ziel**: Dann gilt wie bisher allein, dass
+    jede Gruppe ihre Fassungen veroeffentlicht hat.
+
+    Gesetzt wird es in ``settings.yaml``
+    (``marketing.kampagne.ziel_kommentare``, seit 21.09.2026 auf 100 -
+    Anweisung des Nutzers: "Eine Kampagne bleibt aktiv, bis 100 erfolgreiche
+    Kommentare erreicht wurden. Erst danach zur naechsten Kampagne
+    wechseln."). Gezaehlt werden **veroeffentlichte** Fassungen aus
+    ``campaign_group_texte.status`` - ein Fehlschlag bringt eine Kampagne
+    damit nie naeher an ihre hundert.
+    """
+
     @property
     def kommentare_veroeffentlicht(self) -> int:
         return sum(g.veroeffentlicht for g in self.gruppen)
@@ -761,11 +776,11 @@ class Kampagnenfortschritt:
 
         **Auch fuer Bestandsmitglieder**, nicht nur vor einer Anfrage: In
         einer Gruppe, in der das Konto laengst Mitglied ist, steht keine
-        Anfrage mehr aus - ihre Regeln waeren damit nie gelesen worden, und
-        ``Erlaubnis.aus_regeln`` haette dort fuer immer ``werbung=False``
-        geliefert. Die Folge waere nicht ein vorsichtiger Kommentar gewesen,
-        sondern **gar keiner**: Fuer ``Linkmodus.NO_LINK`` gibt es keinen
-        Vorrat.
+        Anfrage mehr aus - ihre Regeln waeren damit nie gelesen worden. Seit
+        dem 21.09.2026 kostet das keinen Kommentar mehr (die Werbungslogik
+        ist entfernt), wohl aber den **Link**: ``Erlaubnis.links`` verlangt
+        eine gelesene Regel, und ohne Adresse bekommt die Gruppe keinen
+        Klick gutgeschrieben.
 
         Die Regeln einer Gruppe zu lesen, in der weder gearbeitet noch
         beigetreten wird (Klasse ``C``, ``D``), kostet einen Seitenabruf fuer
@@ -783,13 +798,10 @@ class Kampagnenfortschritt:
             # **eine** Gruppe: Die Regeln aller uebrigen wurden nie gelesen,
             # obwohl der Lauf dort kommentierte.
             #
-            # Die Folge war nicht ein vorsichtiger Kommentar, sondern gar
-            # keiner. ``Erlaubnis.aus_regeln`` liefert ohne gelesene Regeln
-            # ``werbung=False``; damit faellt ``soll_app_nennen`` aus, die
-            # Entscheidung landet bei ``private_contact_suggestion``, und
-            # fuer ``Linkmodus.NO_LINK`` gibt es keinen Textvorrat. Im
-            # Protokoll stand rundenlang "Regeln ungelesen - vorsichtig"
-            # und danach "kein vorbereiteter Text".
+            # Damals war die Folge gar kein Kommentar (ungelesene Regeln
+            # hiessen ``werbung=False``); seit dem 21.09.2026 ist es der
+            # fehlende **Link**: ``Erlaubnis.links`` verlangt eine gelesene
+            # Regel, und ohne Adresse zaehlt kein Klick auf die Gruppe.
             self.naechste_kommentargruppe,
         ]
         gesehen: dict[str, Gruppenfortschritt] = {}
@@ -929,10 +941,20 @@ class Kampagnenfortschritt:
         Am 12.09.2026 stand genau dieser Unterschied im Bild: vier Kampagnen
         auf "FERTIG", 78 von 78 Gruppen durch, **null** Kommentare
         veroeffentlicht. Fertig war daran nur der Lauf.
+
+        **Seit dem 21.09.2026 gibt es zwei Arten, erreicht zu sein**, und die
+        erste ist die des Nutzers: hundert erfolgreiche Kommentare
+        (``ziel_kommentare``). Die zweite ist die alte - jede Gruppe hat ihre
+        zehn Fassungen veroeffentlicht. Sie bleibt daneben stehen, weil sie
+        den Abschluss garantiert: Bei dreizehn Gruppen sind hoechstens 130
+        Fassungen moeglich, und ohne die zweite Bedingung liefe eine
+        Kampagne, deren Vorrat vor der Hundert endet, fuer immer weiter.
         """
-        return bool(self.gruppen) and all(
-            g.voll and not g.post_offen for g in self.gruppen
-        )
+        if not self.gruppen:
+            return False
+        if 0 < self.ziel_kommentare <= self.kommentare_veroeffentlicht:
+            return True
+        return all(g.voll and not g.post_offen for g in self.gruppen)
 
     def lauf_status(
         self, *, beitritt_frei: bool = False, gebremst: bool = False
@@ -1661,6 +1683,7 @@ def lies_fortschritt(
     heute_je_gruppe: dict | None = None,
     gruppenlimit: int = 0,
     klassen: frozenset | None = None,
+    ziel_kommentare: int = 0,
     kommentare_zuerst: bool = False,
 ) -> Lauffortschritt:
     """Baut den ganzen Stand aus den vorhandenen Tabellen.
@@ -1781,6 +1804,7 @@ def lies_fortschritt(
                     heute_je_gruppe=heute_je_gruppe or {},
                     gruppenlimit=gruppenlimit,
                     klassen=klassen or BEARBEITBAR,
+                    ziel_kommentare=ziel_kommentare,
                 )
             )
         except Exception:  # noqa: BLE001 - eine Kampagne, nicht der Lauf
@@ -1828,6 +1852,7 @@ def _lies_kampagne(
     heute_je_gruppe: dict,
     gruppenlimit: int,
     klassen: frozenset = BEARBEITBAR,
+    ziel_kommentare: int = 0,
 ) -> Kampagnenfortschritt:
     """Den Stand **einer** Kampagne lesen - herausgeloest, damit sie fuer sich scheitern kann.
 
@@ -1932,6 +1957,7 @@ def _lies_kampagne(
         # Kampagnenliste - die einzige Angabe des Ablaufs, die sich nicht
         # ableiten laesst.
         bewertet=bool(zeile["bewertet_am"]) if "bewertet_am" in spalten else True,
+        ziel_kommentare=ziel_kommentare,
     )
 
 

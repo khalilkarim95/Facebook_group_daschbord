@@ -110,11 +110,16 @@ def test_die_note_verlangt_keine_ausgeschriebene_strecke(bestand: _Bestand) -> N
 
 
 def test_ohne_note_entscheidet_weiterhin_die_klasse(bestand: _Bestand) -> None:
-    """Die alte Regel bleibt - sie gilt nur nicht mehr gegen ein Urteil."""
+    """Die alte Regel bleibt - sie gilt nur nicht mehr gegen ein Urteil.
+
+    Seit dem 21.09.2026 traegt jede Klasse ``mittel`` und keine verlangt die
+    Strecke (``settings.yaml``): Die Klasse entscheidet noch, nur nicht mehr
+    strenger als die Note.
+    """
     _speichere(bestand, _gruppe("1", "سوق المستعمل في برلين"))
     anspruch = automatik.anspruch_fuer(bestand, "1")
-    assert anspruch.mindestrelevanz is Relevanz.HOCH
-    assert anspruch.verlangt_strecke
+    assert anspruch.mindestrelevanz is Relevanz.MITTEL
+    assert not anspruch.verlangt_strecke
 
 
 def test_die_note_schlaegt_die_klasse_auch_wenn_diese_strenger_waere(

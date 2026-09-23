@@ -1769,9 +1769,17 @@ entscheidet, nicht die gerechnete Klasse".
 | Klasse | Mindestrelevanz | zusätzlich          |
 |--------|-----------------|---------------------|
 | `A`    | `mittel`        | –                   |
-| `B`    | `hoch`          | –                   |
-| `C`    | `hoch`          | genannte **Strecke** |
-| `D`    | —               | es wird nicht geantwortet |
+| `B`    | `mittel`        | –                   |
+| `C`    | `mittel`        | –                   |
+| `D`    | `mittel`        | –                   |
+
+**Seit dem 21.09.2026 steht überall `mittel` und nirgends mehr „Strecke"**
+(Anweisung des Nutzers: *„nicht pauschal hoch + Strecke verlangen"*). Die
+Tabelle bleibt, weil die Frage bleibt — sie ist nur nicht mehr die Stelle,
+an der jeder Kommentar scheitert. Erlaubt sind `hoch`, `mittel` und
+`niedrig`; **`niedrig` bedeutet `mittel`**, denn darunter liegt nur
+`Relevanz.KEINE` („kein Zusammenhang"), und darauf wird ausdrücklich nicht
+geantwortet.
 
 In einer Reisegruppe ist die Frage nach einem Koffer das Thema des Hauses; in
 einer Gemeinschaftsgruppe ist sie eine unter fünfzig, und in einer allgemeinen
@@ -1988,8 +1996,9 @@ die Zielprioritaet kamen am 13.09.2026 dazu.
   umgelegten Schalter.
 - **Die Regeln der Gruppe binden ohne Schalter** (`qualifikation.
   darf_nach_regeln`). Kein Link, wo Links verboten sind; kein Kommentar, wo
-  Kommentare wiederholt abgelehnt wurden; gar nichts, wo die Regeln Werbung
-  verbieten. `qualifikation.pflicht` entscheidet seit dem 12.09.2026 nur noch
+  Kommentare wiederholt abgelehnt wurden. **Das Werbeverbot gehört seit dem
+  21.09.2026 nicht mehr dazu** — siehe „Die Werbungslogik ist entfernt".
+  `qualifikation.pflicht` entscheidet seit dem 12.09.2026 nur noch
   über die **Beitrittsstufen** (`BEITRITTSSTUFEN`) — also über die Frage, ob
   der Vermerk „kein Mitglied" sperrt, und die beantwortet daneben schon
   `automatik.mitgliedschaft_pflicht`. Ein Schalter, der die Regeln der Gruppe
@@ -2299,18 +2308,13 @@ weder Netz noch Datenbank noch Playwright, wie `kaltmodus.py` und
   Werbung, desto mehr muss dafür sprechen. „Nicht jede gefundene Gelegenheit
   muss genutzt werden" ist damit kein Vorsatz, sondern ein Rückgabewert — er
   wird gezählt, nicht als Ausfall gebucht.
-- **`Erlaubnis` hat vorsichtige Vorgaben** (`links=False`, `werbung=False`).
-  Wer sie ohne Angaben baut, hat nichts über die Gruppe gelesen — und daraus
-  eine Erlaubnis zu machen wäre genau der Fehler, den die Anforderung mit
-  „UNKNOWN bedeutet nicht erlaubt" benennt. Ungelesene Regeln führen deshalb
-  zur **vorsichtigeren** Handlung (privater Kontakt statt App-Nennung), nicht
-  zum Stillstand: Aus nichts entsteht keine Beobachtung, und eine Gruppe, in
-  der nie etwas versucht wird, bliebe für immer unbewertet.
-- **`UNGEEIGNET` schließt beides aus.** Ein Werbeverbot der Gruppe macht über
-  `beurteile` ein `UNGEEIGNET`, und dort bleibt auch die „bloß hilfreiche"
-  Antwort aus — geschrieben hätten wir sonst trotzdem. Die Stufe
-  `HELPFUL_REPLY` bleibt erreichbar, wo jemand die Erlaubnis genauer kennt
-  als der Regeltext.
+- **`Erlaubnis` hat eine vorsichtige Vorgabe: `links=False`.** Wer sie ohne
+  Angaben baut, hat nichts über die Gruppe gelesen. Ungelesene Regeln kosten
+  seit dem 21.09.2026 nur noch den **Link** — kommentiert wird trotzdem, die
+  App wird genannt und nicht verlinkt. `werbung` gibt es nicht mehr.
+- **`UNGEEIGNET` schließt beides aus** — aber nur noch aus der
+  **Beobachtung**: wo Beiträge *und* Kommentare wiederholt abgelehnt wurden.
+  Ein Werbeverbot der Gruppe führt seit dem 21.09.2026 nicht mehr dorthin.
 - **Der passendste Beitrag schlägt den lautesten.** `waehle_und_kommentiere`
   ordnet nach (Nähe der Antwortart, dann Reaktionen+Kommentare). Vorher
   entschied allein `interactions + comments`: Der Kommentar über
@@ -2670,6 +2674,70 @@ gehen, bis jede ihre zehn Kommentare hat, und niemals aufhören.
 - Festgehalten in `tests/test_ruhezeit.py`; die beiden Treibertests zeigen
   den Unterschied im Betrieb: Mit „kein Anlass" kommt die erste Gruppe ein
   zweites Mal dran, mit „kein Kommentarfeld" nicht.
+
+### Die Werbungslogik ist entfernt (21.09.2026)
+
+```
+vorher   Regeln ungelesen / "keine Werbung"
+           → werbung=False → soll_app_nennen=False
+           → NO_LINK → kein Textvorrat → kein Kommentar, für immer
+jetzt    Schwelle der Gruppe erfüllt → Kommentar
+           (ohne gelesene Regel: ohne Link, aber mit App-Nennung)
+```
+
+Anweisung des Nutzers, nachdem eine Runde durch dreizehn ausgesuchte Gruppen
+wieder **null** Kommentare schrieb: *„Werbungslogik komplett entfernen … Die
+Kette `werbung=False → soll_app_nennen=False → NO_LINK → kein Kommentar`
+vollständig entfernen."*
+
+- **`Erlaubnis.werbung` gibt es nicht mehr.** Das Feld war der Anfang einer
+  geschlossenen Kette, und ihr Ende war Stille: Für `Linkmodus.NO_LINK` gibt
+  es absichtlich keinen Textvorrat, also ging nichts hinaus. In einer
+  Kampagne aus Gruppen, die ein Mensch ausgesucht und mit `A++` eingestuft
+  hat, hat das Feld nichts anderes bewirkt.
+- **`keine_werbung` macht kein `UNGEEIGNET` mehr** (`qualifikation.beurteile`).
+  Die Regel wird weiterhin **gelesen** und steht in der Zusammenfassung — sie
+  ist eine Auskunft über die Gruppe, keine Sperre. Die Spalte
+  `group_marketing.regel_keine_werbung` bleibt: Migrationen sind hier
+  ausschließlich additiv, und der Wert erscheint weiter in der Übersicht.
+- **Was die Annahme betrifft, bindet unverändert.** `links` braucht weiter
+  eine gelesene Regel ohne Linkverbot — „Link im Kommentar" ist der
+  häufigste Ablehnungsgrund, und das ist eine Aussage über die Annahme und
+  nicht über die Erlaubnis zu werben. `OHNE_KOMMENTARE`, `OHNE_BEITRAEGE`
+  und `UNGEEIGNET` aus **Beobachtung** (wiederholte Ablehnungen) gelten
+  ebenfalls weiter.
+- **Die Stufe `HELPFUL_REPLY` ist entfallen.** Sie war der Zweig „Bezug
+  belegt, aber Werbung verboten" und ohne `werbung` nicht mehr erreichbar.
+  `Antwortart.HELPFUL_REPLY` bleibt in der Aufzählung (Bestandsdaten tragen
+  sie), vergeben wird sie nicht mehr.
+- **Der Preis ist ausgesprochen:** In Gruppen, deren Regeln Werbung
+  verbieten, wird jetzt kommentiert. Das erhöht die Wahrscheinlichkeit von
+  Ablehnungen und Sperren für das Konto, an dem alles hängt. Was dagegen
+  steht, ist unverändert da: `Ausgangsart.RATE_LIMIT` mit verdoppelndem
+  Backoff, die Tagesmengen je Aktion und die Beobachtung je Gruppe.
+
+**Drei weitere Punkte derselben Anweisung:**
+
+- **Die Schwelle folgt der Gruppe, nicht einem Zusatz.** `c_verlangt_strecke`
+  steht auf `false`, `mindestrelevanz` auf `mittel` für jede Klasse. Die
+  ausgeschriebene Strecke war der Ersatz für ein Urteil über die Gruppe — und
+  das liegt vor. Im Betrieb hat sie jeden Beitrag abgewiesen, weil syrische
+  Reisegruppen ihre Herkunft selten ausschreiben („نازل ع الشام" nennt kein
+  Deutschland).
+- **Keine zugewiesene Gruppe wird dauerhaft übersprungen.** Der automatische
+  Ausschluss nach einem technischen Fehlschlag (`bearbeiten = 0`, 20.09.2026)
+  ist entfernt; der Fehlschlag kostet jetzt eine **Ruhezeit**, nicht die
+  Gruppe. Von Hand bleibt der Ausschluss ein Haken in der Übersicht — dort
+  fällt ihn ein Mensch. Ein **Sitzungsfehler** hält den Lauf weiterhin sofort
+  an, und das bleibt der einzige Grund dafür.
+- **Eine Kampagne ist bei 100 erfolgreichen Kommentaren erreicht**
+  (`marketing.kampagne.ziel_kommentare`). Daneben bleibt die alte Bedingung
+  stehen — jede Gruppe hat ihre zehn Fassungen veröffentlicht —, und zwar als
+  Garantie für den Abschluss: Bei dreizehn Gruppen sind höchstens 130
+  möglich, und eine Kampagne, deren Vorrat vor der Hundert endet, liefe sonst
+  für immer. `0` schaltet das eigene Ziel ab.
+
+Festgehalten in `tests/test_kommentarregeln_2109.py` (eine Regel je Test).
 
 ### Die Regeln der Gruppe, in der kommentiert wird (21.09.2026)
 

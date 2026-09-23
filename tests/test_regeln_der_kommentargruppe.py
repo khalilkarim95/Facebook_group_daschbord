@@ -17,6 +17,12 @@ Die Kette dahinter ist geschlossen und endet immer am selben Ort:
       -> kein Textvorrat (absichtlich - er waere erfunden)
       -> kein Kommentar, in jeder Runde, fuer immer
 
+Die Kette ist seit dem 21.09.2026 an ihrem ersten Glied durchtrennt: Die
+Werbungslogik ist entfernt (Anweisung des Nutzers). Ungelesene Regeln kosten
+seither nur noch den **Link** - kommentiert wird trotzdem. Warum die Regeln
+dennoch gelesen gehoeren, steht damit unveraendert hier: ohne sie bekommt
+die Gruppe nie einen Klick gutgeschrieben.
+
 Warum die Regeln nie gelesen wurden: ``regeln_offen`` bot die naechste
 **Beitritts**- und die naechste **Arbeits**gruppe an - aber seit dem
 15.09.2026 waehlt der Kommentarzweig seine Gruppe selbst
@@ -118,13 +124,19 @@ def _befund() -> Inhaltsbefund:
     )
 
 
-def test_ohne_gelesene_regeln_bleibt_die_app_ungenannt() -> None:
-    """Die Kette aus dem Protokoll, in einer Zeile nachgestellt."""
+def test_ohne_gelesene_regeln_faellt_nur_der_link_weg() -> None:
+    """Die Kette aus dem Protokoll - und was seit dem 21.09.2026 davon gilt.
+
+    Bis dahin hiessen ungelesene Regeln ``werbung=False`` und damit gar kein
+    Kommentar. Die Werbungslogik ist auf Anweisung des Nutzers entfernt;
+    uebrig bleibt der Link, und der braucht weiterhin eine gelesene Regel.
+    """
     entscheidung = entscheide(
         _befund(), Erlaubnis.aus_regeln(Regelbefund(), Qualifikation.GEEIGNET)
     )
-    assert entscheidung.art is not Antwortart.CONTEXTUAL_APP_MENTION
-    assert LINKMODUS[entscheidung.art] is Linkmodus.NO_LINK
+    assert entscheidung.art is Antwortart.CONTEXTUAL_APP_MENTION
+    assert LINKMODUS[entscheidung.art] is not Linkmodus.NO_LINK
+    assert not entscheidung.mit_link
 
 
 def test_mit_gelesenen_regeln_wird_die_app_genannt() -> None:
@@ -145,16 +157,17 @@ def test_mit_gelesenen_regeln_wird_die_app_genannt() -> None:
     assert LINKMODUS[entscheidung.art] is not Linkmodus.NO_LINK
 
 
-def test_ein_werbeverbot_bindet_auch_nach_dem_lesen() -> None:
-    """Die Regel der Gruppe bleibt bindend - sie wird gelesen, nicht umgangen.
+def test_die_linkregel_bindet_auch_nach_der_aenderung() -> None:
+    """Was vom Lesen der Regeln bleibt: der Link.
 
-    Das ist die Kehrseite der Reparatur: Wo die Gruppe Werbung verbietet,
-    bleibt es bei ``NO_LINK`` und damit dabei, dass nichts hinausgeht. Der
-    Unterschied ist, dass es jetzt **auf einer gelesenen Regel** beruht und
-    nicht darauf, dass niemand nachgesehen hat.
+    Das Werbeverbot sperrt seit dem 21.09.2026 nicht mehr - ein **Link**
+    verbot dagegen schon. "Link im Kommentar" ist der haeufigste Grund einer
+    Ablehnung; das ist eine Aussage ueber die Annahme, nicht ueber die
+    Erlaubnis zu werben. Kommentiert wird dort trotzdem, nur ohne Adresse.
     """
-    verbietet = Regelbefund(gelesen=True, keine_werbung=True)
+    verbietet = Regelbefund(gelesen=True, keine_links=True)
     entscheidung = entscheide(
-        _befund(), Erlaubnis.aus_regeln(verbietet, Qualifikation.GEEIGNET)
+        _befund(), Erlaubnis.aus_regeln(verbietet, Qualifikation.OHNE_LINKS)
     )
-    assert LINKMODUS[entscheidung.art] is Linkmodus.NO_LINK
+    assert entscheidung.art is Antwortart.CONTEXTUAL_APP_MENTION
+    assert not entscheidung.mit_link

@@ -603,6 +603,7 @@ def fuehre_lauf_aus(
             # Aus derselben Tabelle wie die Mindestrelevanz: Eine Klasse ohne
             # Schwelle ist eine, in der nicht gearbeitet wird.
             klassen=zielgruppe.bearbeitbare_klassen(config),
+            ziel_kommentare=ziel_kommentare(config),
             kommentare_zuerst=kommentare_zuerst(config),
         )
 
@@ -1123,44 +1124,31 @@ def _text_schritt(
     # steht ausdruecklich woanders (``kommentar_erschoepft``).
     if ergebnis.gruppe_beiseite:
         with MarketingStore(pfad) as store:
-            # Eine tote Adresse ist kein Fehler der Gruppe: Sie ruht und
-            # kommt zurueck. Ein technischer Fehlschlag legt sie dagegen
-            # fuer den Lauf beiseite - sie wird gleich darunter ohnehin aus
-            # der Kampagne genommen.
+            # **Sie ruht, sie faellt nicht heraus** (21.09.2026). Bis dahin
+            # bekam nur die tote Adresse eine Ruhezeit, der technische
+            # Fehlschlag dagegen einen Schlussstrich fuer den ganzen Lauf -
+            # und danach den Ausschluss aus der Kampagne. Beides widerspricht
+            # der Anweisung "keine der zugewiesenen Gruppen darf dauerhaft
+            # uebersprungen werden": Ein Fehlschlag kostet jetzt einen
+            # Durchgang, nicht die Gruppe.
             _ueberspringen(
                 store,
                 lauf_id,
                 schritt,
                 f"technisch: {ergebnis.fehler}"[:160],
-                ruhe=ruhe_minuten(config) if ergebnis.beitrag_weg else 0,
+                ruhe=ruhe_minuten(config),
             )
-            # **Und dauerhaft aus der Kampagne** (20.09.2026). Der Uebersprung
-            # gilt nur fuer diesen Lauf; beim naechsten Start stuende dieselbe
-            # Gruppe wieder ganz vorn. "Kein Kommentarfeld" ist dort keine
-            # Eigenschaft des Browsers, sondern eine der Gruppe.
-            # **Nicht bei einer toten Adresse.** Die Gruppe kann voellig in
-            # Ordnung sein; was fehlt, ist ein Beitrag, den es nicht mehr
-            # gibt. Sie dafuer auszuschliessen hiesse, die falsche Stelle zu
-            # bestrafen - dieselbe Verwechslung wie "Technik ist kein
-            # Urteil", nur eine Ebene tiefer.
-            # **Und nicht bei einem Sitzungsfehler** (21.09.2026). Eine
-            # abgemeldete Sitzung findet in **jeder** Gruppe kein
-            # Kommentarfeld; jeder dieser Fehlschlaege gilt als technisch,
-            # und technisch heisst hier: raus aus der Kampagne. Ein
-            # abgelaufener Anmeldestand haette so eine Kampagne nach der
-            # anderen leergeraeumt - mit einem Grund an jeder Gruppe, an dem
-            # nichts liegt. Der Lauf haelt stattdessen gleich darunter an.
-            if (
-                not ergebnis.beitrag_weg
-                and not ist_sitzungsfehler(ergebnis.fehler)
-                and store.schliesse_gruppe_aus(
-                    schritt.group_id, f"automatisch: {ergebnis.fehler}"
-                )
-            ):
-                console.print(
-                    f"[yellow]  {schritt.gruppe_name}: aus der Bearbeitung genommen "
-                    f"({ergebnis.fehler[:60]})[/yellow]"
-                )
+            # **Ausgeschlossen wird nicht mehr** (21.09.2026, Anweisung des
+            # Nutzers: "Keine der zugewiesenen Gruppen darf dauerhaft
+            # uebersprungen werden"). Bis dahin nahm ein technischer
+            # Fehlschlag die Gruppe ueber ``bearbeiten = 0`` aus der Kampagne
+            # - dauerhaft und ohne dass jemand es anordnete. Der Uebersprung
+            # oben bleibt: Er gilt fuer **diesen** Lauf, und beim naechsten
+            # steht dieselbe Gruppe wieder in der Runde.
+            #
+            # Von Hand bleibt der Ausschluss erreichbar (Haken in der
+            # Uebersicht, ``store.schliesse_gruppe_aus``) - dort faellt ihn
+            # ein Mensch.
 
     # Technische Fehlschlaege in Folge ueber **verschiedene** Gruppen: Dann
     # liegt es nicht mehr an den Gruppen. Ein Sitzungsfehler haelt sofort an.
@@ -2010,6 +1998,21 @@ def _gedeckelt(config: AppConfig, modus):  # noqa: ANN001, ANN202 - Linkmodus
     return min(modus, deckel, key=_MODUSRANG.index)
 
 
+def ziel_kommentare(config: AppConfig) -> int:
+    """Wie viele erfolgreiche Kommentare eine Kampagne erreichen soll.
+
+    ``0`` heisst: kein eigenes Ziel - dann gilt wie bisher, dass jede Gruppe
+    ihre Fassungen veroeffentlicht haben muss. Die Vorgabe **im Code** ist
+    deshalb 0 und nicht 100: Ein Ziel ist eine Entscheidung, und die steht in
+    ``settings.yaml`` (``marketing.kampagne.ziel_kommentare``).
+    """
+    wert = config.get("marketing", "kampagne", "ziel_kommentare", default=0)
+    try:
+        return max(0, int(wert))
+    except (TypeError, ValueError):
+        return 0
+
+
 def anlass_pflicht(config: AppConfig) -> bool:
     """Braucht ein Kommentar einen erkannten Anlass - oder genuegt der Bezug?
 
@@ -2499,11 +2502,10 @@ def vorgaben_lesen(vorgaben: dict | None):  # noqa: ANN201 - (Erlaubnis, Anspruc
     Kennungen**, kein Datensatz - dieselbe Sparsamkeit wie beim Regelbefund.
 
     **Fehlt die Angabe, gilt die vorsichtige Vorgabe.** Ein aelterer Server,
-    der ``vorgaben`` noch nicht mitschickt, fuehrt damit zu ``links=False``
-    und ``werbung=False``: Aus nichts entsteht keine Erlaubnis. Das ist
-    derselbe Grundsatz wie bei ``Erlaubnis`` ohne gelesene Regeln - und hier
-    besonders wichtig, weil ein Arbeitsrechner und ein Server verschiedene
-    Staende haben koennen.
+    der ``vorgaben`` noch nicht mitschickt, fuehrt damit zu ``links=False``:
+    Aus nichts entsteht keine Link-Erlaubnis. Kommentiert wird trotzdem, nur
+    ohne Adresse - das ist der Unterschied zum Stand vor dem 21.09.2026, an
+    dem ein fehlendes ``werbung`` den Kommentar ganz ausfallen liess.
     """
     from fbgroups.marketing.inhalt import Relevanz
 
@@ -2513,7 +2515,8 @@ def vorgaben_lesen(vorgaben: dict | None):  # noqa: ANN201 - (Erlaubnis, Anspruc
         kommentare=bool(roh_erlaubnis.get("kommentare", True)),
         beitraege=bool(roh_erlaubnis.get("beitraege", True)),
         links=bool(roh_erlaubnis.get("links", False)),
-        werbung=bool(roh_erlaubnis.get("werbung", False)),
+        # ``werbung`` stand hier bis zum 21.09.2026. Ein aelterer Server
+        # schickt es weiterhin mit; es wird schlicht uebergangen.
         privatkontakt=bool(roh_erlaubnis.get("privatkontakt", True)),
         regeln_gelesen=bool(roh_erlaubnis.get("regeln_gelesen", False)),
     )

@@ -565,6 +565,30 @@ def regeln_aus_config(config) -> Regeln:  # noqa: ANN001 - AppConfig, ohne Impor
 #: allgemeinen zusaetzlich die Strecke genannt. Der Gedanke ist derselbe wie
 #: bei ``entscheidung.Erlaubnis``: Wer nichts gesagt hat, bekommt die engere
 #: Regel und nicht die weitere.
+#: Was die Konfiguration schreiben darf - und was daraus wird.
+#:
+#: **"niedrig" ist mittel**, und das ist keine Schlamperei, sondern die
+#: schwaechste Schwelle, die es geben kann: Darunter liegt nur
+#: ``Relevanz.KEINE``, und das heisst woertlich "kein Zusammenhang mit
+#: unserem Angebot". Darauf wird nicht geantwortet - genau das meint die
+#: Anweisung vom 21.09.2026 mit "keine beliebigen voellig irrelevanten
+#: Beitraege". Wer "niedrig" schreibt, bekommt also die niedrigste Schwelle,
+#: die etwas anderes ist als "alles".
+_STUFENWORT: dict[str, str] = {
+    "hoch": "hoch",
+    "mittel": "mittel",
+    "niedrig": "mittel",
+}
+
+
+def _stufe(wort: object, vorgabe: str):  # noqa: ANN202 - Relevanz
+    """Ein Wort aus ``settings.yaml`` -> ``Relevanz``. Unbekanntes uebergeht es."""
+    from fbgroups.marketing.inhalt import Relevanz
+
+    roh = _STUFENWORT.get(str(wort).strip().lower())
+    return Relevanz(roh) if roh is not None else Relevanz(vorgabe)
+
+
 _VORGABE_RELEVANZ: dict[Zielprioritaet, str] = {
     Zielprioritaet.A: "mittel",
     Zielprioritaet.B: "hoch",
@@ -601,11 +625,7 @@ def anspruch_aus_config(config) -> dict:  # noqa: ANN001 - AppConfig
         klassen[Zielprioritaet.D] = str(stufen[Zielprioritaet.D.value])
 
     for klasse, vorgabe in klassen.items():
-        roh = str(stufen.get(klasse.value, vorgabe)).strip().lower()
-        try:
-            stufe = Relevanz(roh)
-        except ValueError:
-            stufe = Relevanz(vorgabe)
+        stufe = _stufe(stufen.get(klasse.value, vorgabe), vorgabe)
         # Die genannte Strecke verlangen die beiden Klassen, in denen ein
         # Reisethema ein Zufall sein kann: die allgemeine (``C``) und die
         # ohne erkennbaren Bezug (``D``).
@@ -656,11 +676,11 @@ def anspruch_aus_note(config) -> dict:  # noqa: ANN001 - AppConfig
 
     tabelle: dict[str, tuple[Relevanz, bool]] = {}
     for note, wert in roh.items():
-        try:
-            stufe = Relevanz(str(wert).strip().lower())
-        except ValueError:
+        if str(wert).strip().lower() not in _STUFENWORT:
+            # Ein Tippfehler erfindet keine Schwelle - die Note faellt dann
+            # auf die Klassentabelle zurueck.
             continue
-        tabelle[str(note).strip().upper()] = (stufe, strecke)
+        tabelle[str(note).strip().upper()] = (_stufe(wert, "mittel"), strecke)
     return tabelle
 
 

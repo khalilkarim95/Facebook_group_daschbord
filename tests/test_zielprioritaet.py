@@ -287,7 +287,7 @@ def test_die_gruppenklasse_entscheidet_ueber_die_schwelle() -> None:
     befund = inhalt.lies("بدي ابعت امانة صغيرة")
     assert befund.relevanz is Relevanz.MITTEL
 
-    erlaubt = entscheidung_modul.Erlaubnis(werbung=True, links=False, regeln_gelesen=True)
+    erlaubt = entscheidung_modul.Erlaubnis(links=False, regeln_gelesen=True)
 
     locker = entscheidung_modul.entscheide(
         befund, erlaubt, entscheidung_modul.Anspruch(mindestrelevanz=Relevanz.MITTEL)
@@ -313,7 +313,7 @@ def test_klasse_c_verlangt_die_ausgeschriebene_strecke() -> None:
     assert ohne_herkunft.strecke is False
     assert mit_herkunft.strecke is True
 
-    erlaubt = entscheidung_modul.Erlaubnis(werbung=True, regeln_gelesen=True)
+    erlaubt = entscheidung_modul.Erlaubnis(regeln_gelesen=True)
     anspruch_c = entscheidung_modul.Anspruch(
         mindestrelevanz=Relevanz.HOCH, verlangt_strecke=True
     )
@@ -529,13 +529,16 @@ def test_die_schwellen_je_klasse_stehen_in_der_konfiguration(config) -> None:
     tabelle = zielgruppe.anspruch_aus_config(config)
 
     assert tabelle[Zielprioritaet.A][0] is Relevanz.MITTEL
-    assert tabelle[Zielprioritaet.B][0] is Relevanz.HOCH
-    assert tabelle[Zielprioritaet.C] == (Relevanz.HOCH, True)
-    # Seit dem 21.09.2026 steht ``d`` in der Konfiguration - mit der
-    # strengsten Schwelle, die es gibt: belegter Bezug **und** die
-    # ausgeschriebene Strecke. Vorher wurde eine D-Gruppe nie besucht, und im
-    # Betrieb waren das neun von dreizehn zugeordneten Gruppen.
-    assert tabelle[Zielprioritaet.D] == (Relevanz.HOCH, True)
+    # **Seit dem 21.09.2026 fuer jede Klasse "mittel", ohne Strecke**
+    # (Anweisung des Nutzers: "nicht pauschal hoch + Strecke verlangen").
+    # Die Gruppen einer Kampagne sind bereits als relevant ausgesucht; die
+    # Zusatzforderung war der Ersatz fuer ein Urteil, das damit vorliegt.
+    assert tabelle[Zielprioritaet.B][0] is Relevanz.MITTEL
+    assert tabelle[Zielprioritaet.C] == (Relevanz.MITTEL, False)
+    # ``d`` steht seit dem 21.09.2026 in der Konfiguration: Vorher wurde eine
+    # D-Gruppe nie besucht, und im Betrieb waren das neun von dreizehn
+    # zugeordneten Gruppen.
+    assert tabelle[Zielprioritaet.D] == (Relevanz.MITTEL, False)
     assert zielgruppe.bearbeitbare_klassen(config) == frozenset(Zielprioritaet)
 
 
@@ -634,7 +637,7 @@ def test_ein_konkreter_anlass_belegt_den_bezug_wie_hoch() -> None:
     assert befund.relevanz is Relevanz.MITTEL
     assert befund.anlass is Anlass.PLATZ_IM_KOFFER
 
-    erlaubt = entscheidung_modul.Erlaubnis(werbung=True, regeln_gelesen=True)
+    erlaubt = entscheidung_modul.Erlaubnis(regeln_gelesen=True)
     assert entscheidung_modul.soll_app_nennen(befund, erlaubt) is True
 
     # Ohne Anlass bleibt es bei der alten Regel: "fast" ist der Anfang von Spam.

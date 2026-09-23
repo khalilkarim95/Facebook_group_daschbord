@@ -86,7 +86,7 @@ def _kern(config, posts, kommentieren, **kwargs):
         "Rueckfall {link}",
         kommentieren=kommentieren,
         bisherige=[],
-        erlaubnis=Erlaubnis(links=True, werbung=True, regeln_gelesen=True),
+        erlaubnis=Erlaubnis(links=True, regeln_gelesen=True),
         anspruch=Anspruch(),
         link_url=LINK_URL,
         **kwargs,
@@ -415,10 +415,10 @@ def test_ohne_lesbaren_text_bleibt_eine_tote_adresse_ohne_urteil(config) -> None
 
 
 def test_der_fernbetrieb_meldet_beitrag_weg_mit() -> None:
-    """Sonst schliesst der Server die Gruppe wegen einer toten Adresse aus.
+    """Der Server bekommt die tote Adresse gemeldet und nimmt sie an.
 
-    Der oertliche Lauf liest ``beitrag_weg``, bevor er ausschliesst; der
-    Fernbetrieb - der Regelfall - meldete es bis zum 20.09.2026 nicht einmal.
+    Der oertliche Lauf liest ``beitrag_weg``; der Fernbetrieb - der
+    Regelfall - meldete es bis zum 20.09.2026 nicht einmal.
     """
     from pathlib import Path
 
@@ -427,51 +427,41 @@ def test_der_fernbetrieb_meldet_beitrag_weg_mit() -> None:
 
     assert '"beitrag_weg": ergebnis.beitrag_weg,' in quelltext, "gemeldet"
     assert "beitrag_weg: bool = False" in web, "und angenommen"
-    endpunkt = web.split("def automatik_ergebnis(", 1)[1].split("@app.post", 1)[0]
-    assert "not meldung.beitrag_weg" in endpunkt, "und gelesen"
-    assert "schliesse_gruppe_aus" in endpunkt.split("not meldung.beitrag_weg", 1)[1], (
-        "die Bedingung steht vor dem Ausschluss"
-    )
 
 
-def test_der_ausschluss_lieset_beitrag_weg() -> None:
-    """Der Quelltext haelt fest, dass beides zusammengehoert.
+def test_kein_weg_schliesst_eine_gruppe_selbst_aus() -> None:
+    """**Seit dem 21.09.2026 nimmt kein Lauf eine Gruppe aus der Kampagne.**
 
-    Ohne die Bedingung schloesse eine einzige geloeschte Adresse eine gesunde
-    Gruppe dauerhaft aus - und niemand saehe, warum.
+    Anweisung des Nutzers: "Keine der zugewiesenen Gruppen darf dauerhaft
+    uebersprungen werden." Bis dahin setzte ein technischer Fehlschlag die
+    Gruppe auf ``bearbeiten = 0``; jetzt kostet er eine Ruhezeit. Von Hand
+    bleibt der Ausschluss ein Haken in der Uebersicht - dort faellt ihn ein
+    Mensch. Beide Wege, oertlich und fern, weil zwei Fassungen zwei Regeln
+    waeren.
     """
     from pathlib import Path
 
     quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
+    web = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
+    endpunkt = web.split("def automatik_ergebnis(", 1)[1].split("@app.post", 1)[0]
 
-    ausschluss = quelltext.split("if ergebnis.gruppe_beiseite:", 1)[1].split(
-        "store.schliesse_gruppe_aus(", 1
-    )[0]
-    assert "not ergebnis.beitrag_weg" in ausschluss
-    # Seit dem 21.09.2026 steht dieselbe Zurueckhaltung daneben: Eine
-    # Anmeldewand ist erst recht kein Urteil ueber die Gruppe.
-    assert "not ist_sitzungsfehler(ergebnis.fehler)" in ausschluss
-    # Und der Technikwaechter zaehlt ihn nicht mit: Eine tote Adresse sagt
+    assert "store.schliesse_gruppe_aus(" not in quelltext, "oertlich"
+    assert "schliesse_gruppe_aus(" not in endpunkt, "fern"
+    # Und der Technikwaechter zaehlt eine tote Adresse nicht mit: Sie sagt
     # nichts ueber den Rechner.
     assert "if not ergebnis.beitrag_weg and technik.melde(ergebnis):" in quelltext
 
 
 # --- 6./7. Beide Laeufe legen die Gruppe beiseite --------------------------
 
+
 def test_beide_laeufe_legen_die_gruppe_beiseite() -> None:
-    """Eine zweite Zaehlweise waere ein zweiter Lauf mit anderem Ausgang.
+    """Beide Wege lassen die Gruppe **ruhen** - dieselbe Folge, zwei Orte.
 
-    **Der Ausschluss haengt nicht an der Lauf-Kennung** (20.09.2026). Hier
-    stand bis dahin die Zeile ``if meldung.gruppe_beiseite and
-    meldung.lauf_id:`` - beides in **einer** Bedingung. Fehlt die Kennung,
-    fiel damit nicht nur der Uebersprung weg, sondern jede Folge des
-    Fehlschlags: Der Server bot dieselbe Gruppe sofort wieder an, und der
-    Lauf fasste sie Dutzende Male an, bis der Technikwaechter abbrach - mit
-    der Meldung "ueber verschiedene Gruppen hinweg", obwohl es nie eine
-    zweite gab.
-
-    Getrennt geprueft, weil es zwei Dinge sind: Der **Uebersprung** braucht
-    die Kennung (er gilt fuer genau diesen Lauf), der **Ausschluss** nicht.
+    Der Uebersprung gilt fuer genau diesen Lauf und traegt eine Ruhezeit
+    (``automatik.ruhe_minuten``); danach steht die Gruppe wieder in der
+    Runde. Eine zweite Zaehlweise waere ein zweiter Lauf mit anderem
+    Ausgang.
     """
     from pathlib import Path
 
@@ -480,14 +470,9 @@ def test_beide_laeufe_legen_die_gruppe_beiseite() -> None:
 
     assert "if ergebnis.gruppe_beiseite:" in quelltext, "oertlich"
     assert '"gruppe_beiseite": ergebnis.gruppe_beiseite' in quelltext, "gemeldet"
-    assert "if meldung.gruppe_beiseite:" in web, "auf dem Server"
-    assert "if meldung.gruppe_beiseite and meldung.lauf_id:" not in web, (
-        "der Ausschluss darf nicht an der Lauf-Kennung haengen"
-    )
-
-    # Beide Wege schliessen die Gruppe aus - an derselben Stelle im Speicher.
-    assert "schliesse_gruppe_aus(" in quelltext, "oertlich ausgeschlossen"
-    assert "schliesse_gruppe_aus(" in web, "fern ausgeschlossen"
+    assert "if meldung.gruppe_beiseite and meldung.lauf_id:" in web, "auf dem Server"
+    assert "ruhe=ruhe_minuten(config)" in quelltext, "oertlich mit Ruhezeit"
+    assert "ruhe_minuten=automatik.ruhe_minuten(cfg)" in web, "fern mit Ruhezeit"
 
 
 def test_der_ausgang_wird_trotzdem_gebucht() -> None:

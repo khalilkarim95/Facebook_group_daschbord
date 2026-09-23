@@ -186,16 +186,28 @@ class Anspruch:
 class Erlaubnis:
     """Was eine Gruppe zulaesst - aus ihren Regeln und aus der Beobachtung.
 
-    **Die Vorgaben sind die vorsichtigen.** ``links`` und ``werbung`` stehen
-    auf ``False``, nicht auf ``True``: Wer dieses Objekt ohne Angaben baut,
-    hat nichts ueber die Gruppe gelesen - und daraus eine Erlaubnis zu machen
-    waere genau der Fehler, den Punkt 4 der Anforderung benennt.
+    **``werbung`` gibt es seit dem 21.09.2026 nicht mehr** (Anweisung des
+    Nutzers). Das Feld war der Anfang einer geschlossenen Kette: ungelesene
+    Regeln -> ``werbung=False`` -> ``soll_app_nennen`` faellt aus ->
+    ``private_contact_suggestion`` -> ``Linkmodus.NO_LINK`` -> kein
+    Textvorrat -> kein Kommentar. In einer Kampagne aus Gruppen, die ein
+    Mensch ausgesucht und mit "A++" eingestuft hat, hat es damit nichts
+    anderes bewirkt als Stille.
+
+    Was die Gruppe zulaesst, wird weiterhin gelesen: ``kommentare``,
+    ``beitraege`` und ``links`` bleiben - der Link im Kommentar ist der
+    haeufigste Grund einer Ablehnung, und das ist eine Aussage ueber die
+    Annahme, nicht ueber die Erlaubnis zu werben.
+
+    **Die Vorgabe fuer ``links`` bleibt die vorsichtige** (``False``): Wer
+    dieses Objekt ohne Angaben baut, hat nichts ueber die Gruppe gelesen.
+    Ohne Link wird trotzdem kommentiert - die App wird dann genannt, nicht
+    verlinkt (``APP_NAME_ONLY``).
     """
 
     kommentare: bool = True
     beitraege: bool = True
     links: bool = False
-    werbung: bool = False
     privatkontakt: bool = True
     regeln_gelesen: bool = False
 
@@ -212,16 +224,15 @@ class Erlaubnis:
 
         ``links`` ist der einzige Wert, der eine gelesene Regel **braucht**:
         Ohne gelesene Regeln bleibt er aus. Dass in einer Gruppe schon einmal
-        ein Link durchging, heisst nicht, dass er erlaubt war.
+        ein Link durchging, heisst nicht, dass er erlaubt war. Kommentiert
+        wird dort trotzdem, nur ohne Adresse.
         """
         regeln = regeln or Regelbefund()
         gelesen = regeln.gelesen
         # ``UNGEEIGNET`` schliesst **beides** aus, nicht nur eines: Es
-        # entsteht aus einem Werbeverbot der Gruppe oder daraus, dass sowohl
-        # Beitraege als auch Kommentare wiederholt abgelehnt wurden. Ohne
-        # diese Zeile blieb ``kommentare`` wahr, und in einer Gruppe, die
-        # Werbung verbietet, waere eine "hilfreiche Antwort" uebriggeblieben -
-        # geschrieben haetten wir dort trotzdem.
+        # entsteht daraus, dass sowohl Beitraege als auch Kommentare
+        # wiederholt abgelehnt wurden. Das Werbeverbot der Gruppe gehoert
+        # seit dem 21.09.2026 nicht mehr dazu (siehe ``qualifikation``).
         nichts = qualifikation is Qualifikation.UNGEEIGNET
         return cls(
             kommentare=not nichts and qualifikation is not Qualifikation.OHNE_KOMMENTARE,
@@ -231,10 +242,11 @@ class Erlaubnis:
                 and not regeln.verbietet_links
                 and qualifikation is not Qualifikation.OHNE_LINKS
             ),
-            werbung=gelesen and not regeln.keine_werbung,
-            # Eine Regel gegen private Kontaktaufnahme lesen wir (noch) nicht
-            # eigens aus; wo Werbung verboten ist, gilt sie als eingeschlossen.
-            privatkontakt=not regeln.keine_werbung,
+            # Eine Regel gegen private Kontaktaufnahme lesen wir nicht eigens
+            # aus. Bis zum 21.09.2026 galt sie als im Werbeverbot
+            # eingeschlossen - mit dem Werbeverbot faellt auch diese
+            # Ableitung weg.
+            privatkontakt=True,
             regeln_gelesen=gelesen,
         )
 
@@ -321,10 +333,14 @@ def soll_app_nennen(
 ) -> bool:
     """Gehoert die App zu **dieser** Frage - oder waere sie eingeworfen?
 
-    Verlangt dreierlei: ein Thema, das die App betrifft (Versand oder Reise),
-    einen **belegten** Bezug und eine Gruppe, die Werbung nicht verbietet.
-    Fehlt eines davon, wird die App nicht genannt - auch dann nicht, wenn der
-    Beitrag "fast" passt. "Fast" ist der Anfang von Spam.
+    Verlangt zweierlei: ein Thema, das die App betrifft (Versand oder
+    Reise), und einen **belegten** Bezug. Fehlt eines davon, wird die App
+    nicht genannt - auch dann nicht, wenn der Beitrag "fast" passt. "Fast"
+    ist der Anfang von Spam.
+
+    Die dritte Bedingung war bis zum 21.09.2026 ``erlaubnis.werbung``. Sie
+    ist entfallen: Die Gruppen einer Kampagne hat ein Mensch ausgesucht, und
+    ob dort geworben werden darf, ist damit beantwortet.
 
     **Belegt heisst ``HOCH`` oder ein erkannter Anlass** (seit 13.09.2026).
     Der Anlass ist der engere Beleg von beiden: ``HOCH`` verlangt Thema und
@@ -334,8 +350,6 @@ def soll_app_nennen(
     Reisegruppe, dort ist es selbstverstaendlich. Ohne diese Zeile fiele
     genau der Fall aus, fuer den es die App gibt.
     """
-    if not erlaubnis.werbung:
-        return False
     anspruch = anspruch or Anspruch()
     if (
         anspruch.anlass_pflicht
@@ -431,16 +445,6 @@ def entscheide(
             grund += ", Regeln ungelesen - vorsichtig"
         return Entscheidung(
             art=Antwortart.PRIVATE_CONTACT_SUGGESTION, grund=grund, mit_link=False
-        )
-
-    if befund.relevanz is Relevanz.HOCH:
-        # Bezug belegt, aber die Gruppe verbietet Werbung und das private
-        # Angebot passt nicht (die Person bietet selbst an). Bleibt die
-        # Antwort, die nichts von uns traegt.
-        return Entscheidung(
-            art=Antwortart.HELPFUL_REPLY,
-            grund=f"{befund.grund}, keine Werbung erlaubt",
-            mit_link=False,
         )
 
     return Entscheidung(grund=f"keine passende Form ({befund.grund})")

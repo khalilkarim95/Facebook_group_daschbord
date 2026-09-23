@@ -103,6 +103,22 @@ marketing:
     # Tracking-Code und sonst nichts.
     play_url: "https://play.google.com/store/apps/details?id={package}&referrer={referrer}"
 
+  # --- Das Ziel einer Kampagne ------------------------------------------
+  #
+  # Wie viele **erfolgreiche** Kommentare eine Kampagne erreichen soll, bevor
+  # die naechste an die Reihe kommt (Anweisung vom 21.09.2026). Gezaehlt
+  # werden veroeffentlichte Fassungen; ein Fehlschlag bringt eine Kampagne
+  # nie naeher an ihre hundert.
+  #
+  # Daneben bleibt die alte Bedingung bestehen - jede Gruppe hat ihre zehn
+  # Fassungen veroeffentlicht -, und zwar als Garantie fuer den Abschluss:
+  # Bei dreizehn Gruppen sind hoechstens 130 moeglich, und eine Kampagne,
+  # deren Vorrat vor der Hundert endet, liefe sonst fuer immer.
+  #
+  # 0 heisst: kein eigenes Ziel, es gilt allein die alte Bedingung.
+  kampagne:
+    ziel_kommentare: 100
+
   # --- Beitrags-Warteschlange -----------------------------------------
   # Alle Stellschrauben des Postens stehen hier und nirgends sonst. Verteilt
   # auf mehrere Dateien waere die Frage "wie lange wartet das System
@@ -398,14 +414,29 @@ marketing:
 
     # Fuer Gruppen OHNE Note - die gerechnete Klasse aus Name, Kategorie,
     # Zielgruppe und Stadt.
+    # Erlaubte Stufen: hoch, mittel, niedrig.
+    #
+    # "niedrig" ist die schwaechste Schwelle, die es geben kann, und sie
+    # bedeutet **mittel**: Darunter liegt nur ``Relevanz.KEINE``, und das
+    # heisst woertlich "kein Zusammenhang mit unserem Angebot". Darauf wird
+    # nicht geantwortet - ausdruecklich auch nach der Anweisung vom
+    # 21.09.2026 ("keine beliebigen voellig irrelevanten Beitraege").
     mindestrelevanz:
       a: mittel
-      b: hoch
-      c: hoch
-      d: hoch
-    # Verlangt Klasse C (und D) zusaetzlich, dass ein Beitrag Herkunft UND
-    # Ziel nennt?
-    c_verlangt_strecke: true
+      b: mittel
+      c: mittel
+      d: mittel
+
+    # Verlangt eine Klasse zusaetzlich, dass ein Beitrag Herkunft UND Ziel
+    # nennt?
+    #
+    # **Seit dem 21.09.2026 aus** (Anweisung des Nutzers: "nicht pauschal
+    # hoch + Strecke verlangen"). Die Zusatzforderung war der Ersatz fuer ein
+    # Urteil ueber die Gruppe - und das liegt vor: Die Gruppen einer Kampagne
+    # hat ein Mensch ausgesucht und eingestuft. Im Betrieb hat sie in jeder
+    # Runde jeden Beitrag abgewiesen, weil syrische Reisegruppen ihre
+    # Herkunft selten ausschreiben ("نازل ع الشام" nennt kein Deutschland).
+    c_verlangt_strecke: false
 
 # --- Der Waechter (15.09.2026) ------------------------------------------
 #

@@ -18,7 +18,7 @@ from fbgroups.marketing.entscheidung import Anspruch, Antwortart, Erlaubnis, ent
 from fbgroups.marketing.inhalt import Anlass, Relevanz, lies
 
 #: Eine Reisegruppe (Klasse A): Werbung erlaubt, Links erlaubt, Regeln gelesen.
-ERLAUBT = Erlaubnis(kommentare=True, links=True, werbung=True, regeln_gelesen=True)
+ERLAUBT = Erlaubnis(kommentare=True, links=True, regeln_gelesen=True)
 #: Ihre Schwelle laut ``settings.yaml`` - und der Schalter, wie er dort steht.
 REISEGRUPPE = Anspruch(mindestrelevanz=Relevanz.MITTEL, anlass_pflicht=False)
 

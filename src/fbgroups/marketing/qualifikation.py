@@ -566,12 +566,19 @@ def beurteile(
             "noch kein Mitglied - zuerst die Beitrittsanfrage",
         )
 
-    # --- Die Regeln der Gruppe: bindend ------------------------------------
-    if regeln.keine_werbung:
-        return Befund(
-            Qualifikation.UNGEEIGNET,
-            f"Regeln der Gruppe: {regeln.zusammenfassung()}",
-        )
+    # --- Die Regeln der Gruppe --------------------------------------------
+    #
+    # **Das Werbeverbot sperrt seit dem 21.09.2026 nicht mehr** (Anweisung
+    # des Nutzers). Es stand hier und machte aus einer Gruppe ``UNGEEIGNET``
+    # - damit fielen Beitrag und Kommentar zugleich aus, und im Protokoll
+    # stand rundenlang "keine Werbung erlaubt". Die Gruppen einer Kampagne
+    # hat ein Mensch ausgesucht und eingestuft; ob dort geworben werden
+    # darf, ist damit beantwortet.
+    #
+    # ``keine_werbung`` wird weiterhin **gelesen** und steht in der
+    # Zusammenfassung: Es ist eine Auskunft ueber die Gruppe, nur keine
+    # Sperre mehr. Was die Annahme betrifft, bindet unveraendert - die
+    # Linkregeln unten und jede Beobachtung.
 
     # --- Die Beobachtung: kann nur einschraenken ---------------------------
     kommentare_tot = (
