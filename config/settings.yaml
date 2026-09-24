@@ -719,9 +719,13 @@ automatik:
   # Wie viele Scroll-Runden eine Gruppe hoechstens bekommt (23.09.2026,
   # Anweisung des Nutzers; vorher fest 5). Nach JEDER Runde wird beurteilt,
   # was sichtbar ist (Text und Bildtexte, dieselbe Kette wie beim
-  # Kommentieren); sobald ein Beitrag passt, wird kommentiert. Findet sich
-  # nach der letzten Runde keiner, ruht die Gruppe und die Runde geht zur
-  # naechsten. Schon kommentierte Beitraege zaehlen nicht mit. 1 bis 30.
+  # Kommentieren). Seit dem 24.09.2026 werden dabei MINDESTENS 10 Beitraege
+  # angesehen (automatik.MINDEST_BEITRAEGE), bevor kommentiert wird - damit
+  # es Ausweichziele gibt, wenn der erste nicht annimmt. Beitraege, unter
+  # denen der Kommentar technisch nicht ging, sind 24 Stunden gesperrt.
+  # Findet sich nach der letzten Runde kein kommentierbarer Beitrag, wird
+  # die Gruppe AUSGESCHLOSSEN (bearbeiten = 0, Haken in der Uebersicht
+  # nimmt es zurueck). Kommentierte Beitraege zaehlen nicht mit. 1 bis 30.
   scroll_runden: 15
 
   # Wie lange eine Gruppe ruht, in der gerade nichts Passendes stand.

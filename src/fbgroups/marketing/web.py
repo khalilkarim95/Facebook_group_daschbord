@@ -313,6 +313,20 @@ class AutomatikErgebnis(BaseModel):
     lauf_id: int = 0
     """Welcher Lauf - fuer die Uebersprungsliste. ``0`` heisst: kein Lauf."""
 
+    gescheiterte_posts: list[str] = []
+    """Beitraege, unter denen der Kommentar technisch nicht ging (24.09.2026).
+
+    Nur Adressen. Gespeichert in ``gescheiterte_beitraege``, damit derselbe
+    Beitrag nicht Runde fuer Runde wieder angeboten wird.
+    """
+
+    ausschliessen: str = ""
+    """Nicht leer: nach einer vollen Suche nichts Kommentierbares - der Grund.
+
+    Der Server nimmt die Gruppe dann aus der Bearbeitung
+    (``store.schliesse_gruppe_aus``), sichtbar und zuruecknehmbar.
+    """
+
     vorlage_key: str = ""
     """Welche Anlassfassung wirklich hinausging (``ar/anlaesse/geschenk/x``).
 
@@ -1630,7 +1644,8 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     campaign, link, vorschlag.text, config=cfg, ziel=ziel,
                     texttyp=schritt.texttyp,
                 )
-                bisherige = sorted(store.bisherige_post_urls(schritt.group_id))
+                # Kommentiert **oder** gescheitert (24.09.2026).
+                bisherige = sorted(store.gesperrte_post_urls(schritt.group_id))
 
                 # **Die Entscheidungsgrundlagen gehen mit** (14.09.2026).
                 # Der Arbeitsrechner haelt keinen Bestand. Gerechnet wird
@@ -1744,6 +1759,15 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             # Ende kein Kommentar stand.
             for post_url, bezuege in meldung.bezuege:
                 store.merke_bezuege(meldung.group_id, post_url, bezuege)
+            if meldung.gescheiterte_posts:
+                store.merke_gescheiterte_beitraege(
+                    meldung.group_id, meldung.gescheiterte_posts
+                )
+            if meldung.ausschliessen:
+                # **Wirklich nichts zu machen** (24.09.2026): 15 Runden,
+                # alle Beitraege beurteilt, keiner kommentierbar. Nur dann -
+                # siehe ``automatik.nichts_zu_machen``.
+                store.schliesse_gruppe_aus(meldung.group_id, meldung.ausschliessen)
 
             # Ein ``erschoepft`` eines aelteren Arbeitsrechners gilt genauso
             # (23.09.2026) - siehe das Feld.

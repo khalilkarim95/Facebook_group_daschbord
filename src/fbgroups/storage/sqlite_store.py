@@ -22,7 +22,7 @@ from fbgroups.marketing.store import SCHEMA_TRACKING as MARKETING_TRACKING_SCHEM
 from fbgroups.marketing.store import SCHEMA_VORSCHLAEGE as MARKETING_VORSCHLAEGE_SCHEMA
 from fbgroups.models import Group, GroupPost, ImportRun, ScoreBreakdown, ValidationStatus
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 
 def _iso_oder_none(zeitpunkt: datetime | None) -> str | None:
@@ -467,6 +467,10 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
     # additiv - eine neue Tabelle im Marketing-Schema; ein Lauf, der schon
     # offen ist, beginnt damit bei Runde 1.
     27: (MARKETING_SCHEMA,),
+    # Gescheiterte Beitraege (24.09.2026): unter welchem Beitrag einer Gruppe
+    # ein Kommentar technisch nicht ging - damit er nicht Runde fuer Runde
+    # wieder versucht wird. Rein additiv, eine neue Tabelle.
+    28: (MARKETING_SCHEMA,),
 }
 
 SCHEMA = """

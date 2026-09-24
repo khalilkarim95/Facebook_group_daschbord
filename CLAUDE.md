@@ -556,6 +556,51 @@ Gruppe öffnen → Runde 1 scrollen + beurteilen → Runde 2 → … → Runde 1
 - Die Wege von Hand (`campaign auto`, Arbeitsseite) rufen ohne `geeignet`
   und behalten ihr `limit`. Festgehalten in `tests/test_scroll_runden.py`.
 
+### Zehn Beiträge ansehen, dann erst aufgeben (24.09.2026)
+
+```
+Gruppe → bis 15 Runden, mindestens 10 Beiträge → bis zu 5 Versuche
+   → nicht beschreibbar / gelöscht → Beitrag 24 h gesperrt, nächster Beitrag
+   → volle Suche, nichts Kommentierbares → Gruppe ausgeschlossen
+```
+
+Anweisung des Nutzers nach einem Lauf, in dem Runde für Runde **derselbe**
+Beitrag scheiterte („Kommentarfeld nicht beschreibbar", „Found 1 post(s)",
+„1 Beitraege versucht"): *bis 15 Mal herunterscrollen, mindestens 10
+Beiträge ansehen, und wenn dann wirklich nichts zu machen ist, die Gruppe
+ausschließen.*
+
+- **Die Suche hört nicht mehr beim ersten geeigneten Beitrag auf**
+  (`fetch_top_posts(mindestens=…)`, im Lauf `MINDEST_BEITRAEGE` = 10).
+  Vorher gab es genau einen Kandidaten, und scheiterte der, gab es keinen
+  zweiten. Ohne geeigneten Beitrag laufen weiterhin alle Runden.
+- **Mehr Adressen je Seite.** Die Zeitangabe eines Beitrags zeigt im Strom
+  oft nur `#`; die echte Adresse setzt Facebook erst beim Überfahren ein
+  (`_adresse_nach_hover`). Dazu trägt der Bildverweis die Kennung
+  (`set=pcb.<id>`, `set=gm.<id>` in `urls.beitragslinks`).
+- **Fünf Versuche je Schritt statt drei** (`MAX_BEITRAEGE_JE_SCHRITT`).
+- **Ein gescheiterter Beitrag kommt nicht wieder** (Tabelle
+  `gescheiterte_beitraege`, Migrationsschritt 28; `store.gesperrte_post_urls`
+  = kommentiert ∪ gescheitert der letzten `SPERRE_GESCHEITERT_STUNDEN`).
+  `post_versuche` trägt die Adresse nur bei Erfolg — deshalb stand derselbe
+  gescheiterte Beitrag in jeder Runde wieder oben. Gesperrt wird nur, was am
+  **Beitrag** liegt (kein Feld, nicht beschreibbar, gelöscht); ein
+  Sitzungsfehler sperrt nichts und beendet den Schritt sofort. Der Server
+  schickt die gesperrten Adressen als `bisherige_post_urls` mit.
+- **Nicht beschreibbar heißt jetzt: zweimal versucht.** `_feld_anklicken`
+  klickt, und wenn etwas darüber liegt, drückt es Escape, scrollt das Feld
+  in den Blick und klickt noch einmal.
+- **Der Ausschluss** (`nichts_zu_machen` → `Schrittergebnis.ausschliessen`
+  → `store.schliesse_gruppe_aus`, örtlich wie fern) verlangt alles zugleich:
+  alle Runden gelaufen, etwas gesehen, etwas gelesen, kein Beitrag
+  geeignet, und der Schritt endete mit „kein Anlass". Ein technischer
+  Fehlschlag oder eine Anmeldewand schließt nie aus — sie sperren
+  höchstens Beiträge. Ausgeschlossen heißt `bearbeiten = 0` mit Grund,
+  Tracking-Code bleibt gültig, ein Haken in der Übersicht nimmt es zurück.
+  Das hebt die Regel vom 21.09.2026 („keine Gruppe fällt dauerhaft heraus")
+  für genau diesen einen Fall auf.
+- Festgehalten in `tests/test_zehn_beitraege.py`.
+
 ### Grenzen je Aktion (`grenzen.py`)
 
 Beitritt, Beitrag und Kommentar haben je eigene Tagesmenge, eigenen Takt und

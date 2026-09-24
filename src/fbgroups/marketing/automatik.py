@@ -112,6 +112,23 @@ class Schrittergebnis:
     Schlagwoerter, nie der Text.
     """
 
+    gescheiterte_posts: tuple[str, ...] = ()
+    """Beitraege, unter denen der Kommentar **technisch** nicht ging (24.09.2026).
+
+    Kein Kommentarfeld, nicht beschreibbar, Beitrag geloescht. Gespeichert in
+    ``gescheiterte_beitraege``; fuer ``SPERRE_GESCHEITERT_STUNDEN`` faesst der
+    Lauf sie nicht wieder an. Nur Adressen, kein Text.
+    """
+
+    ausschliessen: str = ""
+    """Nicht leer: In dieser Gruppe ist **wirklich** nichts zu machen - der Grund.
+
+    Gesetzt nur nach einer vollen Suche (``scroll_runden`` Runden, alle
+    Beitraege beurteilt), wenn keiner kommentierbar war. Die Gruppe wird
+    dann aus der Bearbeitung genommen (``store.schliesse_gruppe_aus``) -
+    sichtbar und mit einem Haken in der Uebersicht zuruecknehmbar.
+    """
+
     kein_anlass: bool = False
     """Heute stand hier nichts, worauf eine Antwort etwas beigetragen haette.
 
@@ -371,11 +388,18 @@ class _Schleifenwaechter:
 
 
 #: Wie viele **verschiedene** Beitraege ein Kommentarschritt anfassen darf,
-#: bevor er die Gruppe beiseitelegt. Drei, weil der haeufigste Grund fuer ein
-#: fehlendes Kommentarfeld der Beitrag selbst ist (Kommentare abgeschaltet,
-#: Freigabe noetig, geteilter Beitrag) - der naechste geht dann meist. Mehr
-#: waere ein Dauerlauf in einer Gruppe, die heute nichts annimmt.
-MAX_BEITRAEGE_JE_SCHRITT = 3
+#: bevor er die Gruppe beiseitelegt. Der haeufigste Grund fuer ein fehlendes
+#: Kommentarfeld ist der Beitrag selbst (Kommentare abgeschaltet, Freigabe
+#: noetig, geteilter Beitrag) - der naechste geht dann meist. Seit dem
+#: 24.09.2026 fuenf statt drei: Die Suche sammelt jetzt mindestens zehn
+#: Beitraege, und Ausweichziele sind nur etwas wert, wenn sie auch versucht
+#: werden. Was hier scheitert, wird gemerkt und nicht wieder versucht.
+MAX_BEITRAEGE_JE_SCHRITT = 5
+
+#: Wie viele Beitraege eine Gruppe **mindestens** angesehen bekommt, bevor
+#: kommentiert wird (24.09.2026, Anweisung des Nutzers: "bis 15 mal runter
+#: scrollen und mindestens 10 Beitraege anschauen").
+MINDEST_BEITRAEGE = 10
 
 
 class _Technikwaechter:
@@ -1050,6 +1074,19 @@ def _text_schritt(
         with MarketingStore(pfad) as store:
             for post_url, bezuege in ergebnis.bezuege:
                 store.merke_bezuege(schritt.group_id, post_url, bezuege)
+    if ergebnis.gescheiterte_posts or ergebnis.ausschliessen:
+        with MarketingStore(pfad) as store:
+            # Gescheiterte Beitraege nicht wieder anfassen (24.09.2026) -
+            # dieselbe Stelle wie im Fernbetrieb (``POST /automatik/ergebnis``).
+            store.merke_gescheiterte_beitraege(
+                schritt.group_id, ergebnis.gescheiterte_posts
+            )
+            if ergebnis.ausschliessen:
+                # Wirklich nichts zu machen - siehe ``nichts_zu_machen``.
+                console.print(
+                    f"[yellow]  Gruppe ausgeschlossen: {ergebnis.ausschliessen}[/yellow]"
+                )
+                store.schliesse_gruppe_aus(schritt.group_id, ergebnis.ausschliessen)
 
     # **NO_REPLY ist ein Ergebnis, kein Fehlversuch.** In dieser Gruppe stand
     # heute kein Beitrag, unter dem eine Antwort von uns etwas beigetragen
@@ -1330,8 +1367,12 @@ def browser_schritt(
     # ist (23.09.2026) - beurteilt mit derselben Kette, die gleich
     # kommentiert. Schon kommentierte Beitraege zaehlen dabei nicht mit.
     with MarketingStore(config.path("sqlite_path")) as store:
-        bisherige = store.bisherige_post_urls(group_id)
+        # Kommentiert **oder** gescheitert (24.09.2026): Ein Beitrag, dessen
+        # Feld gerade nicht beschreibbar war, kommt nicht Runde fuer Runde
+        # wieder - die anderen Beitraege der Gruppe sind dran.
+        bisherige = store.gesperrte_post_urls(group_id)
         verbrauchte = store.verwendete_vorlagen(group_id, Texttyp.KOMMENTAR.value)
+    bericht: dict = {}
     roh = fetch_top_posts(
         context,
         gruppen_url,
@@ -1347,21 +1388,61 @@ def browser_schritt(
             verbrauchte_vorlagen=verbrauchte,
             rueckfall=text,
         ),
+        mindestens=MINDEST_BEITRAEGE,
+        bericht=bericht,
     )
     if not roh:
-        # Kein Urteil ueber die Gruppe (23.09.2026): Die Seite hat gerade
-        # nichts hergegeben - die Gruppe ruht, die Runde geht weiter.
-        return Schrittergebnis(
+        # Die Seite hat gerade nichts Neues hergegeben - die Gruppe ruht,
+        # die Runde geht weiter; nach einer vollen Suche siehe
+        # ``nichts_zu_machen``.
+        ergebnis = Schrittergebnis(
             erfolg=False, fehler="keine Beitraege zum Kommentieren gefunden", kein_anlass=True
         )
+    else:
+        # **Die rohen Funde gehen weiter, nicht die gespeicherten.** Nur sie
+        # tragen den Text, und der wird fuer die Auswahl gebraucht -
+        # ``GroupPost`` hat dafuer kein Feld und soll auch keines bekommen.
+        ergebnis = waehle_und_kommentiere(
+            context, config, roh, group_id, text,
+            kommentieren=comment_on_post, link_url=link_url,
+        )
+    return replace(ergebnis, ausschliessen=nichts_zu_machen(bericht, roh, ergebnis))
 
-    # **Die rohen Funde gehen weiter, nicht die gespeicherten.** Nur sie
-    # tragen den Text, und der wird fuer die Auswahl gebraucht -
-    # ``GroupPost`` hat dafuer kein Feld und soll auch keines bekommen.
-    return waehle_und_kommentiere(
-        context, config, roh, group_id, text,
-        kommentieren=comment_on_post, link_url=link_url,
-    )
+
+def nichts_zu_machen(bericht: dict, roh: list[dict], ergebnis: Schrittergebnis) -> str:
+    """Ist in dieser Gruppe **wirklich** nichts zu machen? Returns: der Grund oder ``""``.
+
+    Anweisung des Nutzers vom 24.09.2026: bis 15 Mal herunterscrollen,
+    mindestens 10 Beitraege ansehen - und erst wenn dann wirklich nichts zu
+    machen ist, die Gruppe ausschliessen. Wirklich nichts heisst hier alles
+    zugleich:
+
+    * die Suche lief **alle** Runden (``fetch_top_posts`` hoert vorher nur
+      auf, wenn ein geeigneter Beitrag gefunden ist),
+    * es wurde ueberhaupt etwas gesehen - eine Seite, die nichts anzeigt,
+      ist ein Befund ueber die Seite, nicht ueber die Gruppe,
+    * kein Beitrag bestand das Urteil (Inhalt, Relevanz, Vorlage),
+    * es wurde etwas **gelesen** - ohne einen einzigen Text wissen wir
+      nichts ueber die Beitraege,
+    * und der Schritt endete mit "kein Anlass", nicht mit einem Erfolg,
+      einem technischen Fehlschlag oder einem Sitzungsfehler.
+
+    Beitraege, deren Feld nicht beschreibbar war, fuehren nicht sofort
+    hierher: Sie werden gesperrt (``gescheiterte_beitraege``), und erst wenn
+    danach nichts Geeignetes mehr uebrig ist, greift diese Regel.
+    """
+    if ergebnis.erfolg or not ergebnis.kein_anlass or ergebnis.gruppe_beiseite:
+        return ""
+    gesehen = int(bericht.get("gesehen", 0))
+    runden = int(bericht.get("runden", 0))
+    if not gesehen or bericht.get("geeignet") or runden < int(bericht.get("runden_max", 1)):
+        return ""
+    if roh and not any(str(p.get("text", "")).strip() for p in roh):
+        return ""
+    return (
+        f"automatisch: {runden} Scroll-Runden, {gesehen} Beitraege angesehen - "
+        f"nichts Kommentierbares ({ergebnis.fehler})"
+    )[:160]
 
 
 @dataclass(frozen=True)
@@ -1518,7 +1599,7 @@ def waehle_und_kommentiere(
     with SqliteStore(pfad) as gruppen_store:
         gruppen_store.upsert_group_posts(group_id, _als_group_posts(roh, group_id))
     with MarketingStore(pfad) as store:
-        bisherige = store.bisherige_post_urls(group_id)
+        bisherige = store.gesperrte_post_urls(group_id)
         verbrauchte_vorlagen = store.verwendete_vorlagen(
             group_id, Texttyp.KOMMENTAR.value
         )
@@ -1571,8 +1652,15 @@ def entscheide_und_kommentiere(
     nichts geschrieben wurde - und eine Stelle, die es vergaesse, liesse
     Gruppen ohne Bezug erscheinen, die welche haben.
     """
-    ergebnis = _entscheide_und_kommentiere(context, config, roh, group_id, text, **kwargs)
-    return replace(ergebnis, bezuege=bezuege_der_beitraege(roh))
+    gescheitert: set[str] = set()
+    ergebnis = _entscheide_und_kommentiere(
+        context, config, roh, group_id, text, gescheitert=gescheitert, **kwargs
+    )
+    return replace(
+        ergebnis,
+        bezuege=bezuege_der_beitraege(roh),
+        gescheiterte_posts=tuple(sorted(gescheitert)),
+    )
 
 
 def _entscheide_und_kommentiere(
@@ -1588,6 +1676,7 @@ def _entscheide_und_kommentiere(
     anspruch=None,  # noqa: ANN001 - entscheidung.Anspruch
     verbrauchte_vorlagen=None,
     link_url: str = "",
+    gescheitert: set[str] | None = None,
 ) -> Schrittergebnis:
     """Lesen, beurteilen, entscheiden, **dann erst** kommentieren.
 
@@ -1638,9 +1727,12 @@ def _entscheide_und_kommentiere(
     # dann gilt die alte Regel (der belebteste Beitrag), statt gar nichts zu
     # tun. Das ist die ehrlichere Stelle fuer den Rueckfall: Wir wissen
     # nichts ueber die Beitraege, nicht "sie passen nicht".
+    if gescheitert is None:
+        gescheitert = set()
     if not any(p.get("text", "").strip() for p in unkommentiert):
         return _ohne_urteil_kommentieren(
-            context, unkommentiert, text, kommentieren=kommentieren, link_url=link_url
+            context, unkommentiert, text, kommentieren=kommentieren, link_url=link_url,
+            gescheitert=gescheitert,
         )
 
     # **Erst das Urteil, dann die Wahl.** Jeder gelesene Beitrag bekommt
@@ -1656,7 +1748,6 @@ def _entscheide_und_kommentiere(
     from fbgroups.urls import adresse_im_text
 
     verbraucht = set(verbrauchte_vorlagen or ())
-    gescheitert: set[str] = set()
     letzter: Schrittergebnis | None = None
 
     # **Ein Beitrag, der technisch nicht annimmt, kostet den Schritt nicht.**
@@ -1777,6 +1868,11 @@ def _entscheide_und_kommentiere(
         if letzter.erfolg or letzter.gruppe_beiseite:
             return letzter
 
+        if ist_sitzungsfehler(letzter.fehler):
+            # Browser weg oder abgemeldet: Das liegt an keinem Beitrag, und
+            # der naechste scheiterte genauso. Gesperrt wird deshalb keiner.
+            return letzter
+
         if not ist_technisch(letzter.fehler):
             # **Eine Ablehnung gilt der Gruppe, nicht dieser Fassung**
             # (20.09.2026, Regel 5 des Nutzers). Sagt Facebook hier nein,
@@ -1818,6 +1914,7 @@ def _ohne_urteil_kommentieren(
     *,
     kommentieren,
     link_url: str = "",
+    gescheitert: set[str] | None = None,
 ) -> Schrittergebnis:
     """Der Rueckfall, wenn **kein** Beitrag lesbaren Text hat - der Reihe nach.
 
@@ -1866,6 +1963,8 @@ def _ohne_urteil_kommentieren(
     )
     versucht = 0
     letzter: Schrittergebnis | None = None
+    if gescheitert is None:
+        gescheitert = set()
 
     for gewaehlt in nach_rang[:MAX_BEITRAEGE_JE_SCHRITT]:
         versucht += 1
@@ -1882,7 +1981,11 @@ def _ohne_urteil_kommentieren(
                 "[dim]  [Ergebnis] Beitrag nicht mehr vorhanden"
                 "[/dim] [dim][Aktion] naechster Beitrag[/dim]"
             )
+            gescheitert.add(gewaehlt["post_url"])
             continue
+
+        if ist_sitzungsfehler(letzter.fehler):
+            return letzter
 
         if not ist_technisch(letzter.fehler):
             # Eine Ablehnung gilt der Gruppe und beim naechsten Beitrag
@@ -1894,6 +1997,7 @@ def _ohne_urteil_kommentieren(
             f"[yellow]  [Ergebnis] technisch fehlgeschlagen: {letzter.fehler}"
             f"[/yellow] [dim][Aktion] naechster Beitrag[/dim]"
         )
+        gescheitert.add(gewaehlt["post_url"])
 
     if letzter is None:  # pragma: no cover - ``unkommentiert`` ist nie leer
         return Schrittergebnis(
@@ -2355,6 +2459,10 @@ def fuehre_lauf_fern_aus(
                 s.get("vorgaben") or {},
                 s.get("link_url", ""),
             )
+            if ergebnis.ausschliessen:
+                console.print(
+                    f"[yellow]  Gruppe wird ausgeschlossen: {ergebnis.ausschliessen}[/yellow]"
+                )
 
             if not _melde(
                 klient,
@@ -2395,6 +2503,10 @@ def fuehre_lauf_fern_aus(
                     # oertliche Lauf las es seit dem 20.09.2026, der
                     # Fernbetrieb - der Regelfall - meldete es nicht einmal.
                     "beitrag_weg": ergebnis.beitrag_weg,
+                    # Gescheiterte Beitraege und der Ausschluss (24.09.2026)
+                    # - gespeichert wird dort, wo der Bestand liegt.
+                    "gescheiterte_posts": list(ergebnis.gescheiterte_posts),
+                    "ausschliessen": ergebnis.ausschliessen,
                     # Damit der Server die Gruppe fuer **diesen** Lauf
                     # beiseitelegen kann, wie es der oertliche Lauf tut.
                     "lauf_id": s.get("lauf_id", 0),
@@ -2575,6 +2687,7 @@ def browser_schritt_fern(
     # ist (23.09.2026) - beurteilt mit derselben Kette, die gleich
     # kommentiert. Schon kommentierte Beitraege zaehlen dabei nicht mit.
     config = _config_fuer_fern()
+    bericht: dict = {}
     roh = fetch_top_posts(
         context,
         gruppen_url,
@@ -2590,27 +2703,31 @@ def browser_schritt_fern(
             verbrauchte_vorlagen=verbrauchte,
             rueckfall=text,
         ),
+        mindestens=MINDEST_BEITRAEGE,
+        bericht=bericht,
     )
     if not roh:
-        # Kein Urteil ueber die Gruppe (23.09.2026): Die Seite hat gerade
-        # nichts hergegeben - die Gruppe ruht, die Runde geht weiter.
-        return Schrittergebnis(
+        # Die Seite hat gerade nichts Neues hergegeben - die Gruppe ruht,
+        # die Runde geht weiter; nach einer vollen Suche siehe
+        # ``nichts_zu_machen``.
+        ergebnis = Schrittergebnis(
             erfolg=False, fehler="keine Beitraege zum Kommentieren gefunden", kein_anlass=True
         )
-
-    return entscheide_und_kommentiere(
-        context,
-        _config_fuer_fern(),
-        roh,
-        group_id,
-        text,
-        kommentieren=comment_on_post,
-        bisherige=bisherige,
-        erlaubnis=erlaubnis,
-        anspruch=anspruch,
-        verbrauchte_vorlagen=verbrauchte,
-        link_url=link_url,
-    )
+    else:
+        ergebnis = entscheide_und_kommentiere(
+            context,
+            config,
+            roh,
+            group_id,
+            text,
+            kommentieren=comment_on_post,
+            bisherige=bisherige,
+            erlaubnis=erlaubnis,
+            anspruch=anspruch,
+            verbrauchte_vorlagen=verbrauchte,
+            link_url=link_url,
+        )
+    return replace(ergebnis, ausschliessen=nichts_zu_machen(bericht, roh, ergebnis))
 
 
 def _config_fuer_fern() -> AppConfig:

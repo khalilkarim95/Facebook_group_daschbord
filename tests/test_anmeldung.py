@@ -93,13 +93,18 @@ def test_die_anmeldewand_haelt_den_lauf_an() -> None:
 def test_kein_ausschluss_wegen_einer_anmeldewand() -> None:
     """**Der teuerste Fall**, deshalb am Quelltext festgehalten.
 
-    Seit dem 21.09.2026 schliesst kein Lauf eine Gruppe mehr aus - also auch
-    keine Anmeldewand. Was bleibt, ist das Anhalten: Der Sitzungsfehler
-    beendet den Lauf, oertlich wie fern.
+    Ausgeschlossen wird seit dem 24.09.2026 nur nach einer vollen Suche ohne
+    kommentierbaren Beitrag (``automatik.nichts_zu_machen``) - nie wegen
+    einer Anmeldewand, auch nicht nach 15 Runden. Was bleibt, ist das
+    Anhalten: Der Sitzungsfehler beendet den Lauf, oertlich wie fern.
     """
     quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
+    wand = automatik.Schrittergebnis(
+        erfolg=False, fehler=f"{actions.NICHT_ANGEMELDET}: {_wand(ARABISCHE_WAND)}"
+    )
+    volle_suche = {"runden": 15, "runden_max": 15, "gesehen": 12, "geeignet": False}
 
-    assert "store.schliesse_gruppe_aus(" not in quelltext
+    assert automatik.nichts_zu_machen(volle_suche, [{"text": "x"}], wand) == ""
     assert "if ist_sitzungsfehler(ergebnis.fehler):" in quelltext
 
 

@@ -558,6 +558,30 @@ def ist_angemeldet(context: BrowserContext) -> tuple[bool, str]:
         page.close()
 
 
+def _feld_anklicken(page, feld) -> bool:  # noqa: ANN001 - Playwright-Objekte
+    """Das Kommentarfeld anklicken - notfalls ein zweites Mal, nach Escape.
+
+    "Kommentarfeld nicht beschreibbar" hiess bis zum 24.09.2026: Der Klick
+    lief 30 Sekunden gegen etwas, das darueber lag (ein Hinweisfenster, die
+    Reaktionsleiste, ein Tooltip), und der Beitrag galt als gescheitert. Ein
+    Mensch drueckt Escape, scrollt das Feld in den Blick und klickt noch
+    einmal - genau das, einmal. Danach ist es wirklich nicht beschreibbar.
+    """
+    try:
+        feld.click(delay=random.randint(100, 300), timeout=10000)
+        return True
+    except PlaywrightTimeoutError:
+        pass
+    try:
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(random.randint(500, 1000))
+        feld.scroll_into_view_if_needed(timeout=5000)
+        feld.click(delay=random.randint(100, 300), timeout=10000)
+        return True
+    except PlaywrightTimeoutError:
+        return False
+
+
 def comment_on_post(context: BrowserContext, post_url: str, text: str) -> Kommentarausgang:
     """Automates commenting on a specific Facebook post.
 
@@ -664,9 +688,11 @@ def comment_on_post(context: BrowserContext, post_url: str, text: str) -> Kommen
             )
             return Kommentarausgang(False, hinweis="Kommentarfeld nicht gefunden")
 
+        page.wait_for_timeout(random.randint(500, 1500))
+        if not _feld_anklicken(page, comment_box):
+            console.print("[red]Kommentarfeld gefunden, aber nicht beschreibbar.[/red]")
+            return Kommentarausgang(False, hinweis="Kommentarfeld nicht beschreibbar")
         try:
-            page.wait_for_timeout(random.randint(500, 1500))
-            comment_box.click(delay=random.randint(100, 300))
             page.wait_for_timeout(random.randint(500, 1000))
             console.print("Typing comment (pasting/inserting directly)...")
             page.keyboard.insert_text(text)
@@ -833,6 +859,28 @@ ARTIKEL_FRIST_MS = 3000
 _ATTRIBUTE_JS = "(els, name) => els.map(e => e.getAttribute(name))"
 
 
+def _adresse_nach_hover(article, group_id: str) -> list[str]:
+    """Die Beitragsadresse, die Facebook erst beim Ueberfahren einsetzt.
+
+    Die Zeitangabe eines Beitrags ist sein Verweis - aber im Strom steht
+    darin oft nur ``#``; die echte Adresse setzt Facebook ein, sobald die
+    Maus darueber steht. Ohne diesen Handgriff blieben solche Artikel ohne
+    Adresse: "articles last seen: 5", "Found 1 post(s)". Hoechstens zwei
+    Verweise, kurze Frist - ein Artikel, der nicht mitmacht, faellt aus.
+    """
+    from fbgroups.urls import beitragslinks
+
+    try:
+        leer = article.locator("a[href^='#']")
+        for i in range(min(leer.count(), 2)):
+            leer.nth(i).hover(timeout=1500)
+        return beitragslinks(
+            article.locator("a[href]").evaluate_all(_ATTRIBUTE_JS, "href"), group_id
+        )
+    except Exception:  # noqa: BLE001 - ohne Adresse faellt nur dieser Artikel aus
+        return []
+
+
 def _artikel_auswerten(article, group_id: str) -> dict | None:
     """Aus **einem** Artikel Adresse, Kennzahlen und der Text - oder ``None``.
 
@@ -865,6 +913,8 @@ def _artikel_auswerten(article, group_id: str) -> dict | None:
         article.locator("a[href]").evaluate_all(_ATTRIBUTE_JS, "href"),
         group_id,
     )
+    if not kandidaten:
+        kandidaten = _adresse_nach_hover(article, group_id)
     if not kandidaten:
         return None
 
@@ -925,6 +975,8 @@ def fetch_top_posts(
     runden: int = SCROLL_RUNDEN,
     bekannt: Iterable[str] = (),
     geeignet: Callable[[dict], bool] | None = None,
+    mindestens: int = 0,
+    bericht: dict | None = None,
 ) -> list[dict]:
     """Scrapes recent posts from the group for metrics (NO TEXT/AUTHORS).
 
@@ -955,6 +1007,15 @@ def fetch_top_posts(
       gegeben, wird **nicht** bei ``limit`` aufgehoert, sondern erst, wenn
       ein Beitrag es besteht, oder nach der letzten Runde. Ein ungeeigneter
       Beitrag beendet die Suche nicht.
+    * ``mindestens`` - wie viele Beitraege **mindestens** angesehen werden,
+      bevor ein geeigneter die Suche beendet (24.09.2026, im Lauf 10). Bis
+      dahin hoerte sie beim ersten geeigneten auf - und scheiterte der, gab
+      es keinen zweiten: "Found 1 post(s) ... 1 Beitraege versucht", Runde
+      fuer Runde derselbe Beitrag.
+    * ``bericht`` - wird befuellt: ``runden``, ``runden_max``, ``gesehen``
+      (alle Beitraege, auch die bekannten) und ``geeignet`` (ob einer das
+      Urteil bestand). Daran entscheidet der Lauf, ob in einer Gruppe
+      **wirklich** nichts zu machen ist.
     """
     page = context.new_page()
     gesammelt: dict[str, dict] = {}
@@ -1035,9 +1096,13 @@ def fetch_top_posts(
 
             if geeignet is not None:
                 # **Nach jeder Runde das Urteil** - sobald ein Beitrag es
-                # besteht, wird kommentiert statt weiter gescrollt.
-                if any(geeignet(p) for p in gesammelt.values()):
+                # besteht **und** genug angesehen ist, wird kommentiert statt
+                # weiter gescrollt. Die Mindestmenge sorgt fuer Ausweichziele:
+                # Nimmt der erste geeignete Beitrag keinen Kommentar an, steht
+                # der naechste schon bereit.
+                if not gefunden_in and any(geeignet(p) for p in gesammelt.values()):
                     gefunden_in = runden
+                if gefunden_in and len(gesammelt) >= mindestens:
                     break
             elif len(gesammelt) >= limit:
                 break
@@ -1051,7 +1116,11 @@ def fetch_top_posts(
         console.print(
             f"Found {len(gesammelt)} post(s) in {runden} round(s); "
             f"articles last seen: {zuletzt}."
-            + (f" Already commented: {len(uebersprungen)}." if uebersprungen else "")
+            + (
+                f" Already commented or failed before: {len(uebersprungen)}."
+                if uebersprungen
+                else ""
+            )
             + (
                 f" Suitable post in round {gefunden_in}."
                 if gefunden_in
@@ -1061,6 +1130,13 @@ def fetch_top_posts(
 
     finally:
         page.close()
+        if bericht is not None:
+            bericht.update(
+                runden=runden,
+                runden_max=runden_max,
+                gesehen=len(gesammelt) + len(uebersprungen),
+                geeignet=bool(gefunden_in),
+            )
 
     posts_data = list(gesammelt.values())
     return posts_data if geeignet is not None else posts_data[:limit]

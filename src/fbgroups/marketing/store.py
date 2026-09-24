@@ -63,6 +63,9 @@ _KURZCODE_SALT = "kurzcode_salt"
 #: keine Konfiguration kennt; geschrieben wird er vom Dienst beim Start und
 #: von der Kommandozeile (``merke_link_basis``).
 _LINK_BASIS = "link_basis"
+#: Wie lange ein Beitrag, unter dem ein Kommentar technisch nicht ging, nicht
+#: wieder angefasst wird (24.09.2026).
+SPERRE_GESCHEITERT_STUNDEN = 24
 
 
 @dataclass(frozen=True)
@@ -362,6 +365,19 @@ CREATE TABLE IF NOT EXISTS automatik_lauf_besuche (
     besucht_am   TEXT NOT NULL,
     PRIMARY KEY (lauf_id, campaign_id, group_id),
     FOREIGN KEY (lauf_id) REFERENCES automatik_lauf(lauf_id) ON DELETE CASCADE
+);
+
+-- Beitraege, unter denen ein Kommentar **technisch** nicht ging (24.09.2026):
+-- kein Kommentarfeld, nicht beschreibbar, Beitrag geloescht. Nur die
+-- Adresse und der Zeitpunkt - kein Text, kein Autor. ``post_versuche``
+-- traegt die Adresse nur bei Erfolg ("nur der Erfolg sperrt"); ohne diese
+-- Tabelle stand derselbe gescheiterte Beitrag in jeder Runde wieder oben,
+-- und die uebrigen Beitraege der Gruppe kamen nie dran.
+CREATE TABLE IF NOT EXISTS gescheiterte_beitraege (
+    group_id     TEXT NOT NULL,
+    post_url     TEXT NOT NULL,
+    am           TEXT NOT NULL,
+    PRIMARY KEY (group_id, post_url)
 );
 
 CREATE INDEX IF NOT EXISTS idx_automatik_lauf_status
@@ -2632,6 +2648,31 @@ class MarketingStore:
             (lauf_id, campaign_id, group_id, int(runde), _iso(datetime.now(UTC))),
         )
         self.conn.commit()
+
+    def merke_gescheiterte_beitraege(self, group_id: str, post_urls) -> None:  # noqa: ANN001
+        """Haelt fest, unter welchen Beitraegen ein Kommentar technisch nicht ging."""
+        jetzt = _iso(datetime.now(UTC))
+        self.conn.executemany(
+            "INSERT INTO gescheiterte_beitraege (group_id, post_url, am) VALUES (?,?,?) "
+            "ON CONFLICT (group_id, post_url) DO UPDATE SET am = excluded.am",
+            [(group_id, url, jetzt) for url in post_urls if url],
+        )
+        self.conn.commit()
+
+    def gesperrte_post_urls(self, group_id: str) -> set[str]:
+        """Beitraege, die der Lauf nicht mehr anfasst: kommentiert **oder** gescheitert.
+
+        Kommentiert heisst fuer immer (``bisherige_post_urls``). Gescheitert
+        heisst fuer ``SPERRE_GESCHEITERT_STUNDEN``: Ein Beitrag, dessen Feld
+        heute nicht beschreibbar war, ist es morgen meist auch nicht - aber
+        ein Fehler auf unserer Seite soll ihn nicht fuer immer kosten.
+        """
+        grenze = _iso(datetime.now(UTC) - timedelta(hours=SPERRE_GESCHEITERT_STUNDEN))
+        rows = self.conn.execute(
+            "SELECT post_url FROM gescheiterte_beitraege WHERE group_id = ? AND am >= ?",
+            (group_id, grenze),
+        ).fetchall()
+        return self.bisherige_post_urls(group_id) | {str(r["post_url"]) for r in rows}
 
     def besuche(self, lauf_id: int) -> dict[tuple[str, str], int]:
         """``(campaign_id, group_id) -> Runde``, in der die Gruppe zuletzt dran war."""

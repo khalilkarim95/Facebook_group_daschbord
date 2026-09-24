@@ -164,6 +164,10 @@ def canonical_post_url(raw_url: str, group_id: str) -> str | None:
 #: ``multi_permalinks``, aus der Einzelansicht als ``/posts/``.
 BEITRAGSMUSTER = ("/posts/", "/permalink/", "multi_permalinks", "story_fbid", "/share/p/")
 
+#: Die Beitragskennung in einem Bildverweis: ``set=pcb.<id>`` (Beitrag mit
+#: mehreren Bildern) oder ``set=gm.<id>`` (Gruppenmedien).
+_BILD_BEITRAG = re.compile(r"[?&]set=(?:pcb|gm)\.(\d+)")
+
 
 def beitragslinks(hrefs: Iterable[str | None], group_id: str) -> list[str]:
     """Aus den Verweisen einer Seite die Beitragsadressen - kanonisch, ohne Dubletten.
@@ -178,6 +182,18 @@ def beitragslinks(hrefs: Iterable[str | None], group_id: str) -> list[str]:
     heraus: list[str] = []
     gesehen: set[str] = set()
     for href in hrefs:
+        # **Der Bildverweis traegt die Beitragskennung** (24.09.2026). Ein
+        # Beitrag mit Bild verweist auf ``/photo/?fbid=...&set=pcb.<id>``
+        # (bzw. ``set=gm.<id>``) - ohne ``/groups/`` im Pfad. Die Zeitangabe,
+        # die sonst die Adresse traegt, zeigt oft nur ``#``; ohne diesen Weg
+        # blieben solche Artikel ohne Adresse ("articles last seen: 5",
+        # "Found 1 post(s)").
+        if href and (treffer := _BILD_BEITRAG.search(href)):
+            url = f"https://www.facebook.com/groups/{group_id}/posts/{treffer.group(1)}/"
+            if url not in gesehen:
+                gesehen.add(url)
+                heraus.append(url)
+            continue
         if not href or "/groups/" not in href:
             continue
         if not any(muster in href for muster in BEITRAGSMUSTER):

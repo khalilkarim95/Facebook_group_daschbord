@@ -428,15 +428,14 @@ def test_der_fernbetrieb_meldet_beitrag_weg_mit() -> None:
     assert "beitrag_weg: bool = False" in web, "und angenommen"
 
 
-def test_kein_weg_schliesst_eine_gruppe_selbst_aus() -> None:
-    """**Seit dem 21.09.2026 nimmt kein Lauf eine Gruppe aus der Kampagne.**
+def test_kein_technischer_fehlschlag_schliesst_eine_gruppe_aus() -> None:
+    """**Ein technischer Fehlschlag nimmt keine Gruppe aus der Kampagne** (21.09.2026).
 
-    Anweisung des Nutzers: "Keine der zugewiesenen Gruppen darf dauerhaft
-    uebersprungen werden." Bis dahin setzte ein technischer Fehlschlag die
-    Gruppe auf ``bearbeiten = 0``; jetzt kostet er eine Ruhezeit. Von Hand
-    bleibt der Ausschluss ein Haken in der Uebersicht - dort faellt ihn ein
-    Mensch. Beide Wege, oertlich und fern, weil zwei Fassungen zwei Regeln
-    waeren.
+    Er kostet eine Ruhezeit. Seit dem 24.09.2026 gibt es genau **einen**
+    automatischen Ausschluss (Anweisung des Nutzers): nach einer vollen
+    Suche - 15 Runden, mindestens 10 Beitraege - ohne einen einzigen
+    kommentierbaren Beitrag (``automatik.nichts_zu_machen``). Beide Wege
+    schliessen nur ueber dieses Feld aus, oertlich und fern.
     """
     from pathlib import Path
 
@@ -444,8 +443,10 @@ def test_kein_weg_schliesst_eine_gruppe_selbst_aus() -> None:
     web = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
     endpunkt = web.split("def automatik_ergebnis(", 1)[1].split("@app.post", 1)[0]
 
-    assert "store.schliesse_gruppe_aus(" not in quelltext, "oertlich"
-    assert "schliesse_gruppe_aus(" not in endpunkt, "fern"
+    assert quelltext.count("store.schliesse_gruppe_aus(") == 1, "oertlich"
+    assert "store.schliesse_gruppe_aus(schritt.group_id, ergebnis.ausschliessen)" in quelltext
+    assert endpunkt.count("schliesse_gruppe_aus(") == 1, "fern"
+    assert "schliesse_gruppe_aus(meldung.group_id, meldung.ausschliessen)" in endpunkt
     # Und der Technikwaechter zaehlt eine tote Adresse nicht mit: Sie sagt
     # nichts ueber den Rechner.
     assert "if not ergebnis.beitrag_weg and technik.melde(ergebnis):" in quelltext
