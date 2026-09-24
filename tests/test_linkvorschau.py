@@ -20,7 +20,6 @@ from pathlib import Path
 
 import pytest
 
-from fbgroups.automation.actions import trenne_adresse
 from fbgroups.marketing.models import Campaign, CampaignGroup
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.models import Group
@@ -199,55 +198,3 @@ def test_wer_die_seite_doch_sieht_kommt_weiter(client: TestClient) -> None:
 
     assert "location.replace(" in seite
     assert "play.google.com" in seite
-
-
-# --- Der Text --------------------------------------------------------------
-
-def test_die_adresse_faellt_aus_dem_text_wenn_sie_am_ende_steht() -> None:
-    """Der Regelfall der Vorlagen: Link auf eigener Zeile oder am Satzende."""
-    ohne, adresse = trenne_adresse("مرحبا\nهذا نص\nhttps://go.b-tarikak.de/r/k7m2x9q")
-
-    assert adresse == "https://go.b-tarikak.de/r/k7m2x9q"
-    assert ohne == "مرحبا\nهذا نص"
-    # Keine Leerzeile am Ende: Die Zeile bestand nur aus der Adresse.
-    assert not ohne.endswith("\n")
-
-
-def test_ein_absatz_bleibt_ein_absatz() -> None:
-    """Eine Leerzeile, die vorher dastand, ist Gliederung und kein Rest."""
-    ohne, _ = trenne_adresse("A\n\nB\nhttps://x.de/a")
-
-    assert ohne == "A\n\nB"
-
-
-def test_mitten_im_satz_bleibt_die_adresse_stehen() -> None:
-    """Sonst hinterliesse das Entfernen eine Luecke im Satz.
-
-    "Text (siehe {link}), danke" wuerde zu "Text (siehe ), danke" - lieber
-    eine sichtbare Adresse als ein zerbrochener Satz.
-    """
-    text = "Text (siehe https://go.b-tarikak.de/r/abc), danke"
-
-    assert trenne_adresse(text) == (text, "")
-
-
-def test_zwei_adressen_werden_nicht_angefasst() -> None:
-    """Wir wuessten nicht, welche die Karte gebaut hat.
-
-    Die falsche zu entfernen naehme dem Beitrag seinen Link - und seine Gruppe
-    bekaeme nie einen Klick gutgeschrieben.
-    """
-    text = "zwei https://a.de/x und https://b.de/y"
-
-    assert trenne_adresse(text) == (text, "")
-
-
-def test_ein_text_der_nur_aus_dem_link_besteht_bleibt_stehen() -> None:
-    """Ein leerer Beitrag ist kein Beitrag."""
-    text = "https://go.b-tarikak.de/r/k7m2x9q"
-
-    assert trenne_adresse(text) == (text, "")
-
-
-def test_ohne_adresse_gibt_es_nichts_zu_tun() -> None:
-    assert trenne_adresse("kein Link hier") == ("kein Link hier", "")

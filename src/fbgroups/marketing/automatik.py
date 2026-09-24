@@ -539,7 +539,7 @@ def fuehre_lauf_aus(
     gesetzt - zwei Handgriffe im Browser, ein Vertrag.
 
     ``beitreten`` bekommt die Gruppen-URL und liefert ``(ausgang, bemerkung)``
-    wie ``actions.request_join``. **Fehlt es, entstehen keine
+    wie frueher ``actions.request_join`` (entfernt). **Fehlt es, entstehen keine
     Beitrittsschritte** - ein Treiber ohne Browser soll nicht so tun, als
     koennte er beitreten.
 
@@ -2771,45 +2771,12 @@ def _config_fuer_fern() -> AppConfig:
     return load_config()
 
 
-def browser_schritt_post(context, gruppen_url: str, text: str) -> Schrittergebnis:
-    """Den eigenen Beitrag in der Gruppe absetzen - ohne jeden Datenbankzugriff.
-
-    Das Gegenstueck zu ``browser_schritt_fern``: Dort wird ein fremder
-    Beitrag gesucht und kommentiert, hier ein eigener geschrieben. Deshalb
-    gibt es hier weder ``bisherige`` noch ``erschoepft`` - ein eigener
-    Beitrag braucht keinen fremden, unter den er passt, und "hier gibt es
-    nichts mehr zu holen" kann es fuer ihn nicht geben.
-
-    ``post_url`` bleibt leer: ``post_to_group`` meldet Erfolg oder
-    Misserfolg, nicht die Adresse des entstandenen Beitrags. Eine geratene
-    Adresse waere schlimmer als keine - sie wanderte in
-    ``bisherige_post_urls`` und spaerre einen fremden Beitrag fuer den
-    Kommentarschritt aus.
-    """
-    from fbgroups.automation.actions import post_to_group
-
-    ausgang = post_to_group(context, gruppen_url, text)
-    if ausgang.erfolg:
-        # Ein Erfolg **mit Vorbehalt** wird als solcher gemeldet. Steht die
-        # nackte Adresse im Beitrag, weil die Vorschaukarte ohne sie nicht
-        # gehalten hat, ist das kein Fehlschlag - der Beitrag steht, sein Link
-        # wird gezaehlt -, aber es ist auch nicht das, was vorgesehen war.
-        # Das im Protokoll zu verschweigen waere dieselbe Art stiller Erfolg,
-        # die ``comment_on_post`` bis zum 12.09.2026 gemeldet hat.
-        return Schrittergebnis(erfolg=True, fehler=ausgang.hinweis)
-    return Schrittergebnis(
-        erfolg=False,
-        fehler=ausgang.hinweis or "Beitragsformular nicht gefunden oder blockiert",
-    )
-
-
 __all__ = [
     "Schrittergebnis",
     "aktionslage",
     "aktive_kampagnen",
     "browser_schritt",
     "browser_schritt_fern",
-    "browser_schritt_post",
     "fuehre_lauf_aus",
     "fuehre_lauf_fern_aus",
     "hole_oder_starte_lauf",

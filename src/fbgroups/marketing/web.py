@@ -221,7 +221,7 @@ class AutomatikStart(BaseModel):
 class BeitrittErgebnis(BaseModel):
     """Der Ausgang **einer** Beitrittsanfrage, gemeldet vom Arbeitsrechner.
 
-    ``ausgang`` kennt vier Werte (siehe ``actions.Beitrittsausgang``), aber am
+    ``ausgang`` kennt vier Werte (angefragt, bereits_mitglied, fragen, fehler), aber am
     Bestand landen nur zwei Staende: angefragt oder nicht. ``fragen`` und
     ``fehler`` hinterlassen nichts - es ist nichts geschehen, und einen Stand
     zu setzen waere die Behauptung, es sei etwas abgeschickt worden.
@@ -2352,11 +2352,15 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             )
         if not group or not group.url_canonical:
             return JSONResponse({"ok": False, "meldung": "Keine URL fuer Gruppe gefunden"})
+        if meldung.texttyp == Texttyp.POST:
+            return JSONResponse(
+                {"ok": False, "meldung": "Automatisches Posten ist entfernt - nur Kommentare."}
+            )
 
         # 2. BROWSER-Phase (Datenbank geschlossen, kann Minuten dauern)
         from rich.console import Console
 
-        from fbgroups.automation.actions import comment_on_post, fetch_top_posts, post_to_group
+        from fbgroups.automation.actions import comment_on_post, fetch_top_posts
         from fbgroups.automation.browser import get_browser_context
         from fbgroups.models import GroupPost
 
@@ -2367,52 +2371,40 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         used_post_url = ""
         try:
             with get_browser_context(cfg, headless=False) as context:
-                if meldung.texttyp == Texttyp.POST:
-                    ausgang = post_to_group(context, group.url_canonical, text)
-                    erfolg = ausgang.erfolg
-                    # Der Ausgang sagt mehr als "ging es?": ``link_sichtbar``
-                    # heisst, dass die nackte Adresse im Beitrag steht, weil
-                    # die Vorschaukarte ohne sie nicht gehalten hat. Das ist
-                    # kein Fehlschlag - der Beitrag steht und wird gezaehlt -,
-                    # aber es gehoert ins Protokoll und nicht in die Stille.
-                    if ausgang.hinweis:
-                        fehler_text = ausgang.hinweis
-                        console.print(f"[yellow]{ausgang.hinweis}[/yellow]")
-                else:
-                    console.print("[cyan]Fetching posts for commenting...[/cyan]")
-                    raw_posts = fetch_top_posts(context, group.url_canonical, group.group_id)
-                    if raw_posts:
-                        posts = [
-                            GroupPost(
-                                group_id=group.group_id,
-                                post_url=p["post_url"],
-                                interactions=p["interactions"],
-                                comments=p["comments"],
-                            )
-                            for p in raw_posts
-                        ]
-                        with SqliteStore(pfad) as gruppen_store:
-                            gruppen_store.upsert_group_posts(group.group_id, posts)
+                console.print("[cyan]Fetching posts for commenting...[/cyan]")
+                raw_posts = fetch_top_posts(context, group.url_canonical, group.group_id)
+                if raw_posts:
+                    posts = [
+                        GroupPost(
+                            group_id=group.group_id,
+                            post_url=p["post_url"],
+                            interactions=p["interactions"],
+                            comments=p["comments"],
+                        )
+                        for p in raw_posts
+                    ]
+                    with SqliteStore(pfad) as gruppen_store:
+                        gruppen_store.upsert_group_posts(group.group_id, posts)
 
-                        with _store() as store:
-                            bisherige = store.bisherige_post_urls(group.group_id)
+                    with _store() as store:
+                        bisherige = store.bisherige_post_urls(group.group_id)
 
-                        offene_posts = [p for p in posts if p.post_url not in bisherige]
-                        if offene_posts:
-                            best_post = max(offene_posts, key=lambda p: p.interactions + p.comments)
-                            used_post_url = best_post.post_url
-                            # ``comment_on_post`` liefert seit dem 12.09.2026
-                            # einen Ausgang statt eines ``bool``: Er sagt auch,
-                            # ob die Gruppe gerade nichts mehr annimmt oder der
-                            # Kommentar auf eine Freigabe wartet.
-                            ausgang = comment_on_post(context, used_post_url, text)
-                            erfolg = ausgang.erfolg
-                            if ausgang.hinweis:
-                                fehler_text = ausgang.hinweis[:100]
-                        else:
-                            fehler_text = "Alle aktuellen Beiträge wurden bereits kommentiert."
+                    offene_posts = [p for p in posts if p.post_url not in bisherige]
+                    if offene_posts:
+                        best_post = max(offene_posts, key=lambda p: p.interactions + p.comments)
+                        used_post_url = best_post.post_url
+                        # ``comment_on_post`` liefert seit dem 12.09.2026
+                        # einen Ausgang statt eines ``bool``: Er sagt auch,
+                        # ob die Gruppe gerade nichts mehr annimmt oder der
+                        # Kommentar auf eine Freigabe wartet.
+                        ausgang = comment_on_post(context, used_post_url, text)
+                        erfolg = ausgang.erfolg
+                        if ausgang.hinweis:
+                            fehler_text = ausgang.hinweis[:100]
                     else:
-                        fehler_text = "Keine passenden Beiträge zum Kommentieren gefunden."
+                        fehler_text = "Alle aktuellen Beiträge wurden bereits kommentiert."
+                else:
+                    fehler_text = "Keine passenden Beiträge zum Kommentieren gefunden."
         except Exception as exc:
             erfolg = False
             fehler_text = str(exc).split("\n")[0][:100]

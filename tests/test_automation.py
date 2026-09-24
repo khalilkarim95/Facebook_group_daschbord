@@ -1,9 +1,10 @@
 """Tests für die Automatisierung über Playwright.
 
-Diese Tests prüfen, ob die Automatisierung (post_to_group, comment_on_post)
-korrekt angebunden ist, ohne tatsächlich einen Browser zu öffnen.
+Diese Tests prüfen, ob die Automatisierung (comment_on_post) korrekt
+angebunden ist, ohne tatsächlich einen Browser zu öffnen. Automatisches
+Posten ist seit dem 24.09.2026 entfernt (``post_to_group`` gibt es nicht mehr).
 Geprüft wird:
-1. Der Tageslimit-Zähler greift.
+1. Ein Beitrag wird nicht automatisch gesetzt - der Browser startet nicht.
 2. Fehlschläge werden aufgezeichnet.
 3. Erfolge werden aufgezeichnet, auch wenn die Kampagne im Moment pausiert ist.
 """
@@ -80,7 +81,7 @@ def _client(bestand, config, **kwargs):
     return TestClient(create_app(config=config, db_path=bestand), **kwargs)
 
 
-@patch("fbgroups.automation.actions.post_to_group")
+@patch("fbgroups.automation.actions.fetch_top_posts")
 @patch("fbgroups.automation.browser.get_browser_context")
 def test_fehlschlag_schreibt_einen_versuch(
     mock_context, mock_post, bestand: Path, config
@@ -101,7 +102,7 @@ def test_fehlschlag_schreibt_einen_versuch(
     client = _client(bestand, config)
     antwort = client.post(
         f"/arbeit/{KAMPAGNE}/vorschlag/auto",
-        json={"group_id": gid, "nummer": 1, "texttyp": "post"},
+        json={"group_id": gid, "nummer": 1, "texttyp": "kommentar"},
     )
     
     assert antwort.status_code == 200
@@ -117,47 +118,31 @@ def test_fehlschlag_schreibt_einen_versuch(
         assert "Playwright Timeout" in versuche[0].fehler
         
         # Und der Stand auf FEHLGESCHLAGEN ging
-        vorschlag = store.vorschlag(KAMPAGNE, gid, Texttyp.POST, 1)
+        vorschlag = store.vorschlag(KAMPAGNE, gid, Texttyp.KOMMENTAR, 1)
         assert vorschlag.status == VorschlagStatus.FEHLGESCHLAGEN
 
 
-@patch("fbgroups.automation.actions.post_to_group")
 @patch("fbgroups.automation.browser.get_browser_context")
-def test_tageslimit_blockiert_die_ausfuehrung(
-    mock_context, mock_post, bestand: Path, config, monkeypatch
+def test_ein_beitrag_wird_nicht_automatisch_gesetzt(
+    mock_context, bestand: Path, config
 ) -> None:
-    """Wenn Kaltmodus zuschlägt, wird Playwright gar nicht erst gestartet."""
-    # Kaltmodus auf 0 setzen
-    monkeypatch.setitem(config.get("kaltmodus"), "aktiv", True)
-    monkeypatch.setitem(config.get("kaltmodus"), "beitraege_pro_tag", 0)
-
+    """Automatisches Posten ist entfernt: Der Browser startet gar nicht erst."""
     gid = next(iter(GRUPPEN))
-    with MarketingStore(bestand) as store:
-        kampagne = store.load_campaign(KAMPAGNE)
-        with SqliteStore(bestand) as g_store:
-            gruppe = next((g for g in g_store.load_groups() if g.group_id == gid), None)
-        stelle_texte_bereit(store, kampagne, gruppe, config)
-
     client = _client(bestand, config)
     antwort = client.post(
         f"/arbeit/{KAMPAGNE}/vorschlag/auto",
         json={"group_id": gid, "nummer": 1, "texttyp": "post"},
     )
-    
+
     assert antwort.status_code == 200
     daten = antwort.json()
     assert daten["ok"] is False
-    assert "Tageslimit" in daten["meldung"]
-    
-    mock_post.assert_not_called()
     mock_context.assert_not_called()
+    with MarketingStore(bestand) as store:
+        assert store.versuche_for(KAMPAGNE, gid) == []
 
 
-@patch("fbgroups.automation.actions.post_to_group")
-@patch("fbgroups.automation.browser.get_browser_context")
-def test_erfolg_wird_trotz_pause_gespeichert(
-    mock_context, mock_post, bestand: Path, config
-) -> None:
+def test_erfolg_wird_trotz_pause_gespeichert(bestand: Path, config) -> None:
     """Wenn ein Beitrag auf FB landet, muss er gespeichert werden, auch bei Pause."""
     gid = next(iter(GRUPPEN))
     with MarketingStore(bestand) as store:
@@ -165,9 +150,6 @@ def test_erfolg_wird_trotz_pause_gespeichert(
         with SqliteStore(bestand) as g_store:
             gruppe = next((g for g in g_store.load_groups() if g.group_id == gid), None)
         stelle_texte_bereit(store, kampagne, gruppe, config)
-
-    mock_context.return_value.__enter__.return_value = MagicMock()
-    mock_post.return_value = True
 
     # 1. Wir starten den Request
     # 2. Im Request wird die DB geschlossen, Playwright laeuft

@@ -1293,123 +1293,6 @@ def campaign_retry(
         )
 
 
-@campaign_app.command("beitritt")
-def campaign_beitritt(
-    server: str = typer.Option(
-        "http://127.0.0.1:8090", "--server", help="Basisadresse des Dienstes (SSH-Tunnel)."
-    ),
-    limit: int = typer.Option(
-        0, "--limit", help="Hoechstens N Anfragen in diesem Lauf (0 = bis zur Tagesmenge)."
-    ),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Nur zeigen, wer drankaeme."),
-) -> None:
-    """Stellt Beitrittsanfragen - sichtbar im Browser, gebucht auf dem Server.
-
-    Die riskanteste Handlung des Projekts, deshalb die vorsichtigste:
-
-    * Die **Tagesmenge bestimmt der Server**, nicht dieser Rechner. Sonst
-      haette jedes Fenster sein eigenes Kontingent, und zwei nebeneinander
-      verdoppelten die Anfragen.
-    * Gruppen mit Beitrittsfragen werden **uebersprungen**, nicht beantwortet.
-    * Ein uebersprungener oder gescheiterter Versuch hinterlaesst **nichts** -
-      ``beitritt_angefragt`` zu setzen waere die Behauptung, es sei etwas
-      abgeschickt worden.
-    """
-    import httpx
-
-    config = _config()
-    basis = server.rstrip("/")
-    kopf = {"Origin": basis, "Content-Type": "application/json"}
-
-    with httpx.Client(timeout=120.0, headers=kopf) as klient:
-        antwort = klient.post(f"{basis}/automatik/beitritt/naechste", json={})
-        if antwort.status_code == 404:
-            console.print(
-                "[red]Der Dienst haelt den Aufruf fuer nicht-oertlich.[/red] "
-                "Laeuft der SSH-Tunnel?"
-            )
-            raise typer.Exit(code=1)
-        antwort.raise_for_status()
-        daten = antwort.json()
-
-        gruppen = daten["gruppen"]
-        if limit > 0:
-            gruppen = gruppen[:limit]
-
-        console.print(
-            f"Heute gestellt: [bold]{daten['heute']}[/bold] von {daten['pro_tag']}  ·  "
-            f"jetzt an der Reihe: [bold]{len(gruppen)}[/bold]"
-        )
-        if daten.get("meldung"):
-            console.print(f"[yellow]{daten['meldung']}[/yellow]")
-        if not gruppen:
-            return
-
-        for g in gruppen[:10]:
-            console.print(f"  {g['name']}")
-        if len(gruppen) > 10:
-            console.print(f"  ... und {len(gruppen) - 10} weitere")
-
-        if dry_run:
-            console.print("\n[dry-run] Es wird nichts abgeschickt.")
-            return
-
-        from fbgroups.automation.actions import request_join
-        from fbgroups.automation.browser import get_browser_context
-        from fbgroups.marketing import beitritt as bt
-
-        _, abstand = bt.einstellungen(config)
-        gezaehlt = {"angefragt": 0, "bereits_mitglied": 0, "fragen": 0, "fehler": 0}
-
-        with get_browser_context(config, headless=False) as context:
-            for i, g in enumerate(gruppen, start=1):
-                console.print(f"\n[bold]{i}/{len(gruppen)}  {g['name']}[/bold]")
-                try:
-                    ausgang, bemerkung = request_join(context, g["url"])
-                except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Ausgang
-                    ausgang, bemerkung = "fehler", str(exc).splitlines()[0][:120]
-
-                gezaehlt[str(ausgang)] = gezaehlt.get(str(ausgang), 0) + 1
-                try:
-                    klient.post(
-                        f"{basis}/automatik/beitritt/ergebnis",
-                        json={
-                            "group_id": g["group_id"],
-                            "ausgang": str(ausgang),
-                            "bemerkung": bemerkung,
-                        },
-                    ).raise_for_status()
-                except Exception as exc:  # noqa: BLE001 - eine Gruppe, nicht der Lauf
-                    # Eine Anfrage, die hinausging, aber nicht gebucht werden
-                    # konnte: Sie steht bei Facebook und fehlt im Bestand. Das
-                    # ist zu melden und kein Grund, die uebrigen Gruppen
-                    # ausfallen zu lassen.
-                    console.print(
-                        f"[red]  nicht gebucht ({str(exc).splitlines()[0][:80]}) - "
-                        "die Anfrage selbst ist heraus[/red]"
-                    )
-
-                # Der Takt gilt zwischen den Anfragen, nicht danach: Nach der
-                # letzten zu warten haelt nur den Menschen auf.
-                if i < len(gruppen) and abstand > 0:
-                    import random
-                    import time
-
-                    pause = abstand * 60 * random.uniform(0.8, 1.3)
-                    console.print(f"[dim]  Pause {pause / 60:.1f} Min[/dim]")
-                    time.sleep(pause)
-
-    console.print(
-        Panel(
-            f"Angefragt:        {gezaehlt['angefragt']}\n"
-            f"Schon Mitglied:   {gezaehlt['bereits_mitglied']}\n"
-            f"Uebersprungen:    {gezaehlt['fragen']}  (Gruppe stellt Beitrittsfragen)\n"
-            f"Fehlgeschlagen:   {gezaehlt['fehler']}",
-            title="Beitrittsanfragen",
-        )
-    )
-
-
 @campaign_app.command("abgleich")
 def campaign_abgleich(
     server: str = typer.Option(
@@ -1782,10 +1665,11 @@ def campaign_automatik(
             ) -> automatik.Schrittergebnis:
                 try:
                     if texttyp == "post":
-                        # Der Beitrag nimmt den vorbereiteten Text - er ist
-                        # bereits aufgeloest. Nur der Kommentar waehlt seinen
-                        # Text neu und braucht deshalb die Adresse.
-                        return automatik.browser_schritt_post(context, gruppen_url, text)
+                        return automatik.Schrittergebnis(
+                            erfolg=False,
+                            fehler="automatisches Posten ist entfernt",
+                            kein_anlass=True,
+                        )
                     # ``vorgaben`` traegt, was dieser Rechner nicht
                     # nachschlagen kann: die Erlaubnis, die Schwelle und die
                     # schon benutzten Vorlagen. Ohne sie nahm der Fernbetrieb bis zum
@@ -1798,25 +1682,11 @@ def campaign_automatik(
                         erfolg=False, fehler=str(exc).splitlines()[0][:120]
                     )
 
-            def beitritt(gruppen_url: str) -> tuple[str, str]:
-                """Schritt 2 des Ablaufs, im sichtbaren Browser dieses Rechners.
-
-                Ein Fehlschlag ist ein **Ausgang**, keine Ausnahme: Der Server
-                vermerkt dann nichts (es ist nichts abgeschickt worden) und
-                legt die Gruppe fuer diesen Lauf beiseite.
-                """
-                from fbgroups.automation.actions import request_join
-
-                try:
-                    ausgang, bemerkung = request_join(context, gruppen_url)
-                except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Ausgang
-                    return "fehler", str(exc).splitlines()[0][:120]
-                return str(ausgang), bemerkung
 
             meldung = automatik.fuehre_lauf_fern_aus(
                 server,
                 ausfuehren=fern,
-                beitreten=beitritt,
+                beitreten=None,
                 max_schritte=max_schritte,
                 nur=list(nur or []),
                 frisch=frisch,
@@ -2012,7 +1882,11 @@ def campaign_automatik(
                     # Der Beitrag nimmt den vorbereiteten Text - er ist
                     # bereits aufgeloest. Nur der Kommentar waehlt seinen
                     # Text neu und braucht deshalb die Adresse.
-                    return automatik.browser_schritt_post(context, gruppen_url, text)
+                    return automatik.Schrittergebnis(
+                        erfolg=False,
+                        fehler="automatisches Posten ist entfernt",
+                        kein_anlass=True,
+                    )
                 return automatik.browser_schritt(
                     context, config, gruppen_url, group_id, text, link_url
                 )
@@ -2021,20 +1895,11 @@ def campaign_automatik(
                     erfolg=False, fehler=str(exc).splitlines()[0][:120]
                 )
 
-        def beitritt(gruppen_url: str) -> tuple[str, str]:
-            """Schritt 2 des Ablaufs - vor allem anderen in dieser Kampagne."""
-            from fbgroups.automation.actions import request_join
-
-            try:
-                ausgang, bemerkung = request_join(context, gruppen_url)
-            except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Ausgang
-                return "fehler", str(exc).splitlines()[0][:120]
-            return str(ausgang), bemerkung
 
         fortschritt = automatik.fuehre_lauf_aus(
             config,
             ausfuehren=schritt,
-            beitreten=beitritt,
+            beitreten=None,
             max_schritte=max_schritte,
             nur=list(nur or []),
             frisch=frisch,
@@ -2055,7 +1920,7 @@ def campaign_auto(
     nummer: int = typer.Option(1, "--nummer", help="Nummer der Fassung (meist 1)"),
 ) -> None:
     """Postet oder kommentiert automatisch mit Playwright - mit Tracking-Code."""
-    from fbgroups.automation.actions import comment_on_post, fetch_top_posts, post_to_group
+    from fbgroups.automation.actions import comment_on_post, fetch_top_posts
     from fbgroups.automation.browser import get_browser_context
     from fbgroups.marketing.arbeit import Ergebnis, Sperre, melde_vorschlag
     from fbgroups.marketing.beitrag import mit_link
@@ -2147,6 +2012,10 @@ def campaign_auto(
             console.print(f"[red]Keine gueltige URL fuer Gruppe {group_id} gefunden.[/red]")
             raise typer.Exit(code=1)
 
+    if texttyp == Texttyp.POST:
+        console.print("[red]Automatisches Posten ist entfernt - nur Kommentare.[/red]")
+        raise typer.Exit(code=2)
+
     console.print(f"Starte Automatisierung in {group.url_canonical}...")
 
     # 2. BROWSER-Phase (Datenbank geschlossen, kann Minuten dauern)
@@ -2155,54 +2024,42 @@ def campaign_auto(
     used_post_url = ""
     try:
         with get_browser_context(config, headless=False) as context:
-            if texttyp == Texttyp.POST:
-                ausgang = post_to_group(context, group.url_canonical, text)
-                erfolg = ausgang.erfolg
-                # Der Ausgang sagt mehr als "ging es?": ``link_sichtbar``
-                # heisst, dass die nackte Adresse im Beitrag steht, weil die
-                # Vorschaukarte ohne sie nicht gehalten hat. Kein Fehlschlag -
-                # der Beitrag steht und wird gezaehlt -, aber es gehoert ins
-                # Protokoll und nicht in die Stille.
-                if ausgang.hinweis:
-                    fehler_text = ausgang.hinweis
-                    console.print(f"[yellow]{ausgang.hinweis}[/yellow]")
-            else:
-                console.print("[cyan]Fetching posts for commenting...[/cyan]")
-                raw_posts = fetch_top_posts(context, group.url_canonical, group.group_id)
-                if raw_posts:
-                    from fbgroups.models import GroupPost
+            console.print("[cyan]Fetching posts for commenting...[/cyan]")
+            raw_posts = fetch_top_posts(context, group.url_canonical, group.group_id)
+            if raw_posts:
+                from fbgroups.models import GroupPost
 
-                    posts = [
-                        GroupPost(
-                            group_id=group.group_id,
-                            post_url=p["post_url"],
-                            interactions=p["interactions"],
-                            comments=p["comments"],
-                        )
-                        for p in raw_posts
-                    ]
-                    with SqliteStore(config.path("sqlite_path")) as gruppen_store:
-                        gruppen_store.upsert_group_posts(group.group_id, posts)
+                posts = [
+                    GroupPost(
+                        group_id=group.group_id,
+                        post_url=p["post_url"],
+                        interactions=p["interactions"],
+                        comments=p["comments"],
+                    )
+                    for p in raw_posts
+                ]
+                with SqliteStore(config.path("sqlite_path")) as gruppen_store:
+                    gruppen_store.upsert_group_posts(group.group_id, posts)
 
-                    with MarketingStore(config.path("sqlite_path")) as store:
-                        bisherige = store.bisherige_post_urls(group.group_id)
+                with MarketingStore(config.path("sqlite_path")) as store:
+                    bisherige = store.bisherige_post_urls(group.group_id)
 
-                    offene_posts = [p for p in posts if p.post_url not in bisherige]
-                    if offene_posts:
-                        best_post = max(offene_posts, key=lambda p: p.interactions + p.comments)
-                        used_post_url = best_post.post_url
-                        # ``comment_on_post`` liefert seit dem 12.09.2026
-                        # einen Ausgang statt eines ``bool``: Er sagt auch,
-                        # ob die Gruppe gerade nichts mehr annimmt oder der
-                        # Kommentar auf eine Freigabe wartet.
-                        ausgang = comment_on_post(context, used_post_url, text)
-                        erfolg = ausgang.erfolg
-                        if ausgang.hinweis:
-                            fehler_text = ausgang.hinweis[:100]
-                    else:
-                        fehler_text = "Alle aktuellen Beiträge wurden bereits kommentiert."
+                offene_posts = [p for p in posts if p.post_url not in bisherige]
+                if offene_posts:
+                    best_post = max(offene_posts, key=lambda p: p.interactions + p.comments)
+                    used_post_url = best_post.post_url
+                    # ``comment_on_post`` liefert seit dem 12.09.2026
+                    # einen Ausgang statt eines ``bool``: Er sagt auch,
+                    # ob die Gruppe gerade nichts mehr annimmt oder der
+                    # Kommentar auf eine Freigabe wartet.
+                    ausgang = comment_on_post(context, used_post_url, text)
+                    erfolg = ausgang.erfolg
+                    if ausgang.hinweis:
+                        fehler_text = ausgang.hinweis[:100]
                 else:
-                    fehler_text = "Keine passenden Beiträge zum Kommentieren gefunden."
+                    fehler_text = "Alle aktuellen Beiträge wurden bereits kommentiert."
+            else:
+                fehler_text = "Keine passenden Beiträge zum Kommentieren gefunden."
     except Exception as exc:
         erfolg = False
         fehler_text = str(exc).split("\n")[0][:100]

@@ -1,7 +1,7 @@
 """Beitrittsanfragen: Takt und Tagesmenge - ohne Netz, ohne Datenbank.
 
 Dieselbe Aufteilung wie bei ``kaltmodus.py``: Hier steht die Rechnung, nicht
-die Handlung. Wer die Anfrage stellt, ist ``automation.actions.request_join``;
+die Handlung. Gestellt wird sie seit dem 24.09.2026 nur noch von Hand;
 wer sie zaehlt und bucht, ist der Server.
 
 ## Warum ein eigener, strengerer Takt
