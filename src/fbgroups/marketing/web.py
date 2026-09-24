@@ -149,6 +149,9 @@ class KampagneNeu(BaseModel):
     language: str = Field(default="", max_length=16)
     message_template: str = Field(default="", max_length=2000)
     landing_page: str = Field(default="", max_length=300)
+    #: Auch Gruppen ohne Score (24.09.2026): Die Uebersicht sendet ``true``,
+    #: seit der Score nichts mehr entscheidet. Vorgabe ``False`` wie bisher.
+    include_unscored: bool = False
 
 
 class KampagneStatusMeldung(BaseModel):
@@ -2586,6 +2589,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     target_cities=list(meldung.cities),
                     target_prioritaeten=[p.strip().upper() for p in meldung.prioritaeten],
                     target_aktivitaet=[a.strip().lower() for a in meldung.aktivitaet],
+                    target_include_unscored=meldung.include_unscored,
                 )
             )
             store.audit("kampagne_angelegt", kennung, meldung.name)

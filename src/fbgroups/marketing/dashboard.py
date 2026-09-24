@@ -1382,26 +1382,13 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
     <label>Kampagne
       <select id="r-kampagne"></select>
     </label>
-    <label>Zielgruppen <span class="zart">(leer = alle, mehrere mit Strg)</span>
-      <select id="r-zielgruppen" multiple size="8"></select>
-    </label>
-    <label>Städte <span class="zart">(leer = alle, mehrere mit Strg)</span>
-      <select id="r-staedte" multiple size="8"></select>
-    </label>
     <label>Priorität <span class="zart">(leer = alle, mehrere mit Strg)</span>
       <select id="r-prioritaeten" multiple size="5"></select>
     </label>
     <label>Aktivität <span class="zart">(leer = alle, mehrere mit Strg)</span>
       <select id="r-aktivitaet" multiple size="3"></select>
     </label>
-    <label>Mindestscore <span class="zart">(leer = keiner)</span>
-      <input type="number" id="r-minscore" min="0" max="100" step="1" placeholder="z. B. 60">
-    </label>
     <div class="breit">
-      <label class="schalter">
-        <input type="checkbox" id="r-unbewertete">
-        auch Gruppen ohne Score – sie bekommen einen Code ohne Zielgruppe und Stadt
-      </label>
       <label class="schalter">
         <input type="checkbox" id="r-auto">
         neu gefundene Gruppen automatisch übernehmen (nur bei Status „active“)
@@ -1428,23 +1415,11 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
     <label>Kennung <span class="zart">(leer = aus dem Namen)</span>
       <input type="text" id="k-id" placeholder="batreeq-iraqi-germany">
     </label>
-    <label>Zielgruppen <span class="zart">(mehrere mit Strg, scrollbar)</span>
-      <select id="k-zielgruppen" multiple size="8"></select>
-    </label>
-    <label>Städte <span class="zart">(leer = alle, mehrere mit Strg)</span>
-      <select id="k-staedte" multiple size="8"></select>
-    </label>
     <label>Priorität <span class="zart">(leer = alle, mehrere mit Strg)</span>
       <select id="k-prioritaeten" multiple size="5"></select>
     </label>
     <label>Aktivität <span class="zart">(leer = alle, mehrere mit Strg)</span>
       <select id="k-aktivitaet" multiple size="3"></select>
-    </label>
-    <label>Sprache
-      <input type="text" id="k-sprache" placeholder="ar | de">
-    </label>
-    <label>Landingpage
-      <input type="text" id="k-landing" placeholder="https://b-tarikak.de/">
     </label>
     <div class="breit knopfreihe">
       <button id="k-anlegen">Anlegen</button>
@@ -2047,19 +2022,7 @@ function beitragZelle(z) {{
 // steht spaeter in veroeffentlichten Beitraegen. Deshalb rechnet "Zuordnen"
 // erst und fragt dann - dieselbe Rechnung, die danach ausgefuehrt wird.
 (function fuelleAuswahl() {{
-  const ziel = document.getElementById("k-zielgruppen");
-  const stadt = document.getElementById("k-staedte");
-  if (!ziel || !DATEN.auswahl) return;
-  DATEN.auswahl.zielgruppen.forEach((a) => {{
-    const o = document.createElement("option");
-    o.value = a.id; o.textContent = a.label + "  (" + a.id + ")";
-    ziel.appendChild(o);
-  }});
-  DATEN.auswahl.staedte.forEach((c) => {{
-    const o = document.createElement("option");
-    o.value = c.id; o.textContent = c.label;
-    stadt.appendChild(o);
-  }});
+  if (!document.getElementById("k-prioritaeten") || !DATEN.auswahl) return;
   // Note und Stufe kommen aus der Aufzaehlung, nicht aus dem Bestand: Eine
   // Kampagne darf auf "A++" filtern, auch wenn heute keine Gruppe so
   // eingestuft ist. Die Zahl daneben sagt trotzdem, wie viele es gerade sind
@@ -2094,14 +2057,16 @@ document.getElementById("k-anlegen")?.addEventListener("click", async (e) => {{
       body: JSON.stringify({{
         name: name,
         campaign_id: document.getElementById("k-id").value.trim(),
-        audiences: gewaehlteWerte("k-zielgruppen"),
-        cities: gewaehlteWerte("k-staedte"),
+        // Zielgruppen, Staedte, Sprache und Landingpage stehen seit dem
+        // 24.09.2026 nicht mehr im Formular: Im Bestand sind die Felder leer,
+        // die Sprache ist ar und die Landingpage die Vorgabe. Ein Score
+        // entscheidet nichts mehr - die Regel nimmt deshalb auch Gruppen
+        // ohne Score ("nur bewertete" traf 0 von 39).
+        include_unscored: true,
         // Note und Stufe gehoeren zur Regel und nicht zur Beschreibung:
         // "A++" sagt nichts darueber, wen die Kampagne bewirbt.
         prioritaeten: gewaehlteWerte("k-prioritaeten"),
         aktivitaet: gewaehlteWerte("k-aktivitaet"),
-        language: document.getElementById("k-sprache").value.trim(),
-        landing_page: document.getElementById("k-landing").value.trim(),
         // Eigene Textvorlage und Kommentar-Haken stehen hier nicht mehr:
         // Die Vorlage galt fuer ALLE Gruppen der Kampagne und war der
         // haeufigste Griff daneben, und die Textarten sind in der
@@ -2146,13 +2111,8 @@ function regelAnzeigen(id) {{
   const kampagne = kampagneNach(id);
   if (!kampagne) return;
   document.getElementById("r-kampagne").value = id;
-  auswahlSetzen("r-zielgruppen", kampagne.regel.audiences);
-  auswahlSetzen("r-staedte", kampagne.regel.cities);
   auswahlSetzen("r-prioritaeten", kampagne.regel.prioritaeten);
   auswahlSetzen("r-aktivitaet", kampagne.regel.aktivitaet);
-  document.getElementById("r-minscore").value =
-    kampagne.regel.min_score === null ? "" : kampagne.regel.min_score;
-  document.getElementById("r-unbewertete").checked = kampagne.regel.include_unscored;
   document.getElementById("r-auto").checked = kampagne.regel.auto_assign;
   meldung("r-meldung", "Gilt jetzt: " + kampagne.regel.kurz
     + " · trifft " + kampagne.regel.passend + " von " + kampagne.regel.bestand
@@ -2163,10 +2123,6 @@ function regelAnzeigen(id) {{
   const wahl = document.getElementById("r-kampagne");
   if (!wahl || !DATEN.auswahl) return;
   DATEN.kampagnen.forEach((k) => wahl.add(new Option(k.name + "  (" + k.id + ")", k.id)));
-  DATEN.auswahl.zielgruppen.forEach((a) =>
-    document.getElementById("r-zielgruppen").add(new Option(a.label + "  (" + a.id + ")", a.id)));
-  DATEN.auswahl.staedte.forEach((c) =>
-    document.getElementById("r-staedte").add(new Option(c.label, c.id)));
   fuelleStufen("r-prioritaeten", "r-aktivitaet");
   if (DATEN.kampagnen.length) regelAnzeigen(DATEN.kampagnen[0].id);
 }})();
@@ -2178,7 +2134,6 @@ document.getElementById("r-speichern")?.addEventListener("click", async (e) => {
   const knopf = e.target;
   const id = document.getElementById("r-kampagne").value;
   if (!id) {{ meldung("r-meldung", "Keine Kampagne gewählt.", false); return; }}
-  const score = document.getElementById("r-minscore").value.trim();
 
   knopf.disabled = true;
   try {{
@@ -2186,15 +2141,15 @@ document.getElementById("r-speichern")?.addEventListener("click", async (e) => {
       method: "POST",
       headers: {{"Content-Type": "application/json"}},
       body: JSON.stringify({{
-        audiences: gewaehlteWerte("r-zielgruppen"),
-        cities: gewaehlteWerte("r-staedte"),
+        // Zielgruppen, Staedte und Score stehen seit dem 24.09.2026 nicht
+        // mehr im Formular: leer heisst keine Einschraenkung, -1 hebt einen
+        // alten Mindestscore auf, und Gruppen ohne Score gehoeren dazu.
+        audiences: [],
+        cities: [],
         prioritaeten: gewaehlteWerte("r-prioritaeten"),
         aktivitaet: gewaehlteWerte("r-aktivitaet"),
-        // -1 hebt den Mindestscore auf - dieselbe Vereinbarung wie auf der
-        // Kommandozeile. Ein leeres Feld heisst "kein Mindestscore", nicht
-        // "unveraendert lassen".
-        min_score: score === "" ? -1 : Number(score),
-        include_unscored: document.getElementById("r-unbewertete").checked,
+        min_score: -1,
+        include_unscored: true,
         auto_assign: document.getElementById("r-auto").checked,
       }}),
     }});
