@@ -193,7 +193,18 @@ marketing:
   # sie fuehrt geradewegs auf die Landingpage. Eine Tracking-Adresse (/r/,
   # /t/, ?ref=) wird hier nicht angenommen und wirkt wie ein leerer Eintrag.
   # Leer: Kommentare ganz ohne Adresse.
-  kommentar_adresse: https://b-tarikak.de/home
+  kommentar_adresse: ""
+
+  # Seit 24.09.2026: Statt der Adresse steht dieser Satz am Ende jedes
+  # Kommentars, und das Bild darunter traegt Adresse und Weg zur App. Die
+  # ausgeschriebene Adresse machte bei Facebook Probleme. Der Satz geht der
+  # Adresse vor; leer faellt es auf kommentar_adresse zurueck.
+  kommentar_schluss: "الرابط المباشر للتحميل موجود في البايو (أعلى الصفحة) 👇"
+
+  # Das Bild, das jedem automatischen Kommentar beiliegt (relativ zum
+  # Projekt, liegt unter config/ und kommt mit jedem Ausrollen mit). Fehlt
+  # die Datei, geht der Kommentar ohne Bild hinaus. Leer: kein Bild.
+  kommentar_bild: config/bilder/kommentar.jpg
 
   # Braucht ein Kommentar einen erkannten **Anlass**, oder genuegt der blosse
   # Bezug? (13.09.2026)

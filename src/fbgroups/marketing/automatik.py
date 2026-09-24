@@ -1404,9 +1404,24 @@ def browser_schritt(
         # ``GroupPost`` hat dafuer kein Feld und soll auch keines bekommen.
         ergebnis = waehle_und_kommentiere(
             context, config, roh, group_id, text,
-            kommentieren=comment_on_post, link_url=link_url,
+            kommentieren=_mit_bild(comment_on_post, config), link_url=link_url,
         )
     return replace(ergebnis, ausschliessen=nichts_zu_machen(bericht, roh, ergebnis))
+
+
+def _mit_bild(kommentieren, config: AppConfig):  # noqa: ANN001, ANN202
+    """``comment_on_post`` mit dem Kommentarbild aus ``marketing.kommentar_bild``.
+
+    Die Auswahlkette ruft ``kommentieren(context, post_url, text)`` - drei
+    Angaben, damit sie im Test durch eine Zaehlfunktion ersetzbar bleibt.
+    Das Bild kommt deshalb hier dazu und nicht dort.
+    """
+    from functools import partial
+
+    from fbgroups.marketing.beitrag import kommentar_bild
+
+    bild = kommentar_bild(config)
+    return partial(kommentieren, bild=bild) if bild else kommentieren
 
 
 def nichts_zu_machen(bericht: dict, roh: list[dict], ergebnis: Schrittergebnis) -> str:
@@ -2720,7 +2735,7 @@ def browser_schritt_fern(
             roh,
             group_id,
             text,
-            kommentieren=comment_on_post,
+            kommentieren=_mit_bild(comment_on_post, config),
             bisherige=bisherige,
             erlaubnis=erlaubnis,
             anspruch=anspruch,

@@ -556,6 +556,38 @@ Gruppe öffnen → Runde 1 scrollen + beurteilen → Runde 2 → … → Runde 1
 - Die Wege von Hand (`campaign auto`, Arbeitsseite) rufen ohne `geeignet`
   und behalten ihr `limit`. Festgehalten in `tests/test_scroll_runden.py`.
 
+### Bild und Schlusssatz statt Adresse im Kommentar (24.09.2026)
+
+```
+vorher  … من سوريا. https://b-tarikak.de/home
+jetzt   … من سوريا. الرابط المباشر للتحميل موجود في البايو (أعلى الصفحة) 👇   + Bild
+```
+
+Wunsch des Nutzers: Die ausgeschriebene Adresse machte bei Facebook
+Probleme. Sie steht jetzt **im Bild** (`config/bilder/kommentar.jpg`, der
+Pinguin mit Karte, Name, Adresse und Store-Knöpfen).
+
+- **`marketing.kommentar_schluss` geht `kommentar_adresse` vor**
+  (`beitrag.kommentar_adresse`). Der Satz reist auf demselben Weg wie vorher
+  die Adresse (`link_url`) und wird genauso angehängt — einmal, mit einem
+  Leerzeichen, nicht mit einem Zeilenumbruch (ein `\n` über `insert_text`
+  ist im Kommentarfeld unberechenbar). `kommentar_adresse` steht auf `""`.
+- **`marketing.kommentar_bild`** (`beitrag.kommentar_bild`): relativ zum
+  Projekt, liegt unter `config/` und kommt damit mit jedem Ausrollen auf
+  Server **und** Arbeitsrechner — hochgeladen wird dort, wo der Browser ist.
+  JPEG, weil Facebooks Kommentar-Upload damit am sichersten ist (das
+  Original war WebP).
+- **`comment_on_post(..., bild=)`** hängt es nach dem Text an
+  (`_bild_anhaengen`): das Dateifeld im **selben Formular** wie das
+  Kommentarfeld, sonst das letzte der Seite; abgesendet wird erst, wenn die
+  Vorschau im Formular steht (bis 15 s). Kommt das Bild nicht an, geht der
+  Text trotzdem hinaus — er nennt App und Weg.
+- Die Auswahlkette ruft weiter `kommentieren(context, url, text)`; das Bild
+  kommt über `automatik._mit_bild` (ein `partial`) dazu, örtlich wie fern.
+  Die Arbeitsseite von Hand zeigt nur den Text — das Bild fügt dort der
+  Mensch ein.
+- Festgehalten in `tests/test_kommentarbild.py`.
+
 ### Zehn Beiträge ansehen, dann erst aufgeben (24.09.2026)
 
 ```

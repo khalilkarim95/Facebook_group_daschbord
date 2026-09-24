@@ -3,6 +3,7 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from playwright.sync_api import BrowserContext
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -582,7 +583,43 @@ def _feld_anklicken(page, feld) -> bool:  # noqa: ANN001 - Playwright-Objekte
         return False
 
 
-def comment_on_post(context: BrowserContext, post_url: str, text: str) -> Kommentarausgang:
+def _bild_anhaengen(page, feld, bild) -> bool:  # noqa: ANN001 - Playwright-Objekte
+    """Haengt ein Bild an den Kommentar im Entwurf. Returns: ob es angekommen ist.
+
+    Gesucht wird das Dateifeld im **selben Formular** wie das Kommentarfeld -
+    sonst landete das Bild womoeglich im Formular fuer einen neuen Beitrag
+    oder unter einem fremden Kommentar. Erst danach, wenn das Formular keines
+    traegt, das letzte der Seite (das Kommentarfeld steht unten).
+
+    Gewartet wird, bis die Vorschau im Formular steht: Wer vorher absendet,
+    schickt den Text ohne Bild - oder Facebook haelt das Absenden an.
+    """
+    try:
+        formular = feld.locator("xpath=ancestor::form[1]")
+        im_formular = formular.count() > 0
+        eingabe = formular.locator("input[type='file']") if im_formular else None
+        if eingabe is None or eingabe.count() == 0:
+            eingabe = page.locator("input[type='file']").last
+        else:
+            eingabe = eingabe.first
+        bereich = formular if im_formular else page
+        vorher = bereich.locator("img").count()
+        eingabe.set_input_files(str(bild), timeout=10000)
+        for _ in range(30):
+            page.wait_for_timeout(500)
+            if bereich.locator("img").count() > vorher:
+                page.wait_for_timeout(random.randint(1000, 2000))
+                return True
+    except Exception as e:  # noqa: BLE001 - ohne Bild geht der Text trotzdem
+        console.print(f"[yellow]Bild nicht angehaengt: {e}[/yellow]")
+        return False
+    console.print("[yellow]Bild hochgeladen, aber keine Vorschau erschienen.[/yellow]")
+    return False
+
+
+def comment_on_post(
+    context: BrowserContext, post_url: str, text: str, bild: str | Path | None = None
+) -> Kommentarausgang:
     """Automates commenting on a specific Facebook post.
 
     **Nach dem Absenden wird die Seite gelesen.** Ohne das meldete die
@@ -699,6 +736,13 @@ def comment_on_post(context: BrowserContext, post_url: str, text: str) -> Kommen
         except PlaywrightTimeoutError:
             console.print("[red]Kommentarfeld gefunden, aber nicht beschreibbar.[/red]")
             return Kommentarausgang(False, hinweis="Kommentarfeld nicht beschreibbar")
+
+        # **Das Bild statt der Adresse** (24.09.2026). Kommt es nicht an,
+        # geht der Text trotzdem hinaus - er nennt die App und den Weg.
+        if bild:
+            console.print(f"Attaching image {Path(bild).name}...")
+            if _bild_anhaengen(page, comment_box, bild):
+                console.print("Bild angehaengt.")
 
         page.wait_for_timeout(random.randint(800, 2000))
         console.print("Submitting comment (pressing Enter)...")

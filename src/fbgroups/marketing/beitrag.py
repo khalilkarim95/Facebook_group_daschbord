@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import webbrowser
+from pathlib import Path
 
 from fbgroups.config import AppConfig
 from fbgroups.marketing.models import Campaign, CampaignGroup, Texttyp
@@ -213,11 +214,37 @@ def kommentar_adresse(config: AppConfig) -> str:
     URL in Kommentaren lassen"). Eine Tracking-Adresse wird hier gar nicht
     erst angenommen: ``/r/``, ``/t/`` oder ``?ref=`` ergeben ``""`` - sonst
     kaeme ueber die Konfiguration zurueck, was aus dem Kommentar heraus soll.
+
+    **Seit dem 24.09.2026 geht ``marketing.kommentar_schluss`` vor** - ein
+    Satz statt einer Adresse ("الرابط المباشر للتحميل موجود في البايو ...").
+    Die ausgeschriebene Adresse machte bei Facebook Probleme; sie steht jetzt
+    im Bild, das jedem Kommentar beiliegt (``kommentar_bild``). Der Satz
+    reist auf demselben Weg wie vorher die Adresse (``link_url``) und wird
+    genauso angehaengt - einmal, hinter den letzten Satz.
     """
     from fbgroups.urls import tracking_adresse_im_text
 
-    adresse = str(config.get("marketing", "kommentar_adresse", default="") or "").strip()
-    return "" if tracking_adresse_im_text(adresse) else adresse
+    for schluessel in ("kommentar_schluss", "kommentar_adresse"):
+        wert = str(config.get("marketing", schluessel, default="") or "").strip()
+        if wert and not tracking_adresse_im_text(wert):
+            return wert
+    return ""
+
+
+def kommentar_bild(config: AppConfig) -> Path | None:
+    """Das Bild, das jedem Kommentar beiliegt (``marketing.kommentar_bild``) - oder ``None``.
+
+    Seit dem 24.09.2026 (Wunsch des Nutzers): Statt der ausgeschriebenen
+    Adresse, die bei Facebook Probleme machte, traegt das Bild die Adresse
+    und den Weg zur App. Der Pfad ist relativ zum Projekt; die Datei liegt
+    unter ``config/`` und kommt damit mit jedem Ausrollen auf beide Rechner.
+    Fehlt sie, geht der Kommentar ohne Bild hinaus.
+    """
+    wert = str(config.get("marketing", "kommentar_bild", default="") or "").strip()
+    if not wert:
+        return None
+    pfad = Path(wert) if Path(wert).is_absolute() else config.root / wert
+    return pfad if pfad.is_file() else None
 
 
 def mit_kommentaradresse(text: str, adresse: str) -> str:

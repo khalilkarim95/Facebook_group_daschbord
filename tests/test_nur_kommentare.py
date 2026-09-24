@@ -16,6 +16,11 @@ des Nutzers:
 
     حبيت شاركها معكم، شفت تطبيق بطريقك ... من سوريا. https://b-tarikak.de/home
 
+Seit dem 24.09.2026 steht dort statt der Adresse ein Satz
+(``marketing.kommentar_schluss``), und ein Bild traegt die Adresse
+(``marketing.kommentar_bild``) - die ausgeschriebene Adresse machte bei
+Facebook Probleme. Der Weg ist derselbe; ``SCHLUSS`` ist, was jetzt ankommt.
+
 Der Link wird an **drei** Stellen ferngehalten, und jede hat ihren Test:
 dort, wo der Text entsteht (``beitrag.mit_link`` mit ``texttyp``), dort, wo
 der Lauf ihn waehlt (``automatik.entscheide_und_kommentiere``), und
@@ -54,6 +59,8 @@ TRACKING = "https://go.b-tarikak.de/r/FB-TST-BER-001"
 OEFFENTLICH = "https://b-tarikak.de/t/safar-sham-12"
 APP_NAMEN = ("بطريقك", "B-Tarikak")
 LANDING = "https://b-tarikak.de/home"
+#: Was die Konfiguration seit dem 24.09.2026 ans Ende jedes Kommentars setzt.
+SCHLUSS = "الرابط المباشر للتحميل موجود في البايو (أعلى الصفحة) 👇"
 
 
 def _vorlagen() -> dict:
@@ -89,12 +96,12 @@ def _ist_ohne_adresse(text: str) -> None:
     assert "/r/" not in text and "/t/" not in text
     assert "FB-TST" not in text and "safar-sham-12" not in text
     assert tracking_adresse_im_text(text) == "", text
-    assert adresse_im_text(text, erlaubt=(LANDING,)) == "", text
+    assert adresse_im_text(text) == "", text
 
 
 def _endet_mit_landing(text: str) -> None:
-    assert text.endswith(f" {LANDING}"), text
-    assert text.count(LANDING) == 1, text
+    assert text.endswith(f" {SCHLUSS}"), text
+    assert text.count(SCHLUSS) == 1, text
 
 
 # --- 1. Die Vorlagen: ohne Link und trotzdem ein ganzer Kommentar -----------
@@ -132,7 +139,7 @@ def test_mit_link_nimmt_den_link_nur_aus_dem_kommentar(config) -> None:
     )
     beitrag = mit_link(kampagne, zuordnung, vorlage, config=config, texttyp=Texttyp.POST)
 
-    assert kommentar == f"شفت تطبيق بطريقك. {LANDING}"
+    assert kommentar == f"شفت تطبيق بطريقك. {SCHLUSS}"
     _ist_ohne_adresse(kommentar)
     assert OEFFENTLICH in beitrag, "der Beitrag traegt seinen Link unveraendert"
 
@@ -159,7 +166,7 @@ def test_die_freie_adresse_steht_genau_so_wie_im_beispiel(config) -> None:
 
     assert text == (
         "حبيت شاركها معكم، شفت تطبيق بطريقك وفكرته إنه يربط اللي بده يبعت غرض "
-        f"صغير مع مسافر رايح أو جاي من سوريا. {LANDING}"
+        f"صغير مع مسافر رايح أو جاي من سوريا. {SCHLUSS}"
     )
 
 
@@ -272,12 +279,12 @@ def test_der_lauf_haengt_die_freie_adresse_einmal_an() -> None:
             }
         ],
         "g1",
-        f"Rueckfall. {LANDING}",
+        f"Rueckfall. {SCHLUSS}",
         kommentieren=zaehler,
         bisherige=[],
         erlaubnis=Erlaubnis(),
         anspruch=Anspruch(anlass_pflicht=False),
-        link_url=LANDING,
+        link_url=SCHLUSS,
     )
 
     assert ergebnis.erfolg, ergebnis.fehler
@@ -387,7 +394,7 @@ def test_der_server_gibt_den_kommentar_ohne_link_heraus(bestand: Path) -> None:
     _ist_ohne_adresse(schritt["text"])
     _endet_mit_landing(schritt["text"])
     assert any(name in schritt["text"] for name in APP_NAMEN)
-    assert schritt["link_url"] == LANDING, "die freie Adresse, kein Tracking"
+    assert schritt["link_url"] == SCHLUSS, "der Schlusssatz, keine Adresse"
 
     # Das Tracking ausserhalb der Kommentare ist unveraendert.
     antwort = client.get(
@@ -409,7 +416,7 @@ def test_der_lauf_setzt_keinen_beitrag_ab_und_legt_keine_beitragstexte_an(
     def ausfuehren(url, group_id, text, texttyp="kommentar", link_url=""):
         gesehen.append(texttyp)
         _ist_ohne_adresse(text)
-        assert link_url == LANDING
+        assert link_url == SCHLUSS
         return automatik.Schrittergebnis(
             erfolg=True, post_url=f"https://www.facebook.com/groups/{group_id}/posts/{len(gesehen)}"
         )

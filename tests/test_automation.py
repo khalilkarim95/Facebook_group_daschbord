@@ -242,7 +242,9 @@ def test_der_kommentar_von_hand_geht_ohne_link_und_nie_ins_leere(
     assert adresse == beitrag
     assert "{link}" not in text
     assert tracking_adresse_im_text(text) == ""
-    assert text.endswith(" https://b-tarikak.de/home"), "die freie Adresse"
+    schluss = "الرابط المباشر للتحميل موجود في البايو (أعلى الصفحة) 👇"
+    assert text.endswith(f" {schluss}"), "der Schlusssatz"
+    assert "https://" not in text, "keine Adresse mehr im Kommentar"
     assert "FB-SYR" not in text
 
     # Derselbe Beitrag ist jetzt kommentiert - ein zweiter Aufruf setzt nichts ab.
