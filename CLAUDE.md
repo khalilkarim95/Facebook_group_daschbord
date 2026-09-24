@@ -556,6 +556,17 @@ Gruppe öffnen → Runde 1 scrollen + beurteilen → Runde 2 → … → Runde 1
 - Die Wege von Hand (`campaign auto`, Arbeitsseite) rufen ohne `geeignet`
   und behalten ihr `limit`. Festgehalten in `tests/test_scroll_runden.py`.
 
+### Neue Kampagnen kommen in den offenen Lauf (24.09.2026)
+
+Der Wächter startet `campaign automatik` bewusst **ohne** `--neu`, und ein
+offener Lauf behielt seine eingefrorene Kampagnenliste — eine neu angelegte
+Kampagne kam damit nie dran. Jetzt hängt `hole_oder_starte_lauf` bei jedem
+Fortsetzen die aktiven Kampagnen, die noch fehlen, **hinten** an
+(`store.ergaenze_lauf_kampagnen`). Was schon drinsteht, behält Platz, Stand
+und Bewertung; der laufende Vorgang wird nicht umgestellt. `--neu` bleibt
+für eine ganz frische Liste. Test:
+`test_ein_offener_lauf_nimmt_eine_neue_kampagne_hinten_auf`.
+
 ### Bild und Schlusssatz statt Adresse im Kommentar (24.09.2026)
 
 ```

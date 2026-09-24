@@ -206,7 +206,15 @@ def hole_oder_starte_lauf(
         )
         offen = None
     if offen is not None:
-        return int(offen["lauf_id"]), False
+        lauf_id = int(offen["lauf_id"])
+        # **Neue Kampagnen kommen hinten dazu** (24.09.2026). Die Liste blieb
+        # bis dahin eingefroren, und der Waechter startet ohne ``--neu`` -
+        # eine neu angelegte Kampagne kam damit nie dran, solange der Lauf
+        # offen war. Angehaengt wird nur: Was schon drinsteht, behaelt Platz
+        # und Stand; der laufende Vorgang wird nicht umgestellt.
+        if dazu := store.ergaenze_lauf_kampagnen(lauf_id, aktive_kampagnen(store)):
+            console.print(f"[dim]Neue Kampagnen im Lauf: {', '.join(dazu)}[/dim]")
+        return lauf_id, False
 
     kampagnen = aktive_kampagnen(store)
     if nur:

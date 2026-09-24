@@ -2519,6 +2519,32 @@ class MarketingStore:
             "SELECT * FROM automatik_lauf WHERE lauf_id = ?", (lauf_id,)
         ).fetchone()
 
+    def ergaenze_lauf_kampagnen(self, lauf_id: int, campaign_ids: list[str]) -> list[str]:
+        """Haengt Kampagnen hinten an die Liste eines offenen Laufs. Returns: die neuen.
+
+        Was schon drinsteht, bleibt unberuehrt (Position, Stand, Bewertung).
+        """
+        vorhanden = {str(r["campaign_id"]) for r in self.lauf_kampagnen(lauf_id)}
+        neu = [cid for cid in campaign_ids if cid not in vorhanden]
+        if not neu:
+            return []
+        start = self.conn.execute(
+            "SELECT COALESCE(MAX(position), 0) FROM automatik_lauf_kampagnen WHERE lauf_id = ?",
+            (lauf_id,),
+        ).fetchone()[0]
+        self.conn.executemany(
+            "INSERT INTO automatik_lauf_kampagnen (lauf_id, campaign_id, position, status) "
+            "VALUES (?,?,?,?)",
+            [
+                (lauf_id, cid, int(start) + i, KampagnenLaufStatus.WARTET.value)
+                for i, cid in enumerate(neu, start=1)
+            ],
+        )
+        self.conn.commit()
+        for cid in neu:
+            self.kurzcodes_nachtragen(cid)
+        return neu
+
     def lauf_kampagnen(self, lauf_id: int) -> list[sqlite3.Row]:
         return self.conn.execute(
             "SELECT * FROM automatik_lauf_kampagnen WHERE lauf_id = ? ORDER BY position",

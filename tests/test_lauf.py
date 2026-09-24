@@ -1508,12 +1508,12 @@ def test_ein_haengender_schritt_wird_beiseitegelegt(bestand: Path) -> None:
     assert waechter.haengt(anderer) is False
 
 
-def test_ein_offener_lauf_uebersieht_eine_neue_kampagne(bestand: Path) -> None:
-    """Die eingefrorene Liste ist eine Zusage - und genau deshalb ein Hindernis.
+def test_ein_offener_lauf_nimmt_eine_neue_kampagne_hinten_auf(bestand: Path) -> None:
+    """Wer eine Kampagne anlegt, waehrend ein Lauf offen ist, wartet nicht mehr vergeblich.
 
-    Wer eine Kampagne anlegt, waehrend ein Lauf offen ist, wartet sonst
-    vergeblich: Sie kommt nie dran, und von aussen sieht das aus, als taete
-    die Automatik nichts.
+    Bis zum 24.09.2026 blieb die Liste eingefroren, und der Waechter startet
+    ohne ``--neu`` - die neue Kampagne kam nie dran. Jetzt wird sie **hinten
+    angehaengt**: derselbe Lauf, die vorhandenen behalten Platz und Stand.
     """
     from fbgroups.marketing import automatik
 
@@ -1525,7 +1525,13 @@ def test_ein_offener_lauf_uebersieht_eine_neue_kampagne(bestand: Path) -> None:
             store, ziel_je_gruppe=lauf.ZIEL_JE_GRUPPE
         )
         assert (lauf_id, neu) == (erster, False)
-        assert [z["campaign_id"] for z in store.lauf_kampagnen(lauf_id)] == [KAMPAGNE]
+        zeilen = store.lauf_kampagnen(lauf_id)
+        assert [z["campaign_id"] for z in zeilen] == [KAMPAGNE, "spaeter"]
+        assert [z["position"] for z in zeilen] == [1, 2]
+
+        # Ein zweiter Aufruf haengt nichts doppelt an.
+        automatik.hole_oder_starte_lauf(store, ziel_je_gruppe=lauf.ZIEL_JE_GRUPPE)
+        assert len(store.lauf_kampagnen(lauf_id)) == 2
 
 
 def test_neu_friert_eine_frische_kampagnenliste_ein(bestand: Path) -> None:
@@ -1953,10 +1959,15 @@ def test_ein_leerer_lauf_haelt_den_fernbetrieb_nicht_auf(bestand: Path) -> None:
     antwort = klient.post("/automatik/naechster", json={"kampagnen": []})
 
     assert antwort.status_code == 200
-    assert antwort.json()["weiter"] is True, "der naechste Aufruf friert eine neue Liste ein"
+    assert antwort.json()["weiter"] is True, "der Treiber macht sofort weiter"
 
+    # Seit dem 24.09.2026 nimmt ein offener Lauf neue aktive Kampagnen auf -
+    # der leere bekommt damit die aktive Kampagne, statt zu haengen.
     with MarketingStore(bestand) as store:
-        assert store.offener_lauf() is None
+        offen = store.offener_lauf()
+        if offen is not None:
+            kampagnen = store.lauf_kampagnen(int(offen["lauf_id"]))
+            assert [z["campaign_id"] for z in kampagnen] == [KAMPAGNE]
 
 
 def test_der_stand_ist_ohne_lauf_untaetig(bestand: Path) -> None:
