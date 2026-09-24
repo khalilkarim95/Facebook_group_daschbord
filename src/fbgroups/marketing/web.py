@@ -590,8 +590,12 @@ def _uebersicht_token() -> str:
     return os.environ.get("UEBERSICHT_TOKEN", "").strip()
 
 
-def _visitor_hash(store: MarketingStore, ip: str, user_agent: str) -> str:
+def _visitor_hash(store: MarketingStore, ip: str) -> str:
     """Taeglich wechselnder Pruefwert statt gespeicherter IP-Adresse.
+
+    Seit dem 24.09.2026 aus IP und Tagesdatum, ohne User-Agent (Wunsch des
+    Nutzers). Zwei Besucher hinter derselben Adresse zaehlen damit am selben
+    Tag als **ein** Klick.
 
     Der Zufallsschluessel entsteht einmal und bleibt in der Datenbank. Durch
     das Tagesdatum im Wert laesst sich ein Besucher nicht ueber Tage hinweg
@@ -602,7 +606,7 @@ def _visitor_hash(store: MarketingStore, ip: str, user_agent: str) -> str:
         salt = secrets.token_hex(16)
         store.set_meta(SALT_SCHLUESSEL, salt)
 
-    roh = f"{ip}|{user_agent}|{date.today().isoformat()}"
+    roh = f"{ip}|{date.today().isoformat()}"
     return hmac.new(salt.encode(), roh.encode(), hashlib.sha256).hexdigest()[:16]
 
 
@@ -3121,7 +3125,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 besucher = _visitor_hash(
                     store,
                     request.client.host if request.client else "",
-                    user_agent,
                 )
                 if not store.klick_bereits_gezaehlt(intern, besucher):
                     store.record_event(
@@ -3154,7 +3157,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                         visitor_hash=_visitor_hash(
                             store,
                             request.client.host if request.client else "",
-                            user_agent,
                         ),
                         source="redirect",
                     )

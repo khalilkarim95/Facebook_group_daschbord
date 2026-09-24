@@ -222,15 +222,19 @@ def test_beide_adressen_zaehlen_auf_dasselbe_konto(client, bestand: Path) -> Non
     with MarketingStore(bestand) as store:
         kurz = store.link_for(KAMPAGNE, GID).public_code
 
-    # Zwei verschiedene Besucher, damit die Entdopplung nicht dazwischenkommt.
-    client.get(f"/r/{kurz}", headers={"user-agent": "Mozilla/5.0 (Android) A"})
-    client.get(f"/r/{CODE}", headers={"user-agent": "Mozilla/5.0 (iPhone) B"})
-
-    with MarketingStore(bestand) as store:
-        codes = [
-            zeile["tracking_code"]
-            for zeile in store.conn.execute("SELECT tracking_code FROM tracking_events")
-        ]
+    # Jede Adresse einzeln: Der Besucherwert kommt seit dem 24.09.2026 nur
+    # noch aus IP und Tag - ein zweiter Aufruf vom selben Testclient waere
+    # sonst ein Doppelklick und wuerde gar nicht gezaehlt.
+    codes: list[str] = []
+    for adresse in (kurz, CODE):
+        client.get(f"/r/{adresse}", headers={"user-agent": "Mozilla/5.0 (Android)"})
+        with MarketingStore(bestand) as store:
+            codes += [
+                zeile["tracking_code"]
+                for zeile in store.conn.execute("SELECT tracking_code FROM tracking_events")
+            ]
+            store.conn.execute("DELETE FROM tracking_events")
+            store.conn.commit()
 
     assert codes == [CODE, CODE]
 
