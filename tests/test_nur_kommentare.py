@@ -458,12 +458,15 @@ def test_die_neuen_grenzen_stehen_in_der_konfiguration(config) -> None:
 
     assert kommentar.je_gruppe_taeglich == 20
     assert kommentar.pro_tag == 240
-    assert (kommentar.abstand_min, kommentar.abstand_max) == (3, 3)
+    # Seit dem 24.09.2026 gestreut: 3-8 Minuten statt fest 3.
+    assert (kommentar.abstand_min, kommentar.abstand_max) == (3, 8)
     assert automatik.ziel_kommentare(config) == 240
     assert lauf.ZIEL_JE_GRUPPE == 20
     assert automatik.beitraege_automatisch(config) is False
-    # Die Rechnung dahinter: 12 Stunden, 3 Minuten Abstand, 20 je Gruppe.
+    # Die Rechnung dahinter: 240 bleibt Obergrenze (12 h bei der Untergrenze
+    # von 3 Min); im Mittel (5,5 Min) sind es rund 130.
     assert 12 * 60 // kommentar.abstand_min == 240
+    assert 12 * 60 // ((kommentar.abstand_min + kommentar.abstand_max) / 2) == 130
     assert 240 // kommentar.je_gruppe_taeglich == 12
 
 

@@ -649,8 +649,19 @@ delays:
     # Der Abstand gilt zwischen zwei **veroeffentlichten** Kommentaren. Er ist
     # damit genau, nicht mehr gestreut - der Preis ist ausgesprochen (siehe
     # oben); wer wieder streuen will, setzt max_minutes hoeher.
+    #
+    # --- Seit dem 24.09.2026: 3-8 Minuten, gestreut (Wunsch des Nutzers) --
+    #
+    # Ein fester Abstand ist das auffaelligste Muster. Gestreut wird je
+    # Kommentar gleichverteilt zwischen min und max (grenzen.naechster_zeitpunkt):
+    #
+    #     Mittel 5,5 Min    12 h = 720 Min / 5,5 = rund 130 Plaetze
+    #
+    # limits.comments.daily (240) und das Kampagnenziel bleiben Obergrenzen;
+    # erreicht werden in 12 Stunden rund 130. Nach einer Warnung von Facebook
+    # (RATE_LIMIT) pausiert die Aktion ohnehin 60 Min, danach verdoppelt.
     min_minutes: 3
-    max_minutes: 3
+    max_minutes: 8
 
   post:
     min_minutes: 15
