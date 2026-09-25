@@ -14,10 +14,11 @@ Arbeitsseite und Kommentarautomatik auf.
 Die Projektsprache ist **Deutsch** – Kommentare, Docstrings, CLI-Ausgaben und
 Testnamen. Bitte beibehalten.
 
-Gearbeitet wird **direkt auf `main` im Hauptcheckout** — `ausrollen.sh` packt
-den Code aus dem Verzeichnis, in dem es läuft; ein Branch oder Worktree rollt
-den alten Stand aus. Alles, was den Bestand ändert, läuft auf dem Server
-(Befehle: `run_command.md`).
+Gearbeitet wird **direkt auf `main` im Hauptcheckout** — das venv hat ihn
+editierbar installiert; ein Branch oder Worktree liefe mit fremdem Code.
+**Seit dem 25.09.2026 läuft fbgroups ganz auf diesem Rechner** (siehe
+„Betrieb"): kein Server, kein Tunnel, kein Ausrollen. Befehle:
+`run_command.md`.
 
 ## Harte Projektgrenzen
 
@@ -56,13 +57,71 @@ $env:PYTHONIOENCODING="utf-8"        # sonst bricht arabische Terminalausgabe
 & $py -m fbgroups.cli config-check
 & $py -m fbgroups.cli auth login     # Browser-Sitzung anlegen (sichtbar, von Hand)
 & $py -m fbgroups.cli import-mitglieder data\from_lokal\liste.csv --dry-run
-& $py -m fbgroups.cli serve --port 3000
+& $py -m fbgroups.cli serve --port 8090      # Übersicht: http://127.0.0.1:8090/
+& $py -m fbgroups.cli campaign watchdog      # hält den Lauf am Leben, sichert täglich
+& $py -m fbgroups.cli sicherung              # jetzt sichern (--liste, --zurueck)
 & $py -m fbgroups.cli campaign --help
 & $py -m fbgroups.cli marketing --help
 ```
 
 In einem Git-Worktree `PYTHONPATH=src` voranstellen — das venv hat den
 Hauptcheckout editierbar installiert und liefe sonst mit dessen Code.
+
+## Betrieb: alles auf diesem Rechner (25.09.2026)
+
+Entscheidung des Nutzers: fbgroups läuft **vollständig örtlich**. Der Grund
+für den Bestand auf dem Server waren die Klicks — `/r/` und `/events` mussten
+rund um die Uhr öffentlich erreichbar sein. Mit dem Ende des Trackings fällt
+das weg; alles, was Facebook berührt (Browser, Sitzung, Kommentar), lief
+ohnehin schon hier.
+
+```
+data/groups.sqlite      der Bestand – die einzige gültige Fassung
+data/logs/              Tagesprotokolle (automatik-…, waechter-…), 60 Tage
+data/backups/           Sicherungen sicherung-<zeit>.sqlite.gz (+ ~/fbgroups-sicherung)
+data/umgezogen.txt      Vermerk des Umzugs; sperrt umzug-lokal.sh und ausrollen.sh
+```
+
+- **Der Umzug** (`umzug-lokal.sh`, Git Bash, einmal; gelaufen am
+  25.09.2026 um 14:05): hält den Dienst auf dem Server an, holt eine
+  geprüfte Kopie (Sicherungsschnittstelle, `integrity_check`, SHA-256), legt
+  die alte örtliche Datei nach `data/backup/`, öffnet die neue mit dem Code
+  dieses Rechners (Migrationen) und schaltet Dienst und Timer auf dem Server
+  ab — gelöscht wird dort nichts. `--plan` liest nur.
+- **Die alten Links** (`umzug-lokal.sh --weiterleitung`, eigener Schritt,
+  wiederholbar): ersetzt in den nginx-Seiten genau vier `location`-Blöcke —
+  `/r/` (go.b-tarikak.de) und `/t/` (b-tarikak.de) → **302** auf
+  `https://b-tarikak.de/home`, ohne Zählung; `/events` und `/healthz` →
+  **410**. Beide Dateien vorher gesichert (`/opt/fbgroups/backups/nginx-…`),
+  erst beide fertig gerechnet, dann beide geschrieben oder keine; ein Block
+  ohne Ende oder mit fremden Zeilen (`listen`, `ssl_*` …) wird verweigert;
+  scheitert `nginx -t`, kommen die alten Dateien zurück, ohne Neuladen.
+- **Nach dem Umzug verweigert `ausrollen.sh`**: Es startete den Dienst auf
+  dem Server wieder und läse Mitgliederlisten in einen Bestand, der nicht
+  mehr gilt. Mitgliederlisten werden hier eingelesen (`import-mitglieder`).
+- **Sicherung** (`sicherung.py`): Sicherungsschnittstelle von SQLite statt
+  Dateikopie (ein Schreiber könnte gerade buchen), `integrity_check` vor dem
+  Packen, zwei Orte (K: Festplatte, C: SSD), je 30 behalten; gelöscht wird nur
+  `sicherung-*.sqlite.gz`. Der Wächter sichert über `wache(nebenbei=…)`,
+  sobald die letzte älter als `sicherung.abstand_stunden` ist — die Schleife
+  weiß nicht, was `nebenbei` tut. `--zurueck` verweigert neben einem
+  laufenden Lauf und neben einem Journal, und sichert vorher den Stand davor.
+- **Protokoll** (`protokoll.py`): hängt sich an `sys.stdout`/`sys.stderr`,
+  weil `rich` bei jeder Ausgabe danach fragt — alle `Console()` schreiben
+  durch, ohne angefasst zu werden. Eine Datei je Befehl und Tag (zwei
+  Prozesse an einer Datei überschreiben einander unter Windows), ohne
+  Farbcodes, mit Uhrzeit. Ein Schreibfehler schaltet das Protokoll ab, nie
+  den Lauf.
+- **Mehrere Prozesse an einer Datei**: Lauf, Übersicht und Sicherung öffnen
+  `groups.sqlite` über `datenbank.verbinde` und warten bis zu 30 s auf einen
+  anderen Schreiber, statt nach 5 s „database is locked" zu melden.
+- **Noch nicht entfernt** (folgt): das Tracking (`/r/`, `/t/`, `/events`,
+  Kurzcodes, Tracking-Tabellen) und der Fernbetrieb (`--server`,
+  `/automatik/naechster`, `watchdog.tunnel`). Beides ist nach dem Umzug
+  ohne Funktion, aber noch im Code; `watchdog.server` ist leer,
+  `watchdog.tunnel.enabled` ist `false`.
+- Festgehalten in `tests/test_sicherung.py`, `tests/test_protokoll.py` und
+  `tests/test_watchdog.py`.
 
 ## Architektur
 
@@ -147,10 +206,10 @@ unberührt). Die Spalten sind eine fremde Tabelle:
 - Aus „sehr aktiv" wird keine Beitragszahl und umgekehrt. „Sehr Aktiv" enthält
   „Aktiv" — die Reihenfolge in `AKTIVITAETSSTUFEN_TEXT` ist der halbe Inhalt.
 - `parse_member_count` steht in `textnorm.py` (ein Parser für CSV und Browser).
-- Auf den Server: **jedes** `bash ./ausrollen.sh` nimmt die CSV-Dateien aus
-  `data/from_lokal/` mit (seit 23.09.2026; erst Trockenlauf, dann Rückfrage,
-  `--ja` ohne Rückfrage, `--ohne-mitglieder` nur Code; eingelesen nach dem
-  Einsetzen; zugeordnet wird dabei nichts).
+- Eingelesen wird **hier** (`import-mitglieder data\from_lokal\<datei>.csv`,
+  erst `--dry-run`). Vom 23. bis 25.09.2026 nahm jedes `ausrollen.sh` die
+  CSV-Dateien mit auf den Server; seit dem Umzug verweigert es den Dienst.
+  Zugeordnet wird beim Einlesen nichts.
 
 ### Note und Aktivitätsstufe
 
@@ -347,8 +406,8 @@ anlaesse: <sprache>: <anlass>: [Fassungen]
 
 ## Arbeitsseite (`arbeit.py`, `arbeitsseite.py`, `/arbeit/{kampagne}`)
 
-- Der Bestand lebt auf dem Server, Zwischenablage und Browser beim Menschen:
-  Der Server bereitet vor und zählt, der Browser kopiert und öffnet.
+- Der Dienst bereitet vor und zählt, der Browser kopiert und öffnet — seit
+  dem Umzug (25.09.2026) beide auf diesem Rechner (`serve --port 8090`).
 - **Die Einheit ist die Gruppe**, nicht der Beitrag: `hole_gruppenarbeit`
   liefert eine Gruppe mit allen Fassungen (fünf Beiträge, fünf Kommentare);
   `melde_vorschlag` trägt den Ausgang **einer** Fassung ein. Nichts blättert
@@ -732,9 +791,10 @@ Hält **einen** `campaign automatik` am Leben — ohne Kampagnenlogik
 (`test_der_waechter_kennt_keine_kampagnenlogik`). `baue_befehl` ohne `--neu`,
 `--kampagne`, `--limit`. Die Sperre (`data/automatik.lock`) gehört dem Lauf;
 eine Sperre mit toter Kennung gilt nicht (Windows: `GetExitCodeProcess`).
-Macht den SSH-Tunnel selbst auf (`watchdog.tunnel`, `-N`,
-`ServerAliveCountMax=3`); gefragt wird der Port. **Kein Kennwort in einer
-Datei** (`ssh-add` oder Terminal).
+Seit dem Umzug (25.09.2026) örtlich: kein `--server`, kein Tunnel
+(`watchdog.tunnel.enabled: false`), dafür die tägliche Sicherung als
+`nebenbei`. Der Tunnelweg (`-N`, `ServerAliveCountMax=3`, **kein Kennwort in
+einer Datei**) bleibt im Code, bis der Fernbetrieb entfernt ist.
 
 ## Dienst (`web.py`, `dashboard.py`)
 
@@ -777,4 +837,5 @@ Datei** (`ssh-add` oder Terminal).
   Arabisch). Von Hand erstellte CSV/TXT mit `utf-8-sig` lesen (BOM), CSV mit
   `utf-8-sig` und `;` schreiben.
 - PowerShell 5.1 kennt kein `&&`/`||` — mit `;` und `if ($?) { }` ketten.
-- `ausrollen.sh` in **Git Bash**, nicht PowerShell (`tar | ssh`).
+- `umzug-lokal.sh` (und das stillgelegte `ausrollen.sh`) in **Git Bash**,
+  nicht PowerShell (binäre Ströme durch `ssh`).
