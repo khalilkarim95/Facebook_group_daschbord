@@ -1213,8 +1213,20 @@ def browser_schritt(
 
     roh = fetch_top_posts(context, gruppen_url, group_id, limit=10)
     if not roh:
+        # **Kein lesbarer Beitrag ist eine Aussage ueber unseren Zugang, nicht
+        # ueber die Gruppe.** Eine Gruppe, deren Seite eine Anmeldewand oder
+        # eine leere Vorschau zeigt, gibt bei *jeder* Fassung dasselbe her;
+        # als ``erschoepft`` gebucht blieb sie auf Fassung 1 stehen und kam im
+        # Takt der Kommentare immer wieder an die Reihe - am 21.09.2026
+        # viermal dieselbe Gruppe in vierzig Minuten, waehrend fuenfzehn
+        # andere warteten. Sie wird deshalb fuer **diesen Lauf**
+        # beiseitegelegt; ``kommentar_erschoepft`` bliebe ein Urteil ueber
+        # sie, und das traegt die Datenlage nicht (dieselbe Verwechslung wie
+        # am 11.09.2026 bei den 45 Gruppen).
         return Schrittergebnis(
-            erfolg=False, fehler="keine Beitraege zum Kommentieren gefunden", erschoepft=True
+            erfolg=False,
+            fehler="keine Beitraege zum Kommentieren gefunden",
+            gruppe_beiseite=True,
         )
 
     # **Die rohen Funde gehen weiter, nicht die gespeicherten.** Nur sie
@@ -2213,8 +2225,11 @@ def browser_schritt_fern(
 
     roh = fetch_top_posts(context, gruppen_url, group_id, limit=10)
     if not roh:
+        # Wie im oertlichen Weg: unser Zugang, nicht die Gruppe. Siehe dort.
         return Schrittergebnis(
-            erfolg=False, fehler="keine Beitraege zum Kommentieren gefunden", erschoepft=True
+            erfolg=False,
+            fehler="keine Beitraege zum Kommentieren gefunden",
+            gruppe_beiseite=True,
         )
 
     erlaubnis, anspruch, verbrauchte = vorgaben_lesen(vorgaben)

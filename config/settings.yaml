@@ -81,7 +81,7 @@ marketing:
   # Eigener Eintrag und nicht ``fallback_url``: Der Browser ist ein
   # gleichrangiges Ziel, kein Notnagel. Steht an der Kampagne eine eigene
   # ``landing_page``, gilt sie vor diesem Wert.
-  browser_url: https://b-tarikak.de/
+  browser_url: https://b-tarikak.de/home
 
   store:
     # Die echte Package-ID der App (b-tarikak-frontend/android/app/build.gradle.kts).
@@ -282,9 +282,21 @@ marketing:
     #    moegliche; nur ein belegter Bezug ist ein Anlass.
     # C: "hoch" UND die genannte Strecke - der klare, konkrete Einzelfall.
     # D: gar nicht (steht nicht in der Liste).
+    # B am 22.09.2026 vom Nutzer auf "mittel" gesenkt. Der Anlass steht in
+    # den Zahlen von Lauf 3: Von 14 abgelehnten Beitraegen scheiterten **9**
+    # nicht am fehlenden Bezug, sondern allein an dieser Schwelle
+    # ("mittel, verlangt hoch") - es waren also Beitraege, die sehr wohl von
+    # Versand oder Reise handelten, nur nicht belegt genug fuer die
+    # strengere Stufe. Ohne Klasse-A-Gruppen im Bestand (Stand 22.09.2026:
+    # null) ist B die einzige Klasse, in der ueberhaupt etwas stattfindet.
+    #
+    # **C bleibt auf "hoch"** - und das ist der Punkt der Aenderung: In einer
+    # Gruppe mit nur schwachem Bezug ist ein Kommentar ueber Paketmitnahme
+    # eingeworfene Werbung, und genau dort entstehen Meldungen. Gesenkt wird
+    # die Schwelle da, wo unsere Leute sind, nicht ueberall.
     mindestrelevanz:
       a: mittel
-      b: hoch
+      b: mittel
       c: hoch
     # Verlangt Klasse C zusaetzlich, dass Beitrag Herkunft UND Ziel nennt?
     c_verlangt_strecke: true
@@ -615,7 +627,13 @@ limits:
     je_gruppe_taeglich: 10
 
   posts:
-    daily: 3
+    # Am 22.09.2026 vom Nutzer auf 0 gesetzt: *"i want to focuse more on
+    # commenting"*. 0 heisst hier **gar nicht** (nicht "unbegrenzt") - der
+    # Lauf faellt in `naechster_schritt` am Beitragszweig vorbei und geht
+    # sofort zu den Kommentaren. Die vorbereiteten Beitragstexte bleiben
+    # stehen; wer wieder posten will, setzt hier eine Zahl und braucht
+    # keine zweite Aenderung.
+    daily: 0
 
 # Mindestabstaende in Minuten, gestreut zwischen min und max. Der Beitrag ist
 # deutlich langsamer getaktet als der Kommentar: Er steht oben in der Gruppe
