@@ -368,41 +368,6 @@ def bestand(tmp_path: Path) -> Path:
     return pfad
 
 
-def test_der_server_gibt_den_kommentar_ohne_link_heraus(bestand: Path) -> None:
-    """Fernbetrieb, mit den **echten** Vorlagen: Text ohne Adresse, keine ``link_url``.
-
-    Die Fassungen entstehen dabei aus ``config/textvorlagen.yaml`` - die
-    bestehenden Kommentarvorlagen funktionieren also, nur ohne Link. Und das
-    Tracking bleibt: Der Code der Gruppe leitet weiter wie zuvor.
-    """
-    from fastapi.testclient import TestClient
-
-    from fbgroups.marketing.web import create_app
-
-    client = TestClient(
-        create_app(config=_Konfig(bestand), db_path=bestand),
-        headers={"Origin": "http://127.0.0.1:8090"},
-    )
-    schritt = None
-    for _ in range(6):
-        daten = client.post("/automatik/naechster", json={}).json()
-        if (schritt := daten.get("schritt")) is not None:
-            break
-    assert schritt is not None
-
-    assert schritt["texttyp"] == "kommentar", "kein Beitrag - der Lauf postet nicht"
-    _ist_ohne_adresse(schritt["text"])
-    _endet_mit_landing(schritt["text"])
-    assert any(name in schritt["text"] for name in APP_NAMEN)
-    assert schritt["link_url"] == SCHLUSS, "der Schlusssatz, keine Adresse"
-
-    # Das Tracking ausserhalb der Kommentare ist unveraendert.
-    antwort = client.get(
-        "/r/FB-TST-BER-001", headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=False
-    )
-    assert antwort.status_code == 302
-
-
 def test_der_lauf_setzt_keinen_beitrag_ab_und_legt_keine_beitragstexte_an(
     bestand: Path,
 ) -> None:

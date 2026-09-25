@@ -134,24 +134,3 @@ def test_die_vorgabe_bleibt_die_strenge_regel() -> None:
     assert soll_app_nennen(lies(NUR_REISE), ERLAUBT, _anspruch(pflicht=False))
 
 
-def test_der_schalter_reist_zum_arbeitsrechner_mit() -> None:
-    """Der Stand liegt auf dem Server, also auch der Schalter.
-
-    Ohne das Feld entschiede im Fernbetrieb - dem Regelfall - die
-    ``settings.yaml`` des Arbeitsrechners, und die ist dort belanglos.
-    """
-    from pathlib import Path
-
-    from fbgroups.marketing.automatik import vorgaben_lesen
-
-    web = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
-    assert '"anlass_pflicht": anspruch.anlass_pflicht,' in web, "gesendet"
-
-    _erlaubnis, anspruch, _verbraucht = vorgaben_lesen(
-        {"anspruch": {"mindestrelevanz": "mittel", "anlass_pflicht": False}}
-    )
-    assert anspruch.anlass_pflicht is False, "und gelesen"
-
-    # Ein aelterer Server sendet das Feld nicht - dann gilt die Vorgabe.
-    _e, alt, _v = vorgaben_lesen({"anspruch": {"mindestrelevanz": "mittel"}})
-    assert alt.anlass_pflicht is True

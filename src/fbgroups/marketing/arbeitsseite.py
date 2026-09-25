@@ -700,7 +700,7 @@ def _automatikband() -> str:
         # beantwortet.
         "<ol id='ab-liste' class='ab-liste'></ol>"
         "<div class='ab-befehl'>Alle aktiven Kampagnen nacheinander abarbeiten:"
-        "<code>fbgroups campaign automatik --server http://127.0.0.1:8090</code></div>"
+        "<code>fbgroups campaign watchdog</code></div>"
         "</div>"
     )
 
@@ -962,7 +962,7 @@ def _skript(campaign_id: str, arbeit: Gruppenarbeit) -> str:
       if (!anzahl) return;
       setz('ab-status', 'bereit');
       setz('ab-zahlen', anzahl + ' aktive Kampagne(n) warten auf einen Lauf');
-      setz('ab-jetzt', 'Start:  fbgroups campaign automatik --server http://127.0.0.1:8090');
+      setz('ab-jetzt', 'Start:  fbgroups campaign watchdog');
     }} else {{
       setz('ab-status', d.fertig ? 'fertig' : d.status);
       setz('ab-zahlen',

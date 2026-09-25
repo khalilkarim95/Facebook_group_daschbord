@@ -268,20 +268,6 @@ def test_eine_gestellte_anfrage_wird_nicht_wiederholt(tmp_path: Path) -> None:
     assert _kampagne([angefragt]).beitritt_offen == []
 
 
-def test_ein_gescheiterter_beitritt_vermerkt_nichts_im_bestand() -> None:
-    """Aber er legt die Gruppe fuer diesen Lauf beiseite.
-
-    Sonst boete der naechste Durchgang dieselbe Gruppe wieder an, und der
-    Lauf kaeme nicht zur naechsten.
-    """
-    web = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
-    endpunkt = web.split("def automatik_beitritt_ergebnis(", 1)[1].split("\n    @app.", 1)[0]
-
-    assert 'if meldung.ausgang in ("angefragt", "bereits_mitglied"):' in endpunkt
-    assert "ueberspringe_gruppe" in endpunkt
-    assert endpunkt.index("merke_anfrage") < endpunkt.index("ueberspringe_gruppe")
-
-
 # --- 4. Drei Versuche heissen drei verschiedene Beitraege -------------------
 
 def test_drei_versuche_sind_drei_verschiedene_beitraege() -> None:

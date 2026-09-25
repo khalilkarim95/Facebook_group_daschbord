@@ -176,15 +176,15 @@ def test_ein_netzfehler_ist_kein_beleg_fuer_eine_abgelaufene_sitzung() -> None:
     assert hinweis, "aber gesagt wird es"
 
 
-def test_beide_laeufe_pruefen_die_anmeldung_vor_dem_ersten_schritt() -> None:
-    """Oertlich wie fern, und **vor** dem ersten Schritt.
+def test_der_lauf_prueft_die_anmeldung_vor_dem_ersten_schritt() -> None:
+    """Und zwar **vor** dem ersten Schritt.
 
     Danach waere es zu spaet: Der erste Fehlschlag traegt die Gruppe schon
     aus der Kampagne.
     """
     cli = Path("src/fbgroups/marketing/cli.py").read_text(encoding="utf-8")
 
-    # Einmal die Definition, zweimal der Aufruf - oertlich und fern.
-    assert cli.count("_sitzung_pruefen(context)") == 3, "oertlich und fern"
-    fern = cli.split("Fernbetrieb: Stand und Buchung", 1)[1]
-    assert fern.index("_sitzung_pruefen(context)") < fern.index("fuehre_lauf_fern_aus")
+    # Einmal die Definition, einmal der Aufruf.
+    assert cli.count("_sitzung_pruefen(context)") == 2
+    lauf = cli.split('@campaign_app.command("automatik")', 1)[1]
+    assert lauf.index("_sitzung_pruefen(context)") < lauf.index("automatik.fuehre_lauf_aus(")

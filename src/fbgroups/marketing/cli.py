@@ -1294,113 +1294,22 @@ def campaign_retry(
         )
 
 
-@campaign_app.command("abgleich")
-def campaign_abgleich(
-    server: str = typer.Option(
-        "http://127.0.0.1:8090", "--server", help="Basisadresse des Dienstes (SSH-Tunnel)."
-    ),
-    ja: bool = typer.Option(False, "--ja", help="Wirklich uebertragen (sonst nur zeigen)."),
-) -> None:
-    """Traegt oertlich veroeffentlichte Fassungen auf dem Server nach.
-
-    Fuer den Bestand, der vor dem Fernbetrieb entstanden ist: Wer die
-    Automatik oertlich gefahren hat, hat die Kommentare abgesetzt, aber in
-    seiner **eigenen** Datei gebucht. Auf dem Server stehen sie weiter als
-    offen, und die Arbeitsliste dort bietet Arbeit an, die getan ist.
-
-    Uebertragen wird nur in eine Richtung und nur, was oertlich als
-    veroeffentlicht gilt. Ein Rueckweg waere gefaehrlich: Der Server ist die
-    gueltige Fassung, und ein Abgleich, der ihn ueberschreibt, kostet
-    gezaehlte Klicks.
-    """
-    import httpx
-
-    from fbgroups.marketing.models import MAX_VORSCHLAEGE, Texttyp, VorschlagStatus
-
-    config = _config()
-    basis = server.rstrip("/")
-
-    with MarketingStore(config.path("sqlite_path")) as store:
-        offen: list[dict] = []
-        for kampagne in store.load_campaigns():
-            for link in store.links_for_campaign(kampagne.campaign_id):
-                # Beide Zwecke: Der Beitrag zieht auf dem Server ausserdem die
-                # Spalte BEITRAG mit (``_gruppenstand_nachziehen``), was ein
-                # Kommentar bewusst nicht tut.
-                for texttyp in (Texttyp.POST, Texttyp.KOMMENTAR):
-                    for nummer in range(1, MAX_VORSCHLAEGE + 1):
-                        v = store.vorschlag(
-                            kampagne.campaign_id, link.group_id, texttyp, nummer
-                        )
-                        if v is not None and v.status is VorschlagStatus.VEROEFFENTLICHT:
-                            offen.append(
-                                {
-                                    "campaign_id": kampagne.campaign_id,
-                                    "group_id": link.group_id,
-                                    "nummer": nummer,
-                                    "texttyp": texttyp.value,
-                                    "erfolg": True,
-                                    "post_url": store.letzte_post_url(
-                                        kampagne.campaign_id,
-                                        link.group_id,
-                                        texttyp.value,
-                                        nummer,
-                                    ),
-                                }
-                            )
-
-    if not offen:
-        console.print("[dim]Oertlich ist nichts veroeffentlicht - nichts abzugleichen.[/dim]")
-        return
-
-    console.print(f"Oertlich veroeffentlicht: [bold]{len(offen)}[/bold] Fassung(en)")
-    for e in offen:
-        console.print(
-            f"  {e['campaign_id']} / {e['group_id']} / {e['texttyp']} {e['nummer']}"
-        )
-
-    if not ja:
-        console.print("\n[dry-run] Mit [bold]--ja[/bold] werden sie auf dem Server nachgetragen.")
-        return
-
-    kopf = {"Origin": basis, "Content-Type": "application/json"}
-    uebertragen = 0
-    with httpx.Client(timeout=30.0, headers=kopf) as klient:
-        for e in offen:
-            antwort = klient.post(f"{basis}/automatik/ergebnis", json=e)
-            if antwort.status_code == 404:
-                console.print(
-                    "[red]Der Dienst haelt den Aufruf fuer nicht-oertlich.[/red] "
-                    "Laeuft der SSH-Tunnel?"
-                )
-                raise typer.Exit(code=1)
-            antwort.raise_for_status()
-            if antwort.json().get("ok"):
-                uebertragen += 1
-
-    console.print(f"[green]{uebertragen} von {len(offen)} auf dem Server nachgetragen.[/green]")
-
-
 @campaign_app.command("watchdog")
 def campaign_watchdog(
-    server: str = typer.Option(
-        None,
-        "--server",
-        help="An den Lauf durchgereicht, z. B. http://127.0.0.1:8090. "
-        "Ohne Angabe gilt watchdog.server aus settings.yaml.",
-    ),
     abstand: int = typer.Option(
         0, "--abstand", help="Sekunden zwischen zwei Blicken (0 = aus settings.yaml)."
     ),
     einmal: bool = typer.Option(
-        False, "--einmal", help="Nur einmal nachsehen und melden - nichts ueberwachen."
+        False,
+        "--einmal",
+        help="Einmal nachsehen - und starten, wenn keiner laeuft. Keine Schleife.",
     ),
 ) -> None:
     """Sorgt dafuer, dass **ein** ``campaign automatik`` laeuft - dauerhaft.
 
     Einmal starten, dann laeuft er:
 
-        fbgroups campaign watchdog --server http://127.0.0.1:8090
+        fbgroups campaign watchdog
 
     Alle paar Minuten sieht er nach. Laeuft ein Lauf, tut er nichts. Ist
     keiner da - abgestuerzt, beendet, nie gestartet -, startet er genau den
@@ -1412,33 +1321,20 @@ def campaign_watchdog(
     ``completed`` und beginnt keine von vorn: ``campaign automatik`` ohne
     ``--neu`` nimmt den offenen Lauf mitsamt Fortschritt wieder auf.
 
-    **Antwortet der Dienst nicht**, macht er den SSH-Tunnel selbst auf -
-    sofern einer in ``watchdog.tunnel`` eingetragen ist. Kommt der Port
-    trotzdem nicht, wird gewartet statt gestartet: Ein geschlossener Tunnel
-    ist kein Fehlschlag der Kampagne, und ein Lauf ohne Tunnel scheiterte an
-    der ersten Anfrage, ohne etwas zu buchen.
-
-    Das **Kennwort des Schluessels** steht in keiner Datei dieses Projekts.
-    Entweder ist der Schluessel einmal im Agenten hinterlegt
-    (``ssh-add ~/.ssh/...``), oder ``ssh`` fragt hier im Terminal danach -
-    deshalb laeuft der Waechter im Vordergrund.
+    **Nebenbei sichert er den Bestand** (seit dem Umzug, 25.09.2026): Ist die
+    letzte Sicherung aelter als ``sicherung.abstand_stunden``, legt er vor dem
+    naechsten Blick eine an. Was er meldet, steht zusaetzlich in
+    ``data/logs/waechter-<tag>.log``.
 
     Beenden mit Strg+C. Soll er einen Neustart des Rechners ueberleben,
-    gehoert er in einen Dienst (systemd, Aufgabenplanung) - das ist eine
-    Entscheidung ueber den Rechner und keine dieses Programms.
-
-    **Im oertlichen Betrieb sichert er den Bestand** (seit dem Umzug,
-    25.09.2026): Ist die letzte Sicherung aelter als
-    ``sicherung.abstand_stunden``, legt er vor dem naechsten Blick eine an.
-    Was er meldet, steht zusaetzlich in ``data/logs/waechter-<tag>.log``.
+    gehoert er in die Aufgabenplanung - das ist eine Entscheidung ueber den
+    Rechner und keine dieses Programms.
     """
     from fbgroups import protokoll, sicherung
     from fbgroups.marketing import watchdog
 
     config = _config()
     einst = watchdog.einstellungen(config)
-    if server:
-        einst = replace(einst, server=server)
     if abstand:
         einst = replace(einst, abstand_sekunden=abstand)
 
@@ -1457,16 +1353,11 @@ def campaign_watchdog(
     farbe = {
         "laeuft": "green",
         "gestartet": "cyan",
-        "tunnel_gestartet": "cyan",
-        "dienst_weg": "yellow",
         "abgeschaltet": "yellow",
         "gesichert": "green",
         "sicherung_fehlgeschlagen": "red",
     }
 
-    # Die Sicherung gehoert zum oertlichen Betrieb. Im Fernbetrieb liegt der
-    # Bestand auf dem Server, und eine Sicherung der Kopie hier waere eine
-    # Sicherung von etwas, das nicht gilt.
     sicherungs_einst = sicherung.einstellungen(config)
     bestand = config.path("sqlite_path")
 
@@ -1481,11 +1372,6 @@ def campaign_watchdog(
             return None
         return watchdog.Blick("gesichert", sicherung.beschreibe(ergebnis))
 
-    # Der Tunnelwart haelt den eigenen ``ssh``-Prozess. Er gehoert dem
-    # Waechter und nicht dem Lauf: Ein Lauf, der seinen eigenen Tunnel
-    # mitbraechte, machte beim naechsten Start einen zweiten auf.
-    tunnelwart = watchdog.Tunnelwart(einst.tunnel)
-
     def melde(blick: watchdog.Blick) -> None:
         # Jede Zeile mit Zeitstempel: Der Waechter laeuft tagelang, und die
         # Frage an sein Protokoll ist immer "wann war das?".
@@ -1497,15 +1383,8 @@ def campaign_watchdog(
 
     if not einmal:
         console.print(
-            f"[cyan]Waechter laeuft.[/cyan] Blick alle "
-            f"{int(einst.abstand)} Sekunden"
-            + (f", Dienst {einst.server}" if einst.server else "")
-            + (
-                f", Tunnel {einst.tunnel.ziel} (Port {einst.tunnel.port})"
-                if einst.tunnel.nutzbar
-                else ""
-            )
-            + ".\n[dim]Beenden mit Strg+C. Es wird nichts gestartet, solange "
+            f"[cyan]Waechter laeuft.[/cyan] Blick alle {int(einst.abstand)} Sekunden.\n"
+            "[dim]Beenden mit Strg+C. Es wird nichts gestartet, solange "
             "ein Lauf die Sperre haelt.[/dim]"
         )
 
@@ -1515,8 +1394,7 @@ def campaign_watchdog(
             einst,
             melde=melde,
             durchgaenge=1 if einmal else 0,
-            tunnel=tunnelwart,
-            nebenbei=None if (einmal or einst.server) else sichern,
+            nebenbei=None if einmal else sichern,
         )
     except KeyboardInterrupt:
         # Der laufende Lauf bleibt laufen - der Waechter ist nur sein
@@ -1568,11 +1446,6 @@ def campaign_automatik(
         0, "--limit", help="Hoechstens N Kommentare in diesem Lauf (0 = ohne Grenze)."
     ),
     status: bool = typer.Option(False, "--status", help="Nur den Stand zeigen, nichts tun."),
-    server: str = typer.Option(
-        None,
-        "--server",
-        help="Auf dem Bestand des Servers arbeiten, z. B. http://127.0.0.1:8090 (SSH-Tunnel).",
-    ),
     nur: list[str] = typer.Option(
         None,
         "--kampagne",
@@ -1655,81 +1528,6 @@ def campaign_automatik(
         from fbgroups import protokoll
 
         protokoll.einschalten(protokoll.einstellungen(config), "automatik")
-
-    # --- Fernbetrieb: der Server haelt den Stand, dieser Rechner den Browser
-    #
-    # Der Grund steht in ``automatik.fuehre_lauf_fern_aus``: Ohne ihn bucht
-    # die Automatik in die Datei, in der sie laeuft - auf diesem Rechner also
-    # in eine Kopie. Der Kommentar geht hinaus, gebucht wird daneben, und der
-    # Server bietet dieselbe Gruppe weiter als offen an.
-    if server:
-        if status or dry_run:
-            console.print(
-                "[red]--status und --dry-run gelten fuer den oertlichen Bestand.[/red]\n"
-                "Den Stand des Servers zeigt: curl "
-                f"{server.rstrip('/')}/automatik"
-            )
-            raise typer.Exit(code=2)
-
-        from fbgroups.automation.browser import get_browser_context
-
-        console.print(f"[cyan]Fernbetrieb: Stand und Buchung auf {server}[/cyan]")
-        console.print("[dim]Dieser Rechner steuert nur den Browser.[/dim]")
-        if nur:
-            console.print(f"[yellow]Eingeschraenkt auf: {', '.join(nur)}[/yellow]")
-        if frisch:
-            console.print(
-                "[yellow]--neu: Ein offener Lauf wird abgeschlossen, die "
-                "Kampagnenliste neu eingefroren.[/yellow]"
-            )
-
-        with get_browser_context(config, headless=False) as context:
-            # **Die Anmeldung vor dem ersten Schritt** (21.09.2026). Sonst
-            # holt der Lauf seine Gruppe vom Server, findet kein
-            # Kommentarfeld, meldet einen technischen Fehlschlag - und der
-            # Server nimmt die Gruppe aus der Kampagne. Gruppe fuer Gruppe,
-            # bis keine mehr uebrig ist.
-            _sitzung_pruefen(context)
-
-            def fern(
-                gruppen_url: str,
-                group_id: str,
-                text: str,
-                bisherige: list[str],
-                texttyp: str = "kommentar",
-                vorgaben: dict | None = None,
-                link_url: str = "",
-            ) -> automatik.Schrittergebnis:
-                try:
-                    if texttyp == "post":
-                        return automatik.Schrittergebnis(
-                            erfolg=False,
-                            fehler="automatisches Posten ist entfernt",
-                            kein_anlass=True,
-                        )
-                    # ``vorgaben`` traegt, was dieser Rechner nicht
-                    # nachschlagen kann: die Erlaubnis, die Schwelle und die
-                    # schon benutzten Vorlagen. Ohne sie nahm der Fernbetrieb bis zum
-                    # 14.09.2026 den lautesten Beitrag - ohne Inhaltsurteil.
-                    return automatik.browser_schritt_fern(
-                        context, gruppen_url, group_id, text, bisherige, vorgaben, link_url
-                    )
-                except Exception as exc:  # noqa: BLE001 - ein Fehlschlag ist ein Ausgang
-                    return automatik.Schrittergebnis(
-                        erfolg=False, fehler=str(exc).splitlines()[0][:120]
-                    )
-
-
-            meldung = automatik.fuehre_lauf_fern_aus(
-                server,
-                ausfuehren=fern,
-                beitreten=None,
-                max_schritte=max_schritte,
-                nur=list(nur or []),
-                frisch=frisch,
-            )
-        console.print(Panel(meldung, title="Automatik (Server)"))
-        return
 
     if status:
         with MarketingStore(config.path("sqlite_path")) as store:

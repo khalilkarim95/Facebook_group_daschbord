@@ -251,7 +251,7 @@ marketing:
 #
 # Seit dem Umzug (25.09.2026) oertlich: Der Lauf liest und bucht in
 # data/groups.sqlite, und der Waechter sichert den Bestand nebenbei (Block
-# `sicherung`).
+# `sicherung`). Dienst und SSH-Tunnel (`server`, `tunnel`) gibt es nicht mehr.
 #
 # Er enthaelt keine Kampagnenlogik: keine Warteschlange, keine Rangfolge,
 # keinen Takt. Er sieht nach, ob ein Lauf die Sperre haelt - und startet
@@ -266,50 +266,6 @@ watchdog:
   # Blick nichts. Unter 30 Sekunden wird nicht gegangen - das schuetzt vor
   # einem Tippfehler, nicht vor einer Entscheidung.
   check_interval_seconds: 300
-
-  # Wird an den Lauf durchgereicht und **vorher geprueft**: Antwortet der
-  # Port nicht, wird gewartet statt gestartet. Ein geschlossener SSH-Tunnel
-  # ist kein Fehlschlag der Kampagne - ein Lauf ohne Tunnel scheiterte an
-  # der ersten Anfrage, ohne etwas zu buchen.
-  #
-  # Leer heisst: oertlicher Lauf, kein Dienst noetig. `--server` auf der
-  # Kommandozeile geht vor.
-  #
-  # Leer seit dem Umzug (25.09.2026): Der Bestand liegt auf diesem Rechner.
-  # Bis dahin stand hier http://127.0.0.1:8090 - der Server ueber den Tunnel.
-  server: ""
-
-  # Der SSH-Tunnel, durch den `server` ueberhaupt erst antwortet. Seit dem
-  # Umzug aus (`enabled: false`) - es gibt keinen Dienst mehr, zu dem er
-  # fuehren koennte. Bis zum
-  # 20.09.2026 stand im Protokoll nur "Dienst antwortet nicht - laeuft der
-  # SSH-Tunnel?", und die Antwort war jedes Mal ein Mensch, der ein zweites
-  # Fenster oeffnete. Jetzt macht ihn der Waechter selbst auf, sobald der
-  # Port nicht antwortet - und nur dann.
-  #
-  # Das Kennwort des Schluessels steht hier NICHT und gehoert auch in keine
-  # .env: `ssh` nimmt es nicht auf der Kommandozeile entgegen. Einmal
-  #
-  #     ssh-add ~/.ssh/b-tarikak_vps_new
-  #
-  # ausfuehren (der Agent von Windows behaelt den Schluessel ueber den
-  # Neustart), dann fragt niemand mehr. Sonst fragt `ssh` im Terminal, in
-  # dem der Waechter laeuft.
-  tunnel:
-    enabled: false
-    ziel: karim@159.195.216.246
-    schluessel: ~/.ssh/b-tarikak_vps_new
-    # Oertlicher Port; er muss zu `server` passen, sonst macht der Waechter
-    # eine Tuer auf, hinter der er nicht nachsieht.
-    port: 8090
-    # Auf welchen Port am anderen Ende weitergeleitet wird. Leer bzw. 0
-    # heisst: derselbe.
-    fernport: 8090
-    fernziel: 127.0.0.1
-    # Sekunden zwischen zwei Lebenszeichen (ServerAliveInterval). Nach drei
-    # unbeantworteten endet `ssh` - erst dadurch merkt der Waechter, dass er
-    # neu aufmachen muss.
-    lebenszeichen: 30
 
 # --- Sicherung (25.09.2026) ---------------------------------------------
 #

@@ -390,27 +390,3 @@ def test_der_oertliche_lauf_schliesst_aus_und_merkt_die_beitraege(bestand: Path)
         assert store.link_for("k", "g1") is not None, "der Tracking-Code bleibt"
 
 
-def test_der_server_schliesst_aus_und_schickt_die_gesperrten_mit(bestand: Path) -> None:
-    from fastapi.testclient import TestClient
-
-    from fbgroups.marketing.web import create_app
-
-    client = TestClient(
-        create_app(config=_Konfig(bestand), db_path=bestand),
-        headers={"Origin": "http://127.0.0.1:8090"},
-    )
-    s = client.post("/automatik/naechster", json={}).json()["schritt"]
-    antwort = client.post(
-        "/automatik/ergebnis",
-        json={
-            "campaign_id": s["campaign_id"], "group_id": s["group_id"], "nummer": s["nummer"],
-            "texttyp": s["texttyp"], "erfolg": False, "fehler": "kein passender Beitrag",
-            "kein_anlass": True, "lauf_id": s["lauf_id"],
-            "gescheiterte_posts": ["p/tot"], "ausschliessen": GRUND,
-        },
-    )
-
-    assert antwort.status_code == 200
-    with MarketingStore(bestand) as store:
-        assert not store.load_marketing(s["group_id"]).bearbeiten
-        assert "p/tot" in store.gesperrte_post_urls(s["group_id"])

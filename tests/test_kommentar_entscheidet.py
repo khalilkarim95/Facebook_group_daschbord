@@ -1,27 +1,14 @@
-"""Der Fernbetrieb prueft, was der oertliche Lauf prueft - keine zweite Kette.
+"""Vor jedem Kommentar steht die ganze Kette - Inhalt, Anlass, Erlaubnis.
 
 Der Anlass vom 14.09.2026 ist eine Forderung des Nutzers: *"Ich möchte nicht,
 dass wir einen erfolgreichen CLI-Test haben, während der echte Facebook-Runner
-diese Prüfungen noch gar nicht durchführt."*
-
-Genau das war der Fall. ``campaign automatik --server`` - der Weg, den der
-Nutzer faehrt - lief ueber ``browser_schritt_fern``, und dort stand:
-
-    bester = max(offen, key=lambda p: p["interactions"] + p["comments"])
-    return _ausgang(comment_on_post(context, bester["post_url"], text), ...)
-
-Der **lauteste** Beitrag, der vorbereitete Text. Kein ``inhalt.lies``, kein
-``entscheide``, keine ``Erlaubnis``, kein ``Anspruch``. Die ganze Kette, die
-``campaign pruefe-inhalt`` vorfuehrt, gab es nur im oertlichen Lauf.
-
-Die Datei haelt fest, dass beide Wege jetzt dieselbe Kette gehen - und dass
-die Angaben, die der Arbeitsrechner nicht nachschlagen kann, vom Server
-mitkommen.
+diese Prüfungen noch gar nicht durchführt."* Damals nahm der Fernbetrieb den
+**lautesten** Beitrag und den vorbereiteten Text, ohne ``inhalt.lies`` und
+ohne ``entscheide``. Den Fernbetrieb gibt es seit dem Umzug (25.09.2026)
+nicht mehr; die Datei haelt fest, dass die Kette selbst tut, was sie soll.
 """
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 
@@ -68,54 +55,6 @@ def config():
 
 
 # --- Die Grundlagen reisen mit ---------------------------------------------
-
-def test_der_server_schickt_die_entscheidungsgrundlagen_mit(
-    tmp_path: Path, config
-) -> None:
-    """Ohne sie kann der Arbeitsrechner gar nicht pruefen.
-
-    Er haelt keinen Bestand. Deshalb rechnet der Server sie und schickt
-    **Wahrheitswerte und Kennungen** mit - keinen Datensatz.
-    """
-    quelltext = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
-
-    assert '"vorgaben": vorgaben' in quelltext
-    # Seit dem 23.09.2026 fuer jede Gruppe dieselbe Erlaubnis.
-    assert "erlaubnis = Erlaubnis()" in quelltext
-    # Seit dem 23.09.2026 eine Schwelle fuer alle Gruppen, nicht je Klasse.
-    assert "automatik.anspruch_aus_config(cfg)" in quelltext
-
-
-def test_fehlende_vorgaben_ergeben_die_gewoehnliche_erlaubnis() -> None:
-    """Fehlt das Feld, gilt ``Erlaubnis()`` - seit dem 23.09.2026 mit Link."""
-    erlaubnis, anspruch, verbraucht = automatik.vorgaben_lesen(None)
-
-    assert erlaubnis == Erlaubnis()
-    assert erlaubnis.links is True
-    assert anspruch.mindestrelevanz is Relevanz.MITTEL
-    assert verbraucht == set()
-
-
-def test_die_vorgaben_werden_vollstaendig_uebersetzt() -> None:
-    """Was der Server rechnet, muss hier ankommen - sonst gilt es nicht."""
-    erlaubnis, anspruch, verbraucht = automatik.vorgaben_lesen(
-        {
-            "erlaubnis": {
-                "kommentare": True, "beitraege": False, "links": True,
-                "werbung": True, "privatkontakt": True, "regeln_gelesen": True,
-            },
-            "anspruch": {"mindestrelevanz": "hoch", "verlangt_strecke": True},
-            "verbrauchte_vorlagen": ["ar/anlaesse/geschenk/hadiye"],
-        }
-    )
-
-    assert erlaubnis == Erlaubnis(
-        kommentare=True, beitraege=False, links=True,
-        privatkontakt=True,
-    )
-    assert anspruch == Anspruch(mindestrelevanz=Relevanz.HOCH, verlangt_strecke=True)
-    assert verbraucht == {"ar/anlaesse/geschenk/hadiye"}
-
 
 # --- Die Kette selbst ------------------------------------------------------
 
@@ -199,60 +138,7 @@ def test_eine_gruppe_ohne_links_bekommt_einen_text_ohne_link(config) -> None:
     assert "http" not in text
 
 
-def test_der_fernbetrieb_bricht_bei_einem_kommentarverbot_ab(monkeypatch) -> None:
-    """Und zwar **bevor** ein Beitrag gelesen oder etwas geschrieben wird.
-
-    ``kein_anlass`` statt ``erfolg=False``: Es ist kein Fehlschlag, der gegen
-    die Fassung zaehlt. Der Server kann Kommentare fuer eine Gruppe ueber
-    ``vorgaben`` abschalten, auch wenn er es derzeit fuer keine tut.
-    """
-    gelesen: list[str] = []
-
-    def fake_fetch(_context, url: str, _gid: str, limit: int = 10):  # noqa: ARG001
-        gelesen.append(url)
-        return [_post("p/1", VERSAND)]
-
-    monkeypatch.setattr(
-        "fbgroups.automation.actions.fetch_top_posts", fake_fetch, raising=False
-    )
-    ergebnis = automatik.browser_schritt_fern(
-        None,
-        "https://www.facebook.com/groups/1",
-        "g1",
-        "Text",
-        [],
-        {"erlaubnis": {"kommentare": False}},
-    )
-
-    assert ergebnis.erfolg is False
-    assert ergebnis.kein_anlass is True
-    assert "Kommentare fuer diese Gruppe abgeschaltet" in ergebnis.fehler
-
-
 # --- Beide Wege, eine Kette ------------------------------------------------
-
-def test_beide_wege_rufen_denselben_kern_auf() -> None:
-    """Eine zweite Fassung waere eine zweite Zaehlweise fuer dieselben Kommentare.
-
-    ``waehle_und_kommentiere`` (oertlich, holt aus dem Bestand) und
-    ``browser_schritt_fern`` (fern, bekommt es gereicht) muenden beide in
-    ``entscheide_und_kommentiere``.
-    """
-    quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
-    kern = "entscheide_und_kommentiere("
-
-    # Einmal die Definition, einmal je Weg der Aufruf.
-    assert quelltext.count(kern) >= 3
-
-    # Nur der **Rumpf** von ``browser_schritt_fern``, ohne seinen Docstring:
-    # Der zitiert die alte Zeile, und eine Pruefung, die daran haengenbleibt,
-    # prueft den Kommentar statt des Programms.
-    fern = quelltext.split("def browser_schritt_fern(", 1)[1].split(chr(10) + "def ", 1)[0]
-    rumpf = fern.split(chr(34) * 3, 2)[2] if fern.count(chr(34) * 3) >= 2 else fern
-
-    assert kern in rumpf, "der Fernbetrieb muss durch den Kern gehen"
-    assert "max(" not in rumpf, "der lauteste Beitrag darf nicht mehr gewinnen"
-
 
 def test_die_entscheidung_faellt_vor_dem_kommentar(config) -> None:
     """Punkt 6: erst pruefen, dann handeln - nicht umgekehrt.
@@ -364,19 +250,6 @@ def anlasstext_zu_leer(config) -> str:
     return anlasstext_zu(config, "ar/anlaesse/gibtsnicht/x", mit_link=False)
 
 
-def test_der_ergebnisweg_nimmt_weiterhin_keinen_text_entgegen() -> None:
-    """Die Regel von der Arbeitsseite gilt hier unveraendert.
-
-    Ein manipulierter Aufruf darf keinen anderen Text in einen Kommentar
-    bringen als den, den der Vorrat hergibt. Eine **Kennung** kann nur auf
-    eine vorbereitete Fassung zeigen - ein Textfeld koennte alles tragen.
-    """
-    from fbgroups.marketing.web import AutomatikErgebnis
-
-    assert "text" not in AutomatikErgebnis.model_fields
-    assert "vorlage_key" in AutomatikErgebnis.model_fields
-
-
 # --- Der Platzhalter geht nie in eine Gruppe -------------------------------
 
 def test_der_abgesetzte_text_traegt_weder_adresse_noch_platzhalter(
@@ -476,60 +349,5 @@ def test_ein_text_ohne_link_geht_weiterhin_hinaus(config) -> None:
     assert "{" not in abgesetzt
 
 
-def test_der_server_schickt_die_adresse_getrennt_vom_text() -> None:
-    """Sie steht neben ``text``, nicht darin - und seit dem 23.09.2026 ist es
-    beim Kommentar die **freie** Adresse ohne Tracking.
-    """
-    quelltext = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
-
-    assert "if schritt.texttyp is Texttyp.POST\n" in quelltext
-    assert "else kommentar_adresse(cfg)" in quelltext
-
-
 # --- "Kein Anlass" ist auch im Fernbetrieb kein Fehlschlag -----------------
 
-def test_kein_anlass_wird_gemeldet_und_nicht_als_fehlschlag_gebucht() -> None:
-    """**Die zweite Haelfte des Fehlers vom 14.09.2026.**
-
-    Der oertliche Lauf legt die Gruppe bei ``kein_anlass`` fuer diesen
-    Durchgang beiseite und bucht **nichts**. Der Fernbetrieb meldete nur
-    ``erfolg=False`` - und der Server buchte einen gescheiterten Versuch
-    gegen die Fassung. Nach dreien galt sie als verbraucht, irgendwann die
-    Gruppe als erschoepft.
-
-    Das ist dieselbe Verwechslung, an der am 11.09.2026 45 Gruppen zu
-    Unrecht ausgeschieden sind - nur an einer anderen Stelle und ein
-    Vierteljahr spaeter.
-    """
-    from fbgroups.marketing.web import AutomatikErgebnis
-
-    assert "kein_anlass" in AutomatikErgebnis.model_fields
-    assert "lauf_id" in AutomatikErgebnis.model_fields
-
-    quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
-    assert '"kein_anlass": ergebnis.kein_anlass' in quelltext, "der Treiber muss es melden"
-
-    web = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
-    endpunkt = web.split("def automatik_ergebnis(", 1)[1].split("\n    @app.", 1)[0]
-    # Seit dem 23.09.2026 zusammen mit dem ``erschoepft`` eines aelteren
-    # Arbeitsrechners - beides heisst "hier ist gerade nichts zu tun".
-    bedingung = "if meldung.kein_anlass or meldung.erschoepft:"
-    assert bedingung in endpunkt
-    assert "ueberspringe_gruppe" in endpunkt
-    # Und zwar **vor** der Buchung - sonst zaehlte der Versuch trotzdem.
-    assert endpunkt.index(bedingung) < endpunkt.index("melde_vorschlag(")
-
-
-def test_kein_anlass_zaehlt_nicht_gegen_den_technikwaechter() -> None:
-    """Der Waechter sieht "kein Anlass" nicht - und eine tote Adresse auch nicht.
-
-    Der Browser arbeitet ja. Seit dem 20.09.2026 beendet ein technischer
-    Fehlschlag den Lauf ohnehin nicht mehr (die Gruppe faellt aus der
-    Kampagne, nicht der Lauf); gemeldet wird trotzdem nur, was etwas ueber
-    den Rechner sagen koennte.
-    """
-    quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
-
-    assert "not ergebnis.kein_anlass" in quelltext
-    assert "and not ergebnis.beitrag_weg" in quelltext
-    assert "and technik.melde(ergebnis)" in quelltext

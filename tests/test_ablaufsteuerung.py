@@ -413,81 +413,50 @@ def test_ohne_lesbaren_text_bleibt_eine_tote_adresse_ohne_urteil(config) -> None
     assert "nicht mehr vorhanden" in ergebnis.fehler
 
 
-def test_der_fernbetrieb_meldet_beitrag_weg_mit() -> None:
-    """Der Server bekommt die tote Adresse gemeldet und nimmt sie an.
-
-    Der oertliche Lauf liest ``beitrag_weg``; der Fernbetrieb - der
-    Regelfall - meldete es bis zum 20.09.2026 nicht einmal.
-    """
-    from pathlib import Path
-
-    quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
-    web = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
-
-    assert '"beitrag_weg": ergebnis.beitrag_weg,' in quelltext, "gemeldet"
-    assert "beitrag_weg: bool = False" in web, "und angenommen"
-
-
 def test_kein_technischer_fehlschlag_schliesst_eine_gruppe_aus() -> None:
     """**Ein technischer Fehlschlag nimmt keine Gruppe aus der Kampagne** (21.09.2026).
 
     Er kostet eine Ruhezeit. Seit dem 24.09.2026 gibt es genau **einen**
     automatischen Ausschluss (Anweisung des Nutzers): nach einer vollen
     Suche - 15 Runden, mindestens 10 Beitraege - ohne einen einzigen
-    kommentierbaren Beitrag (``automatik.nichts_zu_machen``). Beide Wege
-    schliessen nur ueber dieses Feld aus, oertlich und fern.
+    kommentierbaren Beitrag (``automatik.nichts_zu_machen``). Der Lauf
+    schliesst nur ueber dieses Feld aus.
     """
     from pathlib import Path
 
     quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
-    web = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
-    endpunkt = web.split("def automatik_ergebnis(", 1)[1].split("@app.post", 1)[0]
 
-    assert quelltext.count("store.schliesse_gruppe_aus(") == 1, "oertlich"
+    assert quelltext.count("store.schliesse_gruppe_aus(") == 1
     assert "store.schliesse_gruppe_aus(schritt.group_id, ergebnis.ausschliessen)" in quelltext
-    assert endpunkt.count("schliesse_gruppe_aus(") == 1, "fern"
-    assert "schliesse_gruppe_aus(meldung.group_id, meldung.ausschliessen)" in endpunkt
     # Und der Technikwaechter zaehlt eine tote Adresse nicht mit: Sie sagt
     # nichts ueber den Rechner.
     assert "if not ergebnis.beitrag_weg and technik.melde(ergebnis):" in quelltext
 
 
-# --- 6./7. Beide Laeufe legen die Gruppe beiseite --------------------------
-
-
-def test_beide_laeufe_legen_die_gruppe_beiseite() -> None:
-    """Beide Wege lassen die Gruppe **ruhen** - dieselbe Folge, zwei Orte.
-
-    Der Uebersprung gilt fuer genau diesen Lauf und traegt eine Ruhezeit
-    (``automatik.ruhe_minuten``); danach steht die Gruppe wieder in der
-    Runde. Eine zweite Zaehlweise waere ein zweiter Lauf mit anderem
-    Ausgang.
-    """
+def test_der_lauf_legt_die_gruppe_beiseite() -> None:
+    """Die Gruppe **ruht** - fuer genau diesen Lauf und mit einer Ruhezeit
+    (``automatik.ruhe_minuten``); danach steht sie wieder in der Runde."""
     from pathlib import Path
 
     quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
-    web = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
 
-    assert "if ergebnis.gruppe_beiseite:" in quelltext, "oertlich"
-    assert '"gruppe_beiseite": ergebnis.gruppe_beiseite' in quelltext, "gemeldet"
-    assert "if meldung.gruppe_beiseite and meldung.lauf_id:" in web, "auf dem Server"
-    assert "ruhe=ruhe_minuten(config)" in quelltext, "oertlich mit Ruhezeit"
-    assert "ruhe_minuten=automatik.ruhe_minuten(cfg)" in web, "fern mit Ruhezeit"
+    assert "if ergebnis.gruppe_beiseite:" in quelltext
+    assert "ruhe=ruhe_minuten(config)" in quelltext
 
 
 def test_der_ausgang_wird_trotzdem_gebucht() -> None:
     """Beiseitelegen heisst nicht verschweigen.
 
     Der Versuch gehoert ins Protokoll - sonst sieht ein Mensch spaeter nicht,
-    dass in dieser Gruppe etwas nicht ging. Nur ``kein_anlass`` bucht nichts:
-    Dort ist gar nichts versucht worden.
+    dass in dieser Gruppe etwas nicht ging. Gebucht wird **vor** dem
+    Beiseitelegen.
     """
     from pathlib import Path
 
-    web = Path("src/fbgroups/marketing/web.py").read_text(encoding="utf-8")
-    endpunkt = web.split("def automatik_ergebnis(", 1)[1].split("\n    @app.", 1)[0]
+    quelltext = Path("src/fbgroups/marketing/automatik.py").read_text(encoding="utf-8")
+    schritt = quelltext.split("def _text_schritt(", 1)[1].split("\ndef ", 1)[0]
 
-    assert endpunkt.index("melde_vorschlag(") < endpunkt.index("if meldung.gruppe_beiseite")
+    assert schritt.index("_buche(store") < schritt.index("if ergebnis.gruppe_beiseite:")
 
 
 # --- 8./9./10. Mehrere Kampagnen --------------------------------------------
