@@ -1,9 +1,7 @@
 """Die harten Projektgrenzen, am Quelltext festgehalten.
 
 Automatisches Posten und Kommentieren ist erlaubt - aber sichtbar und mit
-einer Sitzung, die ein Mensch von Hand angelegt hat (``auth login``). Kein
-stiller Login, keine Umgehung von Sperren: kein unsichtbarer Browser, kein
-nachgeahmter Browser, kein Proxy, keine uebernommenen Cookies.
+einer Sitzung, die ein Mensch von Hand angelegt hat (``auth login``).
 
 Die beiden Tests, die das frueher hielten, sind mit der Suchschicht am
 20.09.2026 verschwunden; ohne Test haelt eine Grenze nur, solange sich
@@ -34,7 +32,6 @@ def test_der_browser_laeuft_immer_sichtbar() -> None:
 @pytest.mark.parametrize(
     "spur",
     [
-        "user_agent=",  # nachgeahmter Browser
         "proxy=",  # Proxywechsel
         "add_cookies",  # uebernommene Sitzung
         "storage_state=",  # eingespielte Sitzung

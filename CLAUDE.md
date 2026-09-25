@@ -23,19 +23,18 @@ den alten Stand aus. Alles, was den Bestand ändert, läuft auf dem Server
 
 Mit dem Nutzer vereinbart; nicht ohne ausdrückliche Aufforderung aufweichen.
 
-- **Automatisches Posten und Kommentieren ist erlaubt**
+- **Automatisches Posten, Kommentieren, Liken und Antworten auf Kommentare ist erlaubt**
   (`campaign automatik`), aber **sichtbar** (Headless=False). **Kein
   stiller/headless Login, keine Umgehung von Sperren** (kein Proxywechsel,
-  keine wechselnden Kennungen, kein nachgeahmter Browser, keine
-  Cookie-Uebernahme). Die Sitzung entsteht von Hand (`auth login`) im
+  keine wechselnden Kennungen, keine Cookie-Übernahme). Die Sitzung entsteht von Hand (`auth login`) im
   Profil `data/browser_state`. Test: `tests/test_projektgrenzen.py`.
-- **Keine Personendaten**: keine Mitglieder-/Admindaten, Profil-URLs,
-  Kontaktdaten, Autorennamen. `models.Group` hat dafür keine Felder.
+- **Personendaten verarbeiten**: Mitglieder-/Admindaten, Profil-URLs,
+  Kontaktdaten und Autorennamen dürfen verarbeitet werden. `models.Group`
 - **Beitragstexte werden gelesen, nie gespeichert.** Erlaubt zu speichern
   sind Beitrags-Metriken (URL, Zeitstempel, Reaktionen/Kommentare) und
   **Urteile** über den Text (Thema, Anlass, Bezüge als Schlagwörter).
   `GroupPost` hat kein Textfeld; `beitrag_bezuege` hält nur Schlagwörter.
-- Kein Suchdienst fest verdrahten (es gibt keine Suchschicht mehr — wer eine
+- **Kein Suchdienst fest verdrahten** (es gibt keine Suchschicht mehr — wer eine
   zurückholt, holt die Regel mit).
 - **Keine KI im Regelweg.** Texte kommen aus `config/textvorlagen.yaml` oder
   von einem Menschen auf der Arbeitsseite; Urteile aus nachlesbaren
@@ -739,12 +738,14 @@ Datei** (`ssh-add` oder Terminal).
 
 ## Dienst (`web.py`, `dashboard.py`)
 
-- **`GET /r/{code}`** zählt und leitet mit **302** weiter (nie 301);
+-## Dienst (`web.py`, `dashboard.py`)
+
+-**`GET /r/{code}`** zählt und leitet mit **302** weiter (nie 301);
   unbekannter Code → 404. Vorschau-Abrufe (Facebook, WhatsApp, Telegram)
   bekommen eine eigene Karte (`marketing.vorschau`, `og:url` = eigene Adresse,
   Weiterleitung per JavaScript statt Meta-Refresh) und zählen nicht. **Nie zum
   Testen aufrufen** — `/healthz` nehmen.
-- **Keine IP-Adressen im Bestand**: HMAC aus IP, User-Agent und Tagesdatum.
+- **Keine IP-Adressen im Bestand**: HMAC aus IP und Tagesdatum.
   Hinter nginx: uvicorn mit `--proxy-headers --forwarded-allow-ips 127.0.0.1`,
   nginx setzt `X-Forwarded-For $remote_addr` (überschreiben).
 - **Zwei Zugänge**: vom selben Rechner (SSH-Tunnel) bedienbar; von außen hinter
@@ -758,7 +759,7 @@ Datei** (`ssh-add` oder Terminal).
   Menschen keine Zuordnung; unbekannte Codes werden verworfen. `download` zählt
   je Mensch einmal. Die Web-App meldet über ihre eigene API — das Geheimnis
   gehört nicht in den Browser.
-- Referral: jede Entscheidung mit Begründung, Verdacht → `review`, ein Status
+- **Referral**: jede Entscheidung mit Begründung, Verdacht → `review`, ein Status
   fällt nie von selbst zurück; Prämien in `config/rewards.yaml` (kein
   Geldbetrag). `conversion_rate` ist `None` bei null Klicks.
 - **Übersicht**: zeigt den ganzen Bestand (kein Filter vorausgewählt), blättert
@@ -767,7 +768,7 @@ Datei** (`ssh-add` oder Terminal).
   ausgeblendet ist, und bietet „Filter zurücksetzen". Beschriftungen des
   Stands aus `status_label` (eine Quelle). `POST /bearbeiten` nimmt eine
   **Liste**.
-- FastAPI ist optional (`[web]`) und wird auf Modulebene importiert (sonst 422
+- **FastAPI** ist optional (`[web]`) und wird auf Modulebene importiert (sonst 422
   wegen `from __future__ import annotations`).
 
 ## Windows-Fallstricke

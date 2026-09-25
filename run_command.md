@@ -77,49 +77,6 @@ systemctl list-timers fbgroups-backup.timer
 sudo -u fbgroups /usr/local/bin/fbgroups-backup                          # von Hand
 scp karim@159.195.216.246:/opt/fbgroups/backups/groups-*.sqlite.gz data/backups/   # oertlich holen
 ```
-
-## 4. Bestand und Kampagnen (Server)
-
-```bash
-fbgroups import-mitglieder /opt/fbgroups/app/data/liste.csv --dry-run
-fbgroups import-mitglieder /opt/fbgroups/app/data/liste.csv
-
-fbgroups campaign new "Batreeq Syrian Germany" --sprache ar --prioritaet A++
-fbgroups campaign target batreeq-syrian-germany                  # Regel ansehen
-fbgroups campaign target batreeq-syrian-germany --aktivitaet sehr_aktiv
-fbgroups campaign sync batreeq-syrian-germany --dry-run          # wie viele Codes?
-fbgroups campaign sync batreeq-syrian-germany                    # Codes vergeben
-fbgroups campaign status batreeq-syrian-germany active           # ohne 'active' kein Lauf
-fbgroups campaign text batreeq-syrian-germany --aus-vorlage --ja # Beitrag + Kommentar
-fbgroups campaign kurzlinks                                      # Kurzcodes nachtragen
-fbgroups campaign kurzlinks --lesbar                             # b-tarikak.de/t/safar-sham-12
-```
-
-Lesbare Adressen brauchen einmalig eine nginx-Regel im `server`-Block von
-**b-tarikak.de** (nicht go.b-tarikak.de), vor der Regel fuer `/`:
-
-```nginx
-location /t/ {
-    proxy_pass http://127.0.0.1:8090/t/;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-Danach `sudo nginx -t && sudo systemctl reload nginx`.
-
-`sync` vergibt Tracking-Codes, und **ein vergebener Code wird nie
-zurueckgenommen** - erst `--dry-run` lesen.
-
-Nachsehen:
-
-```bash
-fbgroups campaign fortschritt batreeq-syrian-germany
-fbgroups marketing analytics --top 10
-fbgroups marketing overview
-```
-
 ## 5. Die Automatik (oertlich, Browser; gebucht auf dem Server)
 
 ```bash
@@ -146,11 +103,7 @@ Der Waechter - einmal starten, dann haelt er genau einen Lauf am Leben:
 "$py" -m fbgroups.cli campaign watchdog --einmal     # nur nachsehen
 ```
 
-Einen Beitragstext probeweise beurteilen - ohne Netz, ohne Konto:
 
-```bash
-"$py" -m fbgroups.cli campaign pruefe-inhalt "مين نازل ع الشام؟"
-```
 
 ## 6. Wenn etwas nicht laeuft
 
