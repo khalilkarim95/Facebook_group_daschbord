@@ -5,6 +5,8 @@
 #
 #   bash ./umzug-lokal.sh --plan    nur nachsehen: Dienst, Bestand, nginx - nichts anfassen
 #   bash ./umzug-lokal.sh           Dienst anhalten, Bestand holen, pruefen, einsetzen
+#   bash ./umzug-lokal.sh --weiterleitung
+#                                   nur nginx: alte Links auf die Startseite (auch danach)
 #
 # GIT BASH, NICHT POWERSHELL - aus demselben Grund wie bei ausrollen.sh.
 # Die Passphrase des Schluessels wird einmal gefragt, nicht bei jedem Schritt.
@@ -27,11 +29,16 @@
 #
 # DIE ALTEN TRACKING-LINKS (go.b-tarikak.de/r/..., b-tarikak.de/t/...) stehen
 # in veroeffentlichten Beitraegen. Ab Schritt 2 antwortet nginx dort mit 502,
-# bis eine Weiterleitung auf die Startseite steht. Die richtet dieses Skript
-# bewusst NICHT ein: Es kennt die nginx-Dateien nicht, und eine geratene
-# Aenderung an der Konfiguration des ganzen Servers (b-tarikak.de, api.)
-# waere ein groesserer Schaden als ein paar Stunden 502. `--plan` zeigt die
-# Stellen; die Weiterleitung ist ein eigener Schritt.
+# bis `--weiterleitung` gelaufen ist (ein eigener Schritt, jederzeit
+# wiederholbar). Er ersetzt in den beiden Seiten genau vier location-Bloecke:
+#   go.b-tarikak.de  /r/       -> 302 https://b-tarikak.de/home (ohne Zaehlung)
+#                    /events   -> 410 (die App soll es merken, nicht 502 raten)
+#                    /healthz  -> 410
+#   b-tarikak.de     /t/       -> 302 /home
+# Vorher werden beide Dateien nach /opt/fbgroups/backups/nginx-<zeit>/
+# gesichert; scheitert das Umstellen oder `nginx -t`, kommen sie zurueck, und
+# nginx wird gar nicht erst neu geladen. Alles andere in den Dateien -
+# b-tarikak.de selbst, Zertifikate, api. - bleibt, wie es ist.
 #
 # ZURUECK, solange hier noch nichts gebucht wurde:
 #   ssh -i ~/.ssh/b-tarikak_vps_new root@159.195.216.246 \
@@ -50,14 +57,18 @@ FERN_PY="/opt/fbgroups/venv/bin/python"
 SICHERUNGEN="/opt/fbgroups/backups"
 DIENST="fbgroups"
 TIMER="fbgroups-backup.timer"
+NGINX_SEITEN="/etc/nginx/sites-available"
 PY="${FBG_PY:-./.venv/Scripts/python.exe}"
+STEMPEL="$(date +%Y-%m-%dT%H%M%S)"
 export PYTHONIOENCODING=utf-8
 
 plan=0
+nur_weiterleitung=0
 for arg in "$@"; do
     case "$arg" in
         --plan) plan=1 ;;
-        -h|--help) sed -n '3,43p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --weiterleitung) nur_weiterleitung=1 ;;
+        -h|--help) sed -n '3,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unbekannte Option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -200,6 +211,145 @@ agent_bereit() {
     fi
 }
 
+# --- Die alten Links: nginx statt fbgroups ---------------------------------
+#
+# Ersetzt in den beiden Seiten je einen location-Block ganz - von der Zeile
+# `location /r/ {` bis zu ihrer schliessenden Klammer -, statt einzelne
+# Zeilen zu flicken: Was in dem Block sonst stand (proxy_set_header ...),
+# gehoert zum Weiterreichen an fbgroups und faellt mit ihm weg. Erst werden
+# beide Dateien fertig gerechnet, dann beide geschrieben - oder keine.
+NGINX_UMSTELLEN=$(cat <<'PY'
+import os
+import re
+import shutil
+import sys
+from pathlib import Path
+
+seiten = Path(sys.argv[1])
+HINWEIS = "# Seit dem Umzug (25.09.2026) ohne fbgroups-Dienst - hier wird nichts gezaehlt."
+UMSTELLUNG = {
+    "go.b-tarikak.de": {
+        "/r/": "return 302 https://b-tarikak.de/home;",
+        "/events": "return 410;",
+        "/healthz": "return 410;",
+    },
+    "b-tarikak.de": {
+        "/t/": "return 302 /home;",
+    },
+}
+KOPF = re.compile(r"^(?P<einzug>[ \t]*)location\s+(?P<pfad>\S+)\s*\{")
+# Fehlt einem Block die schliessende Klammer, liefe er bis zum Ende des
+# server-Blocks weiter - und das Ersetzen naehme Zertifikat und listen mit.
+FREMD = re.compile(r"^\s*(location|server|server_name|listen|ssl_\w+|include|root)\b")
+
+
+def klammern(zeile):
+    code = zeile.split("#", 1)[0]
+    return code.count("{") - code.count("}")
+
+
+def umstellen(text, bloecke):
+    zeilen = text.splitlines(keepends=True)
+    neu, meldungen, gefunden = [], [], set()
+    i = 0
+    while i < len(zeilen):
+        kopf = KOPF.match(zeilen[i])
+        if not kopf or kopf["pfad"] not in bloecke:
+            neu.append(zeilen[i])
+            i += 1
+            continue
+        tiefe, j = 0, i
+        while j < len(zeilen):
+            tiefe += klammern(zeilen[j])
+            if tiefe <= 0:
+                break
+            j += 1
+        if tiefe != 0:
+            raise ValueError(f"location {kopf['pfad']} hat keine schliessende Klammer")
+        if any(FREMD.match(zeile) for zeile in zeilen[i + 1:j]):
+            raise ValueError(f"location {kopf['pfad']} reicht in fremde Zeilen hinein")
+        pfad, ziel = kopf["pfad"], bloecke[kopf["pfad"]]
+        gefunden.add(pfad)
+        alt = "".join(zeilen[i:j + 1])
+        if "proxy_pass" not in alt and ziel in alt:
+            meldungen.append(f"{pfad}: war schon umgestellt")
+            neu.extend(zeilen[i:j + 1])
+        else:
+            e = kopf["einzug"]
+            neu += [f"{e}location {pfad} {{\n", f"{e}    {HINWEIS}\n",
+                    f"{e}    {ziel}\n", f"{e}}}\n"]
+            meldungen.append(f"{pfad}: -> {ziel}")
+        i = j + 1
+    for pfad in bloecke:
+        if pfad not in gefunden:
+            meldungen.append(f"{pfad}: kein solcher Block - nichts zu tun")
+    ergebnis = "".join(neu)
+    if sum(map(klammern, ergebnis.splitlines())) != sum(map(klammern, zeilen)):
+        raise ValueError("die Klammern gehen nach dem Umstellen nicht mehr auf")
+    return ergebnis, meldungen
+
+
+# newline="" beim Lesen und Schreiben: Die Zeilenenden bleiben, wie sie waren.
+fertig = {}
+for name, bloecke in UMSTELLUNG.items():
+    datei = seiten / name
+    try:
+        with open(datei, encoding="utf-8", newline="") as ein:
+            fertig[datei] = umstellen(ein.read(), bloecke)
+    except (OSError, ValueError) as exc:
+        print(f"{name}: {exc} - es wird NICHTS geschrieben")
+        sys.exit(1)
+
+for datei, (text, meldungen) in fertig.items():
+    for meldung in meldungen:
+        print(f"{datei.name:18} {meldung}")
+    zwischen = datei.with_name(f".{datei.name}.umstellen")
+    with open(zwischen, "w", encoding="utf-8", newline="") as aus:
+        aus.write(text)
+    shutil.copymode(datei, zwischen)
+    os.replace(zwischen, datei)
+PY
+)
+
+# Vom Server selbst abgefragt (--resolve auf 127.0.0.1), damit das Ergebnis
+# nicht am DNS dieses Rechners haengt. /r/ zaehlt hier nichts mehr: nginx
+# antwortet, bevor irgendetwas bei fbgroups ankaeme.
+LINKS_PRUEFEN=$(cat <<'SH'
+for adresse in https://go.b-tarikak.de/r/weiterleitung-test \
+               https://b-tarikak.de/t/weiterleitung-test \
+               https://go.b-tarikak.de/events \
+               https://go.b-tarikak.de/healthz; do
+    host=${adresse#https://}; host=${host%%/*}
+    antwort=$(curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' \
+              --resolve "$host:443:127.0.0.1" "$adresse" || true)
+    printf '  %-44s %s\n' "$adresse" "${antwort:-keine Antwort}"
+done
+SH
+)
+
+weiterleitung() {
+    local ablage="$SICHERUNGEN/nginx-$STEMPEL"
+    schritt "nginx: alte Links auf die Startseite"
+    fern "mkdir -p '$ablage' && cp -a '$NGINX_SEITEN/go.b-tarikak.de' '$NGINX_SEITEN/b-tarikak.de' '$ablage/' && echo 'Gesichert nach $ablage'"
+    if fern "$FERN_PY - '$NGINX_SEITEN'" <<< "$NGINX_UMSTELLEN" && fern "nginx -t"; then
+        fern "systemctl reload nginx && echo 'nginx neu geladen.'"
+        echo "So antwortet es jetzt:"
+        fern "bash -s" <<< "$LINKS_PRUEFEN"
+        return 0
+    fi
+    echo "Umstellen oder 'nginx -t' gescheitert - die gesicherten Dateien kommen zurueck."
+    echo "nginx wurde nicht neu geladen und laeuft mit der alten Fassung weiter."
+    fern "cp -a '$ablage/go.b-tarikak.de' '$ablage/b-tarikak.de' '$NGINX_SEITEN/' && nginx -t" || true
+    return 1
+}
+
+# Unabhaengig vom Umzug: vorher, nachher, beliebig oft.
+if [ "$nur_weiterleitung" = 1 ]; then
+    agent_bereit
+    weiterleitung
+    exit 0
+fi
+
 if [ -f data/umgezogen.txt ]; then
     echo "Der Umzug ist schon gelaufen:"
     sed 's/^/  /' data/umgezogen.txt
@@ -247,7 +397,6 @@ if [ -n "$(git status --short -- src config 2>/dev/null)" ]; then
 fi
 
 agent_bereit
-STEMPEL="$(date +%Y-%m-%dT%H%M%S)"
 FERN_KOPIE="$SICHERUNGEN/umzug-$STEMPEL.sqlite"
 LOKAL_KOPIE="data/umzug/groups-vom-server-$STEMPEL.sqlite"
 
@@ -339,7 +488,8 @@ Protokoll: data/logs/   Sicherungen: data/backups/ und ~/fbgroups-sicherung
 
 Noch offen:
   * Die alten Links (go.b-tarikak.de/r/..., b-tarikak.de/t/...) antworten mit
-    502, bis nginx sie auf die Startseite weiterleitet.
+    502, bis nginx sie auf die Startseite weiterleitet:
+      bash ./umzug-lokal.sh --weiterleitung
   * Die App (api.b-tarikak.de) meldet vielleicht noch an /events - dort
     abschalten.
 ENDE
