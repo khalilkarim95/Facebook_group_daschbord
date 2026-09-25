@@ -456,7 +456,8 @@ class Blick:
     ohne Bildschirm pruefen, und die Meldungen entstehen an einer Stelle.
     """
 
-    #: ``laeuft`` | ``gestartet`` | ``dienst_weg`` | ``abgeschaltet``
+    #: ``laeuft`` | ``gestartet`` | ``dienst_weg`` | ``abgeschaltet`` - und
+    #: was ``nebenbei`` meldet (``gesichert``, ``sicherung_fehlgeschlagen``)
     art: str
     meldung: str
 
@@ -551,12 +552,17 @@ def wache(
     schlafe: Callable[[float], None] = time.sleep,
     durchgaenge: int = 0,
     tunnel: Tunnelwart | None = None,
+    nebenbei: Callable[[], Blick | None] | None = None,
 ) -> list[Blick]:
     """Die Schleife: alle ``abstand`` Sekunden ein Blick.
 
     ``durchgaenge`` begrenzt sie - ``0`` heisst "ohne Ende", und das ist der
     Betriebsfall: einmal starten, dann laeuft er. Ein Test gibt eine Zahl an
     und bekommt die Bloecke zurueck.
+
+    ``nebenbei`` wird vor jedem Blick gefragt und meldet sich nur, wenn es
+    etwas getan hat - seit dem Umzug (25.09.2026) die taegliche Sicherung.
+    Was es tut, weiss die Schleife nicht; sie reicht nur die Meldung weiter.
 
     **Zwischen zwei Blicken wird geschlafen, nicht gewartet.** Der Waechter
     haelt keinen Browser und keine Datenbank offen; er kostet zwischen zwei
@@ -565,6 +571,12 @@ def wache(
     verlauf: list[Blick] = []
     runde = 0
     while True:
+        if nebenbei is not None:
+            nachricht = nebenbei()
+            if nachricht is not None:
+                verlauf.append(nachricht)
+                if melde is not None:
+                    melde(nachricht)
         blick = blicke(sperre, einst, starte=starte, tunnel=tunnel, schlafe=schlafe)
         verlauf.append(blick)
         if melde is not None:

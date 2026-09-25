@@ -3,6 +3,10 @@
 paths:
   data_dir: data
   sqlite_path: data/groups.sqlite
+  # Seit dem Umzug (25.09.2026) liegt der Bestand auf diesem Rechner - und
+  # mit ihm Protokoll und Sicherung (Bloecke `protokoll` und `sicherung`).
+  log_dir: data/logs
+  backup_dir: data/backups
 
 marketing:
   # Basis-URL der Anwendung, die den Tracking-Link entgegennimmt.
@@ -243,7 +247,11 @@ marketing:
 # Sorgt dafuer, dass **ein** `campaign automatik` laeuft, und sonst nichts.
 # Einmal starten, dann laeuft er:
 #
-#     fbgroups campaign watchdog --server http://127.0.0.1:8090
+#     fbgroups campaign watchdog
+#
+# Seit dem Umzug (25.09.2026) oertlich: Der Lauf liest und bucht in
+# data/groups.sqlite, und der Waechter sichert den Bestand nebenbei (Block
+# `sicherung`).
 #
 # Er enthaelt keine Kampagnenlogik: keine Warteschlange, keine Rangfolge,
 # keinen Takt. Er sieht nach, ob ein Lauf die Sperre haelt - und startet
@@ -266,9 +274,14 @@ watchdog:
   #
   # Leer heisst: oertlicher Lauf, kein Dienst noetig. `--server` auf der
   # Kommandozeile geht vor.
-  server: http://127.0.0.1:8090
+  #
+  # Leer seit dem Umzug (25.09.2026): Der Bestand liegt auf diesem Rechner.
+  # Bis dahin stand hier http://127.0.0.1:8090 - der Server ueber den Tunnel.
+  server: ""
 
-  # Der SSH-Tunnel, durch den `server` ueberhaupt erst antwortet. Bis zum
+  # Der SSH-Tunnel, durch den `server` ueberhaupt erst antwortet. Seit dem
+  # Umzug aus (`enabled: false`) - es gibt keinen Dienst mehr, zu dem er
+  # fuehren koennte. Bis zum
   # 20.09.2026 stand im Protokoll nur "Dienst antwortet nicht - laeuft der
   # SSH-Tunnel?", und die Antwort war jedes Mal ein Mensch, der ein zweites
   # Fenster oeffnete. Jetzt macht ihn der Waechter selbst auf, sobald der
@@ -283,7 +296,7 @@ watchdog:
   # Neustart), dann fragt niemand mehr. Sonst fragt `ssh` im Terminal, in
   # dem der Waechter laeuft.
   tunnel:
-    enabled: true
+    enabled: false
     ziel: karim@159.195.216.246
     schluessel: ~/.ssh/b-tarikak_vps_new
     # Oertlicher Port; er muss zu `server` passen, sonst macht der Waechter
@@ -297,6 +310,49 @@ watchdog:
     # unbeantworteten endet `ssh` - erst dadurch merkt der Waechter, dass er
     # neu aufmachen muss.
     lebenszeichen: 30
+
+# --- Sicherung (25.09.2026) ---------------------------------------------
+#
+# Seit dem Umzug liegt der Bestand auf diesem Rechner; der systemd-Timer des
+# Servers (fbgroups-backup.timer) sichert nichts mehr. Gesichert wird mit
+# der Sicherungsschnittstelle von SQLite, geprueft (integrity_check) und
+# gepackt nach `paths.backup_dir`:
+#
+#     data/backups/sicherung-2026-09-25T132305.sqlite.gz
+#
+# Wann: vom Waechter, sobald die letzte Sicherung aelter ist als
+# `abstand_stunden`; von Hand mit `fbgroups sicherung`; vor jedem
+# `fbgroups sicherung --zurueck`.
+sicherung:
+  # 0 heisst: der Waechter sichert nicht (von Hand geht es weiter).
+  abstand_stunden: 24
+
+  # So viele bleiben je Ordner; 0 heisst: alle. Geloescht wird nur, was
+  # `sicherung-*.sqlite.gz` heisst - die alten Sicherungen vom Server
+  # (groups-2026-08-18.sqlite.gz) bleiben liegen.
+  behalten: 30
+
+  # Jede Sicherung zusaetzlich hierhin. data/ liegt auf K: (Festplatte),
+  # ~ auf C: (SSD): Ein Plattenschaden nimmt nicht beide mit. Ein Ort, der
+  # gerade fehlt (USB-Stick, Netzlaufwerk), wird gemeldet, haelt die
+  # Sicherung aber nicht auf. Gegen Diebstahl, Brand oder Verschluesselung
+  # hilft nur ein Ort ausser Haus (z. B. ein Cloud-Ordner).
+  weitere_ordner:
+    - ~/fbgroups-sicherung
+
+# --- Protokoll (25.09.2026) ---------------------------------------------
+#
+# Was `campaign automatik` und `campaign watchdog` im Fenster zeigen, steht
+# zusaetzlich in `paths.log_dir`, eine Datei je Befehl und Tag:
+#
+#     data/logs/automatik-2026-09-25.log
+#     data/logs/waechter-2026-09-25.log
+#
+# Der Ersatz fuer journalctl auf dem Server. Der Bestand selbst (jeder
+# Versuch, jeder Ausgang) steht weiter in der Datenbank.
+protokoll:
+  # Aeltere Tagesdateien werden beim Start geloescht; 0 heisst: alle behalten.
+  tage: 60
 
 scoring:
   # Summe der Gewichte = 100. Der Score ist die Summe der tatsaechlich

@@ -3,7 +3,8 @@
     fbgroups import-mitglieder PFAD    Eigene Mitgliederliste einlesen
     fbgroups serve                     Dienst starten: Uebersicht und Tracking
     fbgroups config-check              Konfiguration pruefen
-    fbgroups auth login                Interaktiver Browser-Login fuer Automatisierung
+    fbgroups sicherung                 Bestand sichern (--liste, --zurueck)
+    fbgroups auth login               Interaktiver Browser-Login fuer Automatisierung
     fbgroups campaign ...              Kampagnen: Zuordnung, Texte, Lauf
     fbgroups marketing ...             Arbeitsstand, Auswertung, Praemien
 
@@ -425,6 +426,75 @@ def config_check_command() -> None:
             f"[dim]Hinweis: beitritt.anfragen_pro_tag ({alt_gesetzt}) wird von "
             f"limits.join_requests.daily ({neu_gesetzt}) ueberstimmt.[/dim]"
         )
+
+
+@app.command("sicherung")
+def sicherung_command(
+    liste: bool = typer.Option(False, "--liste", help="Nur die vorhandenen Sicherungen zeigen."),
+    zurueck: Path = typer.Option(
+        None,
+        "--zurueck",
+        help="Diese Sicherung (.sqlite.gz) als Bestand einspielen. Der Stand davor "
+        "wird vorher gesichert.",
+    ),
+    ja: bool = typer.Option(False, "--ja", help="Beim Zurueckspielen nicht nachfragen."),
+) -> None:
+    """Sichert den Bestand jetzt - geprueft, gepackt, an jeden Sicherungsort.
+
+    Seit dem Umzug (25.09.2026) liegt der Bestand auf diesem Rechner. Der
+    Waechter sichert von selbst, sobald die letzte Sicherung aelter ist als
+    ``sicherung.abstand_stunden``; dieser Befehl tut es sofort.
+
+    ``--zurueck`` ersetzt den Bestand durch eine Sicherung. Nur ohne
+    laufenden ``campaign automatik`` und bei geschlossener Uebersicht.
+    """
+    from fbgroups import sicherung
+    from fbgroups.marketing import watchdog
+
+    config = _config()
+    einst = sicherung.einstellungen(config)
+    bestand = config.path("sqlite_path")
+
+    if liste:
+        for ordner, dateien in sicherung.uebersicht(einst):
+            console.print(f"[bold]{ordner}[/bold]  ({len(dateien)} Sicherungen)")
+            for datei in dateien[-10:]:
+                console.print(f"  {datei.name}  [dim]{datei.stat().st_size / 1024:.0f} KB[/dim]")
+            if len(dateien) > 10:
+                console.print(f"  [dim]... und {len(dateien) - 10} aeltere[/dim]")
+        return
+
+    if zurueck is not None:
+        console.print(
+            f"Eingespielt wird [bold]{zurueck}[/bold]\n"
+            f"anstelle von [bold]{bestand}[/bold]. Der jetzige Stand wird vorher gesichert."
+        )
+        if not ja and not typer.confirm("Wirklich zurueckspielen?", default=False):
+            console.print("[yellow]Nichts geaendert.[/yellow]")
+            raise typer.Exit(code=1)
+        try:
+            version, vorher = sicherung.zurueckspielen(
+                zurueck,
+                bestand,
+                einst,
+                lauf_aktiv=watchdog.sperre_fuer(config).laeuft(),
+            )
+        except sicherung.SicherungFehlgeschlagen as exc:
+            console.print(f"[red]Nicht zurueckgespielt:[/red] {exc}")
+            raise typer.Exit(code=2) from exc
+        console.print(f"[green]Zurueckgespielt[/green] (Schema {version}).")
+        if vorher is not None:
+            console.print(f"[dim]Der Stand davor: {sicherung.beschreibe(vorher)}[/dim]")
+        return
+
+    try:
+        ergebnis = sicherung.sichere(bestand, einst)
+    except sicherung.SicherungFehlgeschlagen as exc:
+        console.print(f"[red]Nicht gesichert:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+    farbe = "yellow" if ergebnis.fehler else "green"
+    console.print(f"[{farbe}]Gesichert:[/{farbe}] {sicherung.beschreibe(ergebnis)}")
+    console.print(f"[dim]{ergebnis.pfad}[/dim]")
 
 
 @auth_app.command("login")

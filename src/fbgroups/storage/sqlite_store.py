@@ -15,6 +15,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+from fbgroups.datenbank import verbinde
 from fbgroups.marketing.store import SCHEMA as MARKETING_SCHEMA
 from fbgroups.marketing.store import SCHEMA_IDENTITAETEN as MARKETING_IDENTITAETEN_SCHEMA
 from fbgroups.marketing.store import SCHEMA_POSTING as MARKETING_POSTING_SCHEMA
@@ -594,7 +595,7 @@ class SqliteStore:
         self.path = Path(path)
         existed = self.path.exists()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
+        self.conn = verbinde(self.path)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
 

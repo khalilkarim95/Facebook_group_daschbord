@@ -3,6 +3,12 @@
 In Betrieb seit 18.08.2026. Dieses Dokument beschreibt den **Ist-Zustand** und
 die Bedienung. Der frühere Planungsstand ist überholt und ersetzt.
 
+> **Stand 25.09.2026:** fbgroups läuft ganz auf dem Arbeitsrechner
+> (`umzug-lokal.sh`, siehe `CLAUDE.md`, Abschnitt „Betrieb"). Der Dienst auf
+> dem Server ist abgeschaltet; dieses Dokument beschreibt den früheren
+> Serverbetrieb und bleibt als Nachschlagewerk für die Rückfallebene. Das
+> Tracking selbst wird entfernt.
+>
 > **Stand 20.09.2026:** Die Entdeckungsschicht ist entfernt. Was hier über
 > `fbgroups search`, `providers.yaml` und die Suchanbieter steht, gilt nicht
 > mehr — der Dienst selbst (`serve`, `/r/{code}`, `POST /events`, die

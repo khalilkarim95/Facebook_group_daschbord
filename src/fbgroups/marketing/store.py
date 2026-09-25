@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from fbgroups.datenbank import verbinde
 from fbgroups.marketing.kurzcode import kurzcode, lesbarer_code
 from fbgroups.marketing.models import (
     MARKETING_FORTSCHRITT,
@@ -705,7 +706,7 @@ class MarketingStore:
         if vorhanden:
             self._auf_stand_bringen()
 
-        self.conn = sqlite3.connect(self.path)
+        self.conn = verbinde(self.path)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
@@ -736,7 +737,7 @@ class MarketingStore:
         """
         from fbgroups.storage.sqlite_store import SCHEMA_VERSION, SqliteStore
 
-        pruef = sqlite3.connect(self.path)
+        pruef = verbinde(self.path)
         try:
             version = int(pruef.execute("PRAGMA user_version").fetchone()[0])
         finally:

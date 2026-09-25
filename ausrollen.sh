@@ -91,6 +91,19 @@ done
 
 cd "$(dirname "$0")"
 
+# Seit dem Umzug (umzug-lokal.sh, 25.09.2026) laeuft fbgroups auf diesem
+# Rechner. Ein Ausrollen startete den Dienst auf dem Server wieder - mit
+# einem Bestand, der nicht mehr gilt - und lese die Mitgliederlisten dort
+# ein, wo sie niemand mehr sieht.
+if [ -f data/umgezogen.txt ]; then
+    echo "fbgroups laeuft seit dem Umzug auf diesem Rechner:"
+    sed 's/^/  /' data/umgezogen.txt
+    echo
+    echo "Es gibt nichts mehr auszurollen. Mitgliederlisten werden hier eingelesen:"
+    echo "  ./.venv/Scripts/python.exe -m fbgroups.cli import-mitglieder data/from_lokal/<datei>.csv --dry-run"
+    exit 2
+fi
+
 schritt() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
 # Ohne Dateiangabe gilt, was in data/from_lokal liegt. Aufgeloest wird es

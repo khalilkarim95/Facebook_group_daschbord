@@ -139,8 +139,16 @@ def test_bei_laufendem_prozess_wird_nichts_gestartet(sperre: Sperre) -> None:
     assert starter.befehle == []
 
 
-def test_ohne_laufenden_prozess_wird_gestartet(sperre: Sperre) -> None:
-    """**Punkt 4.** Und zwar genau der Befehl von der Kommandozeile."""
+def test_ohne_laufenden_prozess_wird_gestartet(
+    sperre: Sperre, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**Punkt 4.** Und zwar genau der Befehl von der Kommandozeile.
+
+    Der Dienst gilt als erreichbar, ohne dass einer laeuft: Bis zum
+    25.09.2026 bestand der Test nur, solange auf diesem Rechner der
+    SSH-Tunnel auf 8090 offen war - er haengt nicht am Netz dieses Rechners.
+    """
+    monkeypatch.setattr(watchdog, "dienst_erreichbar", lambda *_a, **_k: True)
     starter = _Starter()
 
     blick = watchdog.blicke(sperre, _einst(server="http://127.0.0.1:8090"), starte=starter)
@@ -314,12 +322,35 @@ def test_der_abstand_hat_eine_untergrenze() -> None:
 
 
 def test_die_einstellungen_kommen_aus_der_konfiguration(config) -> None:
-    """Und der Block steht wirklich in ``settings.yaml``."""
+    """Und der Block steht wirklich in ``settings.yaml`` - seit dem Umzug
+    (25.09.2026) fuer den oertlichen Betrieb: kein Dienst, kein Tunnel."""
     gelesen = watchdog.einstellungen(config)
 
     assert gelesen.aktiv is True
     assert gelesen.abstand >= 30
-    assert gelesen.server.startswith("http")
+    assert gelesen.server == ""
+    assert not gelesen.tunnel.nutzbar
+    assert watchdog.baue_befehl(gelesen.server)[-2:] == ["campaign", "automatik"]
+
+
+def test_nebenbei_meldet_sich_nur_wenn_es_etwas_getan_hat(sperre: Sperre) -> None:
+    """Die taegliche Sicherung (25.09.2026) haengt als ``nebenbei`` an der
+    Schleife. Die Schleife weiss nicht, was es tut - sie reicht nur weiter."""
+    antworten = iter([watchdog.Blick("gesichert", "sicherung-...gz"), None, None])
+    gemeldet: list[str] = []
+
+    verlauf = watchdog.wache(
+        sperre,
+        _einst(),
+        starte=_Starter(),
+        schlafe=lambda _s: None,
+        durchgaenge=3,
+        nebenbei=lambda: next(antworten),
+        melde=lambda blick: gemeldet.append(blick.art),
+    )
+
+    assert [b.art for b in verlauf] == ["gesichert", "gestartet", "gestartet", "gestartet"]
+    assert gemeldet == ["gesichert", "gestartet", "gestartet", "gestartet"]
 
 
 def test_ohne_block_gilt_die_vorgabe() -> None:
@@ -509,17 +540,15 @@ def test_ein_laufender_lauf_geht_dem_tunnel_vor(tmp_path) -> None:
 
 
 def test_die_einstellungen_lesen_den_tunnel() -> None:
-    """Aus ``config/settings.yaml``, nicht aus dem Code."""
+    """Aus ``config/settings.yaml``, nicht aus dem Code - und seit dem Umzug
+    (25.09.2026) abgeschaltet: Es gibt keinen Dienst mehr, zu dem er fuehrte."""
     from fbgroups.config import load_config
     from fbgroups.marketing import watchdog
 
     einst = watchdog.einstellungen(load_config())
 
-    assert einst.tunnel.nutzbar, "im Bestand dieses Projekts ist ein Tunnel eingetragen"
-    assert str(einst.tunnel.port) in einst.server, (
-        "der Port des Tunnels muss zu dem gehoeren, den der Waechter prueft - "
-        "sonst macht er eine Tuer auf, hinter der er nicht nachsieht"
-    )
+    assert not einst.tunnel.nutzbar, "der Bestand liegt auf diesem Rechner"
+    assert einst.server == ""
 
 
 def test_der_waechter_kennt_weiterhin_keine_kampagnenlogik_mit_tunnel() -> None:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import atexit
 import csv
+import sqlite3
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -1425,7 +1426,13 @@ def campaign_watchdog(
     Beenden mit Strg+C. Soll er einen Neustart des Rechners ueberleben,
     gehoert er in einen Dienst (systemd, Aufgabenplanung) - das ist eine
     Entscheidung ueber den Rechner und keine dieses Programms.
+
+    **Im oertlichen Betrieb sichert er den Bestand** (seit dem Umzug,
+    25.09.2026): Ist die letzte Sicherung aelter als
+    ``sicherung.abstand_stunden``, legt er vor dem naechsten Blick eine an.
+    Was er meldet, steht zusaetzlich in ``data/logs/waechter-<tag>.log``.
     """
+    from fbgroups import protokoll, sicherung
     from fbgroups.marketing import watchdog
 
     config = _config()
@@ -1434,6 +1441,9 @@ def campaign_watchdog(
         einst = replace(einst, server=server)
     if abstand:
         einst = replace(einst, abstand_sekunden=abstand)
+
+    if not einmal:
+        protokoll.einschalten(protokoll.einstellungen(config), "waechter")
 
     sperre = watchdog.sperre_fuer(config)
 
@@ -1450,7 +1460,26 @@ def campaign_watchdog(
         "tunnel_gestartet": "cyan",
         "dienst_weg": "yellow",
         "abgeschaltet": "yellow",
+        "gesichert": "green",
+        "sicherung_fehlgeschlagen": "red",
     }
+
+    # Die Sicherung gehoert zum oertlichen Betrieb. Im Fernbetrieb liegt der
+    # Bestand auf dem Server, und eine Sicherung der Kopie hier waere eine
+    # Sicherung von etwas, das nicht gilt.
+    sicherungs_einst = sicherung.einstellungen(config)
+    bestand = config.path("sqlite_path")
+
+    def sichern() -> watchdog.Blick | None:
+        try:
+            ergebnis = sicherung.bei_bedarf(bestand, sicherungs_einst)
+        except (sicherung.SicherungFehlgeschlagen, OSError, sqlite3.Error) as exc:
+            # Eine gescheiterte Sicherung haelt den Waechter nicht an - sie
+            # wird gemeldet, und beim naechsten Blick wird es neu versucht.
+            return watchdog.Blick("sicherung_fehlgeschlagen", str(exc))
+        if ergebnis is None:
+            return None
+        return watchdog.Blick("gesichert", sicherung.beschreibe(ergebnis))
 
     # Der Tunnelwart haelt den eigenen ``ssh``-Prozess. Er gehoert dem
     # Waechter und nicht dem Lauf: Ein Lauf, der seinen eigenen Tunnel
@@ -1487,6 +1516,7 @@ def campaign_watchdog(
             melde=melde,
             durchgaenge=1 if einmal else 0,
             tunnel=tunnelwart,
+            nebenbei=None if (einmal or einst.server) else sichern,
         )
     except KeyboardInterrupt:
         # Der laufende Lauf bleibt laufen - der Waechter ist nur sein
@@ -1618,6 +1648,13 @@ def campaign_automatik(
         # aus; ``lies`` faengt den Fall zwar ab (tote Kennung), aber erst
         # nach dem naechsten Blick.
         atexit.register(sperre.gib_frei)
+
+        # Ab hier steht, was im Fenster erscheint, auch in
+        # data/logs/automatik-<tag>.log - seit dem Umzug (25.09.2026) gibt es
+        # kein journalctl mehr, und ein Lauf dauert Tage.
+        from fbgroups import protokoll
+
+        protokoll.einschalten(protokoll.einstellungen(config), "automatik")
 
     # --- Fernbetrieb: der Server haelt den Stand, dieser Rechner den Browser
     #

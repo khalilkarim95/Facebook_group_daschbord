@@ -24,6 +24,11 @@ data/exports/
 data/backups/
 data/backup/
 data/browser_state/
+# Seit dem Umzug (25.09.2026): Tagesprotokolle, die heruntergeladene
+# Server-Kopie und der Vermerk, dass umgezogen ist - alles Laufzeit.
+data/logs/
+data/umzug/
+data/umgezogen.txt
 # Die Sperre eines laufenden `campaign automatik` - Laufzeit, kein Code.
 data/*.lock
 data/*.sqlite
