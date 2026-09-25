@@ -1,9 +1,8 @@
-"""Marketing-Erweiterung: Kampagnen, Zuordnung und Tracking-Codes.
+"""Marketing-Erweiterung: Kampagnen, Zuordnung, Texte und Kommentarautomatik.
 
-Baut auf dem vorhandenen Gruppenbestand auf und aendert an ihm nichts. Es
-werden keine Beitraege veroeffentlicht, keine Nachrichten verschickt und keine
-Gruppen automatisiert - das Modul verwaltet ausschliesslich die eigene
-Vorbereitung und die Zuordnung von Links zu Gruppen.
+Baut auf dem vorhandenen Gruppenbestand auf und aendert an ihm nichts.
+Seit dem 25.09.2026 ohne Tracking: Kein Code und keine Zaehladresse verlaesst
+mehr den Rechner.
 """
 
 from fbgroups.marketing.models import (
@@ -21,14 +20,7 @@ from fbgroups.marketing.store import (
     UnknownCampaignError,
     UnknownGroupError,
 )
-from fbgroups.marketing.tracking import (
-    app_base_url,
-    app_base_url_quelle,
-    code_prefix,
-    ist_lokale_basis,
-    next_tracking_code,
-    tracking_url,
-)
+from fbgroups.marketing.tracking import code_prefix, next_tracking_code
 
 __all__ = [
     "Campaign",
@@ -42,10 +34,6 @@ __all__ = [
     "PermissionStatus",
     "UnknownCampaignError",
     "UnknownGroupError",
-    "app_base_url",
-    "app_base_url_quelle",
     "code_prefix",
-    "ist_lokale_basis",
     "next_tracking_code",
-    "tracking_url",
 ]

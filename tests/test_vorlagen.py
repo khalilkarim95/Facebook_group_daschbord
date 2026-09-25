@@ -120,8 +120,14 @@ def test_der_tracking_platzhalter_bleibt_unersetzt(config: AppConfig) -> None:
 
 def test_fuelle_laesst_die_link_platzhalter_in_ruhe() -> None:
     daten = Personalisierung(zielgruppe="السوريين", stadt="بون")
-    text = fuelle("{zielgruppe} {stadt} {link} {tracking_code} {landing_page}", daten)
-    assert text == "السوريين بون {link} {tracking_code} {landing_page}"
+    text = fuelle("{zielgruppe} {stadt} {link} {landing_page}", daten)
+    assert text == "السوريين بون {link} {landing_page}"
+
+
+def test_den_tracking_code_als_platzhalter_gibt_es_nicht_mehr() -> None:
+    """Seit dem 25.09.2026: Kein Code einer Zuordnung geht in einen Text."""
+    with pytest.raises(UnbekannterPlatzhalter):
+        fuelle("{tracking_code}", Personalisierung(zielgruppe="x", stadt="y"))
 
 
 def test_der_gruppenname_wird_ersetzt() -> None:

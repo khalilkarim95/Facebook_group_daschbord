@@ -14,12 +14,10 @@ und ein gekuerzter Post als Kommentar liest sich wie eingeworfene Werbung.
 ``Texttyp`` waehlt deshalb den Topf, den Prompt und die Spalte - nie wird ein
 Posttext als Kommentar wiederverwendet.
 
-**Der Tracking-Link wird in diesem Modul nicht ersetzt.** ``{link}`` geht
-unveraendert durch und wird erst in ``beitrag.beitragstext`` aufgeloest - der
-einzigen Stelle im Projekt, an der ein Tracking-Code in einen Text kommt. Das
-ist keine Bequemlichkeit, sondern die Voraussetzung dafuer, dass ein
-Sprachmodell den gespeicherten Text ueberarbeiten darf, ohne je einen Code zu
-sehen. Was das Modell nie bekommt, kann es nicht verfaelschen.
+**Der Link wird in diesem Modul nicht ersetzt.** ``{link}`` geht unveraendert
+durch und wird erst beim Lesen aufgeloest (``beitrag.mit_link``) - seit dem
+25.09.2026 zur Startseite der App, ohne Code. Gespeichert wird der Text mit
+``{link}``; aendert sich die Adresse, aendert sich kein gespeicherter Text.
 
 Ersetzt werden ausschliesslich ``{zielgruppe}``, ``{stadt}``, ``{ziel}``,
 ``{gegenstand}`` und ``{gruppe}``: Angaben, die zu *dieser* Gruppe gehoeren,
@@ -69,7 +67,6 @@ ERLAUBTE_PLATZHALTER = frozenset(
         "gegenstand",
         "gruppe",
         "link",
-        "tracking_code",
         "landing_page",
         "datum",
     }
@@ -77,7 +74,7 @@ ERLAUBTE_PLATZHALTER = frozenset(
 
 _PLATZHALTER_MUSTER = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
-# Woran ein durchgerutschter Tracking-Code zu erkennen waere: das Kuerzelmuster
+# Woran ein durchgerutschter Paar-Code zu erkennen waere: das Kuerzelmuster
 # der eigenen Codes. Absichtlich weit gefasst - lieber ein Text zu viel
 # abgewiesen als einer mit erfundenem Code veroeffentlicht.
 _CODE_MUSTER = re.compile(r"\b[A-Z]{2,4}(?:-[A-Z0-9]{2,4}){1,3}-\d{2,4}\b")
@@ -189,7 +186,7 @@ def pruefe_platzhalter(text: str, *, texttyp: Texttyp = Texttyp.POST) -> str:
     if treffer := _CODE_MUSTER.search(ohne_platzhalter):
         raise UngueltigerText(
             f"Codeaehnliche Zeichenfolge im Text: {treffer.group(0)} - "
-            f"Tracking-Codes werden nicht geschrieben, sondern eingesetzt."
+            f"der Code einer Zuordnung gehoert in keinen Text."
         )
     return text
 
@@ -493,10 +490,8 @@ def unbekannte_platzhalter(text: str) -> list[str]:
 def fuelle(text: str, daten: Personalisierung) -> str:
     """Setzt die Angaben der Gruppe ein - und **nur** diese.
 
-    ``{link}``, ``{tracking_code}``, ``{landing_page}`` und ``{datum}`` bleiben
-    stehen. Sie gehoeren ``beitrag.mit_link``, und dass sie hier durchgehen,
-    ist der Grund, warum der gespeicherte Text einem Sprachmodell vorgelegt
-    werden darf.
+    ``{link}``, ``{landing_page}`` und ``{datum}`` bleiben stehen. Sie
+    gehoeren ``beitrag.mit_link`` und werden erst beim Lesen eingesetzt.
 
     Ein Platzhalter, den weder dieses Modul noch ``beitragstext`` kennt, wirft
     ``UnbekannterPlatzhalter``. Er bliebe sonst in geschweiften Klammern im

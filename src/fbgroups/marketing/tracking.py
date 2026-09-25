@@ -1,6 +1,6 @@
-"""Tracking-Codes und Tracking-Links.
+"""Der Paar-Code einer Zuordnung - frueher der Tracking-Code.
 
-Aufbau eines Codes: ``FB-SYR-BER-001``
+Aufbau: ``FB-SYR-BER-001``
 
 ===========  ==================================================
 ``FB``       Kanal - hier immer Facebook
@@ -9,25 +9,22 @@ Aufbau eines Codes: ``FB-SYR-BER-001``
 ``001``      laufende Nummer innerhalb der Kampagne je Kuerzel-Paar
 ===========  ==================================================
 
-Die Kuerzel stehen nicht im Code: Sie entstehen aus den ersten drei Buchstaben
-dessen, was an der Gruppe steht. Bis zum 20.09.2026 kam zuerst ein optionales
-Feld ``code`` aus ``audiences.yaml``/``cities.yaml`` zum Zug; beide Dateien
-sind mit der Entdeckungsschicht entfernt, und damit ist die Angabe an der
-Gruppe die einzige Quelle. Wer ein bestimmtes Kuerzel will, schreibt den Tag
-bzw. den Stadtnamen entsprechend - eine zweite Tabelle dafuer waere eine
-zweite Wahrheit ueber dieselbe Gruppe.
+**Seit dem 25.09.2026 geht der Code nirgends mehr hinaus.** Bis dahin stand
+er - als Kurzcode verkleidet - in jedem Tracking-Link (``go.b-tarikak.de/r/
+...``), und jeder Klick wurde unter ihm gezaehlt. Das Tracking ist entfernt;
+der Code ist geblieben, weil er in der Datenbank die Zuordnung aus Kampagne
+und Gruppe kennzeichnet (``campaign_groups.tracking_code``, eindeutig, nie
+leer) und das Versuchsprotokoll auf ihn verweist. Daher auch der Spaltenname:
+Migrationen sind additiv, umbenannt wird nichts.
 
-Der fertige Code ist unveraenderlich. Er steht in veroeffentlichten Beitraegen;
-eine spaetere Neuberechnung wuerde alte Links auf eine andere Gruppe zeigen
-lassen. ``next_tracking_code`` erzeugt deshalb nur *neue* Codes - vergebene
-liest der Aufrufer aus dem Bestand.
+Die Kuerzel entstehen aus den ersten drei Buchstaben dessen, was an der
+Gruppe steht. Ein vergebener Code bleibt, wie er ist - auch eine frei
+gewordene Nummer wird nicht wieder ausgegeben (``CodeAllocator``).
 """
 
 from __future__ import annotations
 
-import os
 import re
-from urllib.parse import quote, urlparse
 
 from fbgroups.config import AppConfig
 from fbgroups.models import Group
@@ -149,66 +146,12 @@ class CodeAllocator:
 def slug(text: str) -> str:
     """Aus "Batreeq Syrian Germany" wird "batreeq-syrian-germany".
 
-    Nur ASCII: Die Kennung steht spaeter im Tracking-Code und in URLs. Ein
-    rein arabischer Name ergibt hier nichts Brauchbares - dann muss die
-    Kennung von Hand kommen, und der Aufrufer prueft das.
+    Nur ASCII: Die Kennung steht in Adressen der Uebersicht und auf der
+    Kommandozeile. Ein rein arabischer Name ergibt hier nichts Brauchbares -
+    dann muss die Kennung von Hand kommen, und der Aufrufer prueft das.
     """
     klein = re.sub(r"[^a-z0-9]+", "-", text.lower().strip())
     return klein.strip("-")
-
-
-def app_base_url(config: AppConfig) -> str:
-    """Basis-URL der Zielanwendung.
-
-    Reihenfolge: Umgebungsvariable ``APP_BASE_URL`` vor
-    ``marketing.app_base_url`` aus ``config/settings.yaml``. So laesst sich
-    dieselbe Konfiguration lokal und auf der echten Domain benutzen, ohne die
-    gespeicherten Codes anzufassen - die Codes stehen fest, nur ihr Vorspann
-    aendert sich.
-    """
-    aus_umgebung = os.environ.get("APP_BASE_URL", "").strip()
-    if aus_umgebung:
-        return aus_umgebung.rstrip("/")
-    return str(config.get("marketing", "app_base_url", default="")).strip().rstrip("/")
-
-
-def app_base_url_quelle(config: AppConfig) -> str:
-    """Woher die Basis-URL stammt - fuer die Anzeige, nicht fuer die Auswahl.
-
-    Ein Link, der auf ``localhost`` zeigt, sieht aus wie jeder andere; in einem
-    Facebook-Beitrag fuehrt er aber jeden Leser auf dessen eigenen Rechner.
-    Deshalb soll ``campaign show`` nicht nur den Wert nennen, sondern auch,
-    welche Quelle ihn gesetzt hat.
-    """
-    if os.environ.get("APP_BASE_URL", "").strip():
-        return "Umgebung (APP_BASE_URL)"
-    if str(config.get("marketing", "app_base_url", default="")).strip():
-        return "config/settings.yaml"
-    return "nicht gesetzt"
-
-
-def ist_lokale_basis(basis_url: str) -> bool:
-    """Zeigt die Basis-URL auf den eigenen Rechner?
-
-    Rein zur Warnung. Der lokale Betrieb bleibt ausdruecklich moeglich - er ist
-    fuer die Entwicklung genau richtig, nur eben nicht fuer veroeffentlichte
-    Links.
-    """
-    rechner = (urlparse(basis_url).hostname or "").lower()
-    return rechner in {"localhost", "127.0.0.1", "::1", "0.0.0.0"} or rechner.endswith(".local")
-
-
-def tracking_url(tracking_code: str, config: AppConfig) -> str:
-    """Vollstaendiger Link: ``{APP_BASE_URL}/r/{code}``.
-
-    Ohne hinterlegte Basis-URL bleibt der Link leer statt zu raten - ein
-    halber Link waere in einem Beitrag schlimmer als gar keiner.
-    """
-    basis = app_base_url(config)
-    if not basis or not tracking_code:
-        return ""
-    pfad = str(config.get("marketing", "tracking", "path", default="/r")).strip("/")
-    return f"{basis}/{pfad}/{quote(tracking_code, safe='')}"
 
 
 def ist_gueltiger_code(tracking_code: str) -> bool:

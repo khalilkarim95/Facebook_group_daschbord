@@ -19,22 +19,18 @@ haetten dort keinen sicheren Platz.
 from __future__ import annotations
 
 import json
-import secrets
 import sqlite3
 from collections.abc import Iterable
-from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from fbgroups.datenbank import verbinde
-from fbgroups.marketing.kurzcode import kurzcode, lesbarer_code
 from fbgroups.marketing.models import (
     MARKETING_FORTSCHRITT,
     POST_STATUS_ZU_JOB,
     Campaign,
     CampaignGroup,
     CampaignStatus,
-    EventType,
     GroupMarketing,
     JobStatus,
     KampagnenLaufStatus,
@@ -43,50 +39,17 @@ from fbgroups.marketing.models import (
     PostStatus,
     PostVersuch,
     QueueZustand,
-    Referral,
-    ReferralStatus,
-    Reward,
-    RewardStatus,
     TextQuelle,
     Texttyp,
     Textvorschlag,
-    TrackingEvent,
     VorschlagStatus,
 )
 from fbgroups.marketing.queue import darf_arbeiten, pruefe_uebergang, zustand_schluessel
 
-#: Das Geheimnis der Kurzcodes - neben dem Salt der Besucherpruefsumme im
-#: selben Speicher. Beide sind Eigenschaften **dieser** Datenbank: Wer die
-#: Datei umzieht, nimmt sie mit, und die Adressen bleiben dieselben.
-_KURZCODE_SALT = "kurzcode_salt"
-#: Der Vorspann der oeffentlichen Adresse (``https://b-tarikak.de/t``). Steht
-#: im Speicher und nicht nur in der Konfiguration, weil ``vergib_kurzcodes``
-#: keine Konfiguration kennt; geschrieben wird er vom Dienst beim Start und
-#: von der Kommandozeile (``merke_link_basis``).
-_LINK_BASIS = "link_basis"
 #: Wie lange ein Beitrag, unter dem ein Kommentar technisch nicht ging, nicht
 #: wieder angefasst wird (24.09.2026).
 SPERRE_GESCHEITERT_STUNDEN = 24
 
-
-@dataclass(frozen=True)
-class Aufloesung:
-    """Was hinter einer Weiterleitungsadresse steht.
-
-    Vier Angaben statt eines Datensatzes, weil drei davon aus dem Datensatz
-    allein nicht hervorgehen: **welcher** der beiden Codes gemeint war, wie er
-    nach aussen heisst und wohin er fuehrt. Ohne sie muesste jeder Aufrufer
-    die Zuordnung selbst nachrechnen - und zwei Rechnungen koennen
-    auseinanderlaufen, mit Klicks auf der falschen Gruppe.
-    """
-
-    link: CampaignGroup
-    #: Der Code, unter dem gezaehlt und ausgewertet wird.
-    interner_code: str
-    #: Der Code, der in einem Beitrag stehen darf.
-    oeffentlicher_code: str
-    #: ``store`` oder ``browser``.
-    ziel: str
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -403,9 +366,11 @@ CREATE TABLE IF NOT EXISTS beitrag_bezuege (
 );
 """
 
-# Zweiter Teil: Ereignisse, Empfehlungen, Praemien. Getrennt gehalten, weil er
-# spaeter dazukam - die Migrationsliste in storage/sqlite_store.py fuehrt beide
-# Schritte einzeln auf, damit eine aeltere Datei genau das Fehlende nachholt.
+# Zweiter Teil: Ereignisse, Empfehlungen, Praemien. **Stillgelegt seit dem
+# 25.09.2026** - das Tracking ist entfernt, niemand schreibt oder liest diese
+# Tabellen mehr. Sie bleiben, weil Migrationen ausschliesslich additiv sind;
+# die Migrationsliste in storage/sqlite_store.py fuehrt die Schritte weiter
+# einzeln auf, damit eine aeltere Datei dasselbe Schema bekommt.
 SCHEMA_TRACKING = """
 CREATE TABLE IF NOT EXISTS tracking_events (
     event_id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -584,6 +549,7 @@ CREATE INDEX IF NOT EXISTS idx_texte_paar
 """
 
 # Dritter Teil: der Uebergang vom anonymen Besucher zum angemeldeten Benutzer.
+# Stillgelegt seit dem 25.09.2026 wie der zweite Teil.
 #
 # Ein Mensch traegt auf dem Weg durch den Trichter nacheinander verschiedene
 # Kennungen: erst die des Browsers, den die Web-App sich selbst vergibt
@@ -846,11 +812,8 @@ class MarketingStore:
         Getrennt vom Loeschen, damit Vorschau und Ernstfall dieselbe Zahl
         nennen - dieselbe Ueberlegung wie bei ``zaehle_zuruecksetzbar``.
 
-        Der wichtigste Wert ist ``veroeffentlichte_codes``: So viele
-        Tracking-Codes stehen in Beitraegen, die jemand wirklich abgesetzt hat.
-        Nach dem Loeschen antwortet ``/r/{code}`` fuer sie mit 404 - der Link
-        im Facebook-Beitrag fuehrt ins Leere, und zurueckholen laesst sich der
-        Beitrag nicht.
+        ``veroeffentlichte_codes`` nennt die Zuordnungen, zu denen schon ein
+        Beitrag hinausging - deren Protokoll ginge mit.
         """
 
         def eins(sql: str) -> int:
@@ -866,27 +829,14 @@ class MarketingStore:
                 "WHERE campaign_id = ? AND posted_at IS NOT NULL"
             ),
             "versuche": eins("SELECT COUNT(*) FROM post_versuche WHERE campaign_id = ?"),
-            # Bleiben stehen - sie haengen an keinem Fremdschluessel. Die Zahlen
-            # einer Auswertung von gestern aendern sich durch das Loeschen also
-            # nicht; nur der Weg vom Code zurueck zur Gruppe ist danach weg.
-            "ereignisse_bleiben": eins(
-                "SELECT COUNT(*) FROM tracking_events WHERE campaign_id = ?"
-            ),
         }
 
     def delete_campaign(self, campaign_id: str) -> int:
         """Loescht eine Kampagne - **samt ihrer Zuordnungen und Codes**.
 
-        ``ON DELETE CASCADE`` an ``campaign_groups`` nimmt jeden Tracking-Code
-        dieser Kampagne mit. Steht einer davon in einem veroeffentlichten
-        Beitrag, fuehrt der Link dort danach ins Leere (404). Der Aufrufer soll
-        deshalb vorher ``was_geht_verloren`` zeigen; die Zahl der
-        veroeffentlichten Codes ist die einzige, die sich nicht
-        wiederherstellen laesst.
-
-        Die Ereignisse bleiben: Sie haengen an keinem Fremdschluessel. Eine
-        Auswertung von gestern behaelt damit ihre Zahlen - was fehlt, ist der
-        Weg vom Code zurueck zur Gruppe.
+        ``ON DELETE CASCADE`` an ``campaign_groups`` nimmt jede Zuordnung
+        dieser Kampagne mit, samt Texten. Der Aufrufer soll deshalb vorher
+        ``was_geht_verloren`` zeigen.
         """
         # SQLite prueft Fremdschluessel nur mit eingeschaltetem PRAGMA. Ohne
         # das bliebe campaign_groups stehen, und die Codes waeren Waisen: nicht
@@ -950,13 +900,6 @@ class MarketingStore:
             ),
         )
         self.conn.commit()
-        # Der oeffentliche Deckname entsteht mit der Zuordnung. Das ist kein
-        # Code auf Vorrat: Der Tracking-Code, dessen Deckname er ist, steht in
-        # derselben Zeile und ist damit bereits endgueltig. Wer ihn erst beim
-        # ersten Beitrag vergaebe, haette dieselbe Adresse nur spaeter - und
-        # eine Gruppe, die durch eine vergessene Stelle rutscht, bekaeme
-        # wieder die lange.
-        self.vergib_kurzcodes(link.campaign_id, link.group_id)
         return True
 
     def assigned_group_ids(self, campaign_id: str) -> set[str]:
@@ -1023,12 +966,6 @@ class MarketingStore:
                     for link in links
                 ],
             )
-        # Die Decknamen zu den eben entstandenen Zuordnungen. Ausserhalb der
-        # Transaktion und ueber die Kampagnen, die gerade angefasst wurden:
-        # Was schon einen hat, wird uebergangen, also kostet der Aufruf nur
-        # fuer die neuen Zeilen etwas.
-        for campaign_id in campaign_ids:
-            self.kurzcodes_nachtragen(campaign_id)
         return int(cursor.rowcount or 0)
 
     def campaigns_mit_auto_assign(self) -> list[Campaign]:
@@ -1047,41 +984,6 @@ class MarketingStore:
             "ORDER BY created_at"
         ).fetchall()
         return [self._row_to_campaign(row) for row in rows]
-
-    def refresh_tracking_urls(self, campaign_id: str, basis_url_bauer) -> int:
-        """Schreibt die Links neu, ohne die Codes anzufassen.
-
-        Noetig nach einem Wechsel der Basis-URL (localhost -> echte Domain).
-        Der Code bleibt, nur sein Vorspann aendert sich.
-        """
-        geaendert = 0
-        for link in self.links_for_campaign(campaign_id):
-            # Alle vier Adressen desselben Paares ziehen mit - die beiden
-            # inneren und die beiden oeffentlichen. Nur die Haelfte
-            # umzustellen hiesse, dass ein Beitrag je nach Alter auf zwei
-            # verschiedene Dienste zeigt, und gemerkt haette man es an einer
-            # Zahl, die nicht mehr steigt. Die **Codes** bleiben, wie sie
-            # sind; es wechselt nur ihr Vorspann.
-            for spalte, code, alt_url in (
-                ("tracking_url", link.tracking_code, link.tracking_url),
-                ("tracking_url_browser", link.tracking_code_browser, link.tracking_url_browser),
-                ("public_url", link.public_code, link.public_url),
-                ("public_url_browser", link.public_code_browser, link.public_url_browser),
-            ):
-                if not code:
-                    continue
-                neu = basis_url_bauer(code)
-                if neu == alt_url:
-                    continue
-                self.conn.execute(
-                    f"UPDATE campaign_groups SET {spalte} = ? "  # noqa: S608
-                    "WHERE campaign_id = ? AND group_id = ?",
-                    (neu, link.campaign_id, link.group_id),
-                )
-                if spalte == "tracking_url":
-                    geaendert += 1
-        self.conn.commit()
-        return geaendert
 
     def links_for_campaign(self, campaign_id: str) -> list[CampaignGroup]:
         rows = self.conn.execute(
@@ -1331,9 +1233,6 @@ class MarketingStore:
             "versuche": eins(
                 "SELECT COUNT(*) FROM post_versuche WHERE campaign_id = ?", campaign_id
             ),
-            "ereignisse": eins(
-                "SELECT COUNT(*) FROM tracking_events WHERE campaign_id = ?", campaign_id
-            ),
             "fassungen": eins(
                 "SELECT COUNT(*) FROM campaign_group_texte WHERE campaign_id = ? "  # noqa: S608
                 f"AND {self._AUSGANG_JE_FASSUNG}",
@@ -1346,16 +1245,11 @@ class MarketingStore:
             ),
         }
 
-    def setze_kampagne_zurueck(
-        self, campaign_id: str, *, auch_ereignisse: bool = False
-    ) -> dict[str, int]:
+    def setze_kampagne_zurueck(self, campaign_id: str) -> dict[str, int]:
         """Setzt den Beitragsstand einer Kampagne auf Anfang. Fuer Testlaeufe.
 
-        **Tracking-Code und Tracking-URL bleiben unangetastet.** Das ist die
-        wichtigste Zusage dieser Methode: Ein vergebener Code steht
-        moeglicherweise in einem veroeffentlichten Beitrag, und ein Klick
-        darauf muss weiterhin ankommen. Zurueckgesetzt wird der *Stand*, nie
-        die Zuordnung.
+        **Die Zuordnung bleibt unangetastet**, samt Code. Zurueckgesetzt wird
+        der *Stand*, nie die Zuordnung.
 
         Ebenso unberuehrt bleiben ``groups`` und ``group_marketing``: Die
         Gruppen und der Kooperationsstand ("wir sind dort Mitglied") sind
@@ -1380,12 +1274,6 @@ class MarketingStore:
         Urteil "diese Gruppe gibt nichts mehr her" **nach** einem Lauf; nach
         einem Reset gibt es diesen Lauf nicht mehr, und die Gruppe waere sonst
         fuer immer uebersprungen, ohne dass etwas gegen sie spraeche.
-
-        ``auch_ereignisse`` loescht zusaetzlich die gemessene Resonanz dieser
-        Kampagne - Klicks, Registrierungen, Downloads. Das ist die einzige
-        Angabe, die sich **nicht** wiederherstellen laesst: Sie ist von aussen
-        entstanden und kommt nicht noch einmal. Deshalb ein eigener Schalter
-        und nicht Teil des Normalfalls.
         """
         zahlen = self.zaehle_zuruecksetzbar(campaign_id)
 
@@ -1429,18 +1317,7 @@ class MarketingStore:
         self.conn.execute("DELETE FROM post_versuche WHERE campaign_id = ?", (campaign_id,))
         self.set_queue_zustand(campaign_id, QueueZustand.LAUFEND)
 
-        if auch_ereignisse:
-            self.conn.execute(
-                "DELETE FROM tracking_events WHERE campaign_id = ?", (campaign_id,)
-            )
-        else:
-            zahlen["ereignisse"] = 0
-
-        self.audit(
-            "kampagne_zurueckgesetzt",
-            campaign_id,
-            f"ereignisse={'ja' if auch_ereignisse else 'nein'}",
-        )
+        self.audit("kampagne_zurueckgesetzt", campaign_id)
         self.conn.commit()
         return zahlen
 
@@ -1529,7 +1406,6 @@ class MarketingStore:
         rows = self.conn.execute("SELECT * FROM group_marketing").fetchall()
         return {row["group_id"]: self._row_to_marketing(row) for row in rows}
 
-    # -- Ereignisse -----------------------------------------------------
     # -- Beitrags-Warteschlange ------------------------------------------
     def set_job_status(
         self,
@@ -2542,8 +2418,6 @@ class MarketingStore:
             ],
         )
         self.conn.commit()
-        for cid in neu:
-            self.kurzcodes_nachtragen(cid)
         return neu
 
     def lauf_kampagnen(self, lauf_id: int) -> list[sqlite3.Row]:
@@ -3093,602 +2967,6 @@ class MarketingStore:
             )
         )
 
-    def vergib_browsercode(self, campaign_id: str, group_id: str, basis_url: str) -> str:
-        """Legt den Browser-Code dieses Paares an - einmal und endgueltig.
-
-        Er leitet sich vom Store-Code ab (``FB-SYR-BER-010`` →
-        ``FB-SYR-BER-010-B``). Zwei Gruende gegen eine eigene Nummernreihe:
-
-        * Man sieht der Kennung an, zu welchem Paar sie gehoert. Bei einem
-          Klick in einem Protokoll ist das die erste Frage.
-        * Die Reihe des ``CodeAllocator`` bleibt unberuehrt. Zwei Reihen fuer
-          dasselbe Paar koennten auseinanderlaufen, und die Nummer ist bereits
-          an ``first_seen_at`` gebunden.
-
-        Ein vorhandener Code wird **nie** ersetzt - er steht moeglicherweise
-        schon in einem veroeffentlichten Beitrag.
-        """
-        link = self.link_for(campaign_id, group_id)
-        if link is None:
-            return ""
-        if link.tracking_code_browser:
-            return link.tracking_code_browser
-
-        code = f"{link.tracking_code}-B"
-        url = f"{basis_url.rstrip('/')}/r/{code}"
-        self.conn.execute(
-            "UPDATE campaign_groups SET tracking_code_browser = ?, tracking_url_browser = ? "
-            "WHERE campaign_id = ? AND group_id = ? AND tracking_code_browser IS NULL",
-            (code, url, campaign_id, group_id),
-        )
-        self.conn.commit()
-        # Der Browser-Code entsteht **hier** und damit auch sein Deckname.
-        # Getrennt vergeben hiesse: Der erste Beitrag mit Browser-Ziel traegt
-        # die lange Adresse, jeder spaetere die kurze - dieselbe Gruppe mit
-        # zwei Gesichtern, und niemand koennte sagen, warum.
-        self.vergib_kurzcodes(campaign_id, group_id)
-        return code
-
-    def aufloesen(self, code: str) -> Aufloesung | None:
-        """Loest einen Code auf - den inneren wie den oeffentlichen.
-
-        **Die eine Stelle, an der aus einer Adresse ein Datensatz wird.** Vier
-        Spalten kommen in Frage: die beiden Tracking-Codes (Store und Browser)
-        und ihre beiden Kurzcodes. Jeder von ihnen kann in einem
-        veroeffentlichten Beitrag stehen, und keiner darf ins Leere laufen -
-        auch der aelteste nicht, denn zurueckholen laesst sich ein Beitrag
-        nicht.
-
-        Zurueck kommt immer der **innere** Code. Das ist der Punkt der
-        Uebung: Gezaehlt, gespeichert und ausgewertet wird unter ihm, ganz
-        gleich, welcher Deckname in der Adresse stand. Nur so bleiben die
-        Auswertungen dieselben wie vor den Kurzcodes.
-        """
-        row = self.conn.execute(
-            "SELECT * FROM campaign_groups WHERE tracking_code = ? "
-            "OR tracking_code_browser = ? OR public_code = ? OR public_code_browser = ?",
-            (code, code, code, code),
-        ).fetchone()
-        if row is None:
-            return None
-
-        # Die Browser-Spalten zuerst: Ein nicht vergebener Browser-Code ist
-        # NULL und trifft keinen Vergleich, ein vergebener trifft genau einen.
-        browser = code in (row["tracking_code_browser"], row["public_code_browser"])
-        return Aufloesung(
-            link=self._row_to_link(row),
-            interner_code=(row["tracking_code_browser"] if browser else row["tracking_code"]),
-            oeffentlicher_code=(
-                (row["public_code_browser"] if browser else row["public_code"])
-                or (row["tracking_code_browser"] if browser else row["tracking_code"])
-            ),
-            ziel="browser" if browser else "store",
-        )
-
-    def resolve_code(self, tracking_code: str) -> CampaignGroup | None:
-        """Findet Kampagne und Gruppe zu einem Code. Siehe ``aufloesen``."""
-        treffer = self.aufloesen(tracking_code)
-        return treffer.link if treffer else None
-
-    def interner_code(self, code: str) -> str:
-        """Der gespeicherte Tracking-Code zu einem beliebigen Code.
-
-        Der Rueckfall auf die Eingabe ist bewusst: Ein unbekannter Code ist
-        keine Umbenennung, und ihn hier still zu leeren verschoebe die
-        Entscheidung "unbekannt - was nun?" an eine Stelle, die sie nicht
-        trifft. Wer nachschlagen will, ob es ihn gibt, nimmt ``aufloesen``.
-        """
-        treffer = self.aufloesen(code)
-        return treffer.interner_code if treffer else code
-
-    def ziel_des_codes(self, tracking_code: str) -> str:
-        """``browser`` oder ``store`` - woran der Code haengt.
-
-        Die Auskunft steht am **Code**, nicht an der Kampagne. Vorher
-        entschied ``campaign.ziel`` fuer alle Codes gemeinsam; damit fuehrten
-        am 31.08.2026 saemtliche Links zum Play Store, und der Browser kam nie
-        vor.
-        """
-        treffer = self.aufloesen(tracking_code)
-        return treffer.ziel if treffer else ""
-
-    def kurzcode_salt(self) -> str:
-        """Das Geheimnis, aus dem die Kurzcodes abgeleitet werden.
-
-        Entsteht beim ersten Bedarf und bleibt dann stehen - wie der Salt der
-        Besucherpruefsumme. Es ist kein Passwort; es verhindert das Gegenteil
-        der Kurzcodes: Ohne Geheimnis koennte jeder, der einen Beitrag sieht,
-        die Adressen der Nachbargruppen ausrechnen und damit den Aufbau der
-        Kampagne zurueckgewinnen.
-        """
-        salt = self.meta(_KURZCODE_SALT)
-        if not salt:
-            salt = secrets.token_hex(16)
-            self.set_meta(_KURZCODE_SALT, salt)
-        return salt
-
-    def merke_link_basis(self, basis: str) -> None:
-        """Haelt den Vorspann der lesbaren Adressen fest (``marketing.link_basis``).
-
-        Leer heisst: keine lesbaren Namen, es bleibt beim Kurzcode unter
-        ``/r/``. Geschrieben nur, wenn sich etwas aendert - der Dienst ruft
-        das bei jedem Start.
-        """
-        basis = (basis or "").strip().rstrip("/")
-        if (self.meta(_LINK_BASIS) or "") != basis:
-            self.set_meta(_LINK_BASIS, basis)
-
-    def link_basis(self) -> str:
-        return (self.meta(_LINK_BASIS) or "").strip().rstrip("/")
-
-    def vergib_kurzcodes(self, campaign_id: str, group_id: str) -> CampaignGroup | None:
-        """Legt die oeffentlichen Kurzcodes dieses Paares an - einmal, endgueltig.
-
-        Vergeben wird fuer **jeden vorhandenen** Tracking-Code des Paares:
-        immer den Store-Code, und den Browser-Code, sobald es ihn gibt. Einer
-        auf Vorrat entsteht nicht - dieselbe Regel wie bei
-        ``vergib_browsercode``, und aus demselben Grund: Jede vergebene
-        Adresse kann ab dem naechsten Beitrag oeffentlich sein.
-
-        Ein vorhandener Kurzcode wird **nie** ersetzt. Er steht
-        moeglicherweise schon in einer Gruppe, und ein Klick darauf muss
-        ankommen.
-
-        Der Vorspann kommt aus der bereits gespeicherten Tracking-Adresse und
-        nicht aus der Konfiguration: Beide Adressen desselben Paares sollen
-        auf denselben Dienst zeigen. Stuende hier ``app_base_url``, zeigte die
-        kurze Adresse nach einem Domainwechsel woandershin als die lange, und
-        gemerkt haette man es an einer Zahl, die nicht mehr steigt.
-        """
-        link = self.link_for(campaign_id, group_id)
-        if link is None:
-            return None
-
-        salt = self.kurzcode_salt()
-        # **Lesbare Namen unter eigener Adresse** (23.09.2026):
-        # ``https://b-tarikak.de/t/safar-sham-12`` statt
-        # ``go.b-tarikak.de/r/wr4s9xw``. Nur fuer neue Decknamen - ein
-        # vergebener bleibt, wie er ist.
-        lesbar_basis = self.link_basis()
-        for spalte, url_spalte, code, alt_url, vorhanden in (
-            ("public_code", "public_url", link.tracking_code, link.tracking_url, link.public_code),
-            (
-                "public_code_browser",
-                "public_url_browser",
-                link.tracking_code_browser,
-                link.tracking_url_browser,
-                link.public_code_browser,
-            ),
-        ):
-            if not code or vorhanden:
-                continue
-            if lesbar_basis:
-                kurz = self._freier_kurzcode(code, salt, lesbar=True)
-                url = f"{lesbar_basis}/{kurz}"
-            else:
-                kurz = self._freier_kurzcode(code, salt)
-                basis = alt_url.rsplit("/r/", 1)[0] if "/r/" in alt_url else ""
-                url = f"{basis}/r/{kurz}" if basis else ""
-            self.conn.execute(
-                f"UPDATE campaign_groups SET {spalte} = ?, {url_spalte} = ? "  # noqa: S608
-                f"WHERE campaign_id = ? AND group_id = ? AND {spalte} IS NULL",
-                (kurz, url, campaign_id, group_id),
-            )
-        self.conn.commit()
-        return self.link_for(campaign_id, group_id)
-
-    def _freier_kurzcode(self, tracking_code: str, salt: str, *, lesbar: bool = False) -> str:
-        """Der abgeleitete Kurzcode - und bei einem Zusammenstoss der naechste.
-
-        Siebenstellig aus 29 Zeichen: Ein Zusammenstoss ist bei dreihundert
-        Gruppen nicht zu erwarten. Behandelt wird er trotzdem, denn zwei
-        Gruppen auf derselben Adresse schrieben Klicks der falschen Gruppe
-        gut - und das faellt in keiner Auswertung auf.
-        """
-        for runde in range(50):
-            kandidat = (
-                lesbarer_code(tracking_code, salt, runde=runde)
-                if lesbar
-                else kurzcode(tracking_code, salt, runde=runde)
-            )
-            belegt = self.conn.execute(
-                "SELECT 1 FROM campaign_groups "
-                "WHERE public_code = ? OR public_code_browser = ? "
-                "OR tracking_code = ? OR tracking_code_browser = ?",
-                (kandidat, kandidat, kandidat, kandidat),
-            ).fetchone()
-            if belegt is None:
-                return kandidat
-        raise RuntimeError(f"Kein freier Kurzcode fuer {tracking_code} gefunden.")
-
-    def lesbar_machen(self, campaign_id: str = "") -> int:
-        """Gibt den **noch nicht veroeffentlichten** Paaren einen lesbaren Namen.
-
-        Nur wo nichts hinausgegangen ist - weder der Beitrag noch eine
-        Kommentarfassung: Dort kann der alte Kurzcode in keinem Beitrag
-        stehen, und ihn zu ersetzen kostet keinen Klick. Ein Paar mit
-        veroeffentlichtem Text behaelt seine Adresse, denn sie steht in einer
-        Gruppe.
-
-        Ohne ``link_basis`` geschieht nichts. Returns: wie viele Paare.
-        """
-        if not self.link_basis():
-            return 0
-        bedingung = (
-            "cg.post_status <> 'veroeffentlicht' AND NOT EXISTS ("
-            "SELECT 1 FROM campaign_group_texte t WHERE t.campaign_id = cg.campaign_id "
-            "AND t.group_id = cg.group_id AND t.status = 'veroeffentlicht')"
-        )
-        werte: tuple = ()
-        if campaign_id:
-            bedingung += " AND cg.campaign_id = ?"
-            werte = (campaign_id,)
-        paare = self.conn.execute(
-            f"SELECT cg.campaign_id, cg.group_id FROM campaign_groups cg WHERE {bedingung}",  # noqa: S608
-            werte,
-        ).fetchall()
-        basis = self.link_basis()
-        anzahl = 0
-        for zeile in paare:
-            link = self.link_for(zeile["campaign_id"], zeile["group_id"])
-            if link is None:
-                continue
-            if link.public_url.startswith(basis + "/") and (
-                not link.tracking_code_browser
-                or link.public_url_browser.startswith(basis + "/")
-            ):
-                continue
-            self.conn.execute(
-                "UPDATE campaign_groups SET public_code = NULL, public_url = '', "
-                "public_code_browser = NULL, public_url_browser = '' "
-                "WHERE campaign_id = ? AND group_id = ?",
-                (zeile["campaign_id"], zeile["group_id"]),
-            )
-            self.conn.commit()
-            self.vergib_kurzcodes(zeile["campaign_id"], zeile["group_id"])
-            anzahl += 1
-        return anzahl
-
-    def kurzcodes_nachtragen(self, campaign_id: str = "") -> int:
-        """Traegt fehlende Kurzcodes nach. Returns: fuer wie viele Paare.
-
-        Der Weg fuer den Bestand: Die Migration legt nur die Spalten an, die
-        Codes entstehen hier. Wiederholbar und ohne Wirkung auf vorhandene -
-        wer ihn zweimal laufen laesst, bekommt beim zweiten Mal eine Null.
-        """
-        fehlt = (
-            "(public_code IS NULL OR (tracking_code_browser IS NOT NULL "
-            "AND public_code_browser IS NULL))"
-        )
-        if campaign_id:
-            paare = self.conn.execute(
-                "SELECT campaign_id, group_id FROM campaign_groups "  # noqa: S608
-                f"WHERE campaign_id = ? AND {fehlt}",
-                (campaign_id,),
-            ).fetchall()
-        else:
-            paare = self.conn.execute(
-                f"SELECT campaign_id, group_id FROM campaign_groups WHERE {fehlt}"  # noqa: S608
-            ).fetchall()
-        for zeile in paare:
-            self.vergib_kurzcodes(zeile["campaign_id"], zeile["group_id"])
-        return len(paare)
-
-    def record_event(self, event: TrackingEvent) -> int:
-        """Schreibt ein Ereignis und liefert seine Kennung."""
-        cursor = self.conn.execute(
-            """
-            INSERT INTO tracking_events (
-                tracking_code, campaign_id, group_id, user_ref,
-                event_type, occurred_at, visitor_hash, source
-            ) VALUES (?,?,?,?,?,?,?,?)
-            """,
-            (
-                event.tracking_code,
-                event.campaign_id,
-                event.group_id,
-                event.user_ref,
-                event.event_type.value,
-                _iso(event.occurred_at),
-                event.visitor_hash,
-                event.source,
-            ),
-        )
-        self.conn.commit()
-        return int(cursor.lastrowid or 0)
-
-    def klick_bereits_gezaehlt(self, tracking_code: str, visitor_hash: str) -> bool:
-        """Gab es diesen Klick heute schon?
-
-        ``visitor_hash`` wechselt taeglich; ein erneuter Aufruf desselben Links
-        am selben Tag zaehlt deshalb nicht doppelt, ein Aufruf am naechsten Tag
-        schon. Ohne Pruefwert (z. B. bei fehlenden Kopfzeilen) wird gezaehlt -
-        lieber ein Klick zu viel als ein stillschweigend verworfener.
-        """
-        if not visitor_hash:
-            return False
-        row = self.conn.execute(
-            "SELECT 1 FROM tracking_events WHERE tracking_code = ? AND visitor_hash = ? "
-            "AND event_type = 'click' LIMIT 1",
-            (tracking_code, visitor_hash),
-        ).fetchone()
-        return row is not None
-
-    # -- Identitaeten ---------------------------------------------------
-    def identitaet(self, user_ref: str) -> str:
-        """Die gemeinsame Kennung aller Auftritte dieses Menschen.
-
-        Ohne Eintrag ist eine Kennung ihre eigene Identitaet. Die Tabelle
-        bleibt damit leer, solange niemand unter zwei Kennungen auftritt -
-        gespeichert wird nur, was tatsaechlich zusammengehoert.
-        """
-        if not user_ref:
-            return ""
-        row = self.conn.execute(
-            "SELECT identity FROM user_identities WHERE user_ref = ?", (user_ref,)
-        ).fetchone()
-        return str(row["identity"]) if row else user_ref
-
-    def kennungen(self, user_ref: str) -> list[str]:
-        """Alle Kennungen, unter denen dieser Mensch aufgetreten ist."""
-        if not user_ref:
-            return []
-        ident = self.identitaet(user_ref)
-        rows = self.conn.execute(
-            "SELECT user_ref FROM user_identities WHERE identity = ?", (ident,)
-        ).fetchall()
-        return sorted({user_ref, ident, *(str(row["user_ref"]) for row in rows)})
-
-    def verknuepfe_kennung(self, alias_ref: str, user_ref: str) -> bool:
-        """Haelt fest, dass ``alias_ref`` und ``user_ref`` derselbe Mensch sind.
-
-        Gerufen wird das an genau einer Stelle: wenn eine Meldung beide
-        Kennungen mitbringt - der anonyme Besucher, der sich gerade
-        registriert hat. Die **Benutzerkennung gewinnt** als gemeinsame
-        Identitaet: Sie ist die bestaendige; die anonyme verschwindet mit dem
-        Browserspeicher.
-
-        Nichts wird dabei ueberschrieben. Die alten Ereignisse behalten die
-        Kennung, unter der sie gemeldet wurden - erst beim Lesen werden sie
-        zusammengefuehrt. Eine Zuordnung, die einmal in der Datenbank steht,
-        darf sich nicht nachtraeglich aendern; sie ist die Grundlage von
-        Zahlen, die jemand schon gesehen hat.
-
-        Liefert ``True``, wenn dadurch eine neue Verbindung entstanden ist.
-        """
-        if not alias_ref or not user_ref or alias_ref == user_ref:
-            return False
-
-        ziel = self.identitaet(user_ref)
-        quelle = self.identitaet(alias_ref)
-        if ziel == quelle:
-            return False
-
-        jetzt = _iso(datetime.now(UTC))
-        # Erst die bereits verbundenen Kennungen der anonymen Seite
-        # umhaengen, dann beide Enden selbst eintragen. Andernfalls verloere
-        # eine dritte Kennung, die frueher schon an ``alias_ref`` haengt,
-        # ihren Anschluss.
-        self.conn.execute(
-            "UPDATE user_identities SET identity = ? WHERE identity = ?", (ziel, quelle)
-        )
-        for ref in (user_ref, alias_ref):
-            self.conn.execute(
-                "INSERT INTO user_identities (user_ref, identity, created_at) VALUES (?,?,?) "
-                "ON CONFLICT(user_ref) DO UPDATE SET identity = excluded.identity",
-                (ref, ziel, jetzt),
-            )
-        self.conn.commit()
-        return True
-
-    def erste_zuordnung(self, user_ref: str) -> tuple[str, str, str]:
-        """Kampagne, Gruppe und Code, ueber die dieser Mensch erstmals kam.
-
-        Spaetere Meldungen ("download", "qualified", "conversion") tragen den
-        Tracking-Code meist nicht mehr mit - die Zielanwendung kennt zu dem
-        Zeitpunkt nur noch ihren Benutzer. Ohne diese Erbschaft blieben genau
-        die Stufen ohne Gruppe, um die es geht: Welche Gruppe bringt Benutzer,
-        die die App wirklich holen? Massgeblich ist der **erste** Fund - er hat
-        den Menschen gebracht, nicht ein spaeterer Link.
-
-        Gesucht wird ueber **alle** Kennungen desselben Menschen. Der erste
-        Besuch traegt die anonyme Kennung des Browsers, die Registrierung die
-        Benutzerkennung der Anwendung; nur ueber die eigene Kennung gesucht,
-        endete die Zuordnung genau an diesem Uebergang - und jeder Download
-        danach stand ohne Gruppe da.
-        """
-        refs = self.kennungen(user_ref)
-        if not refs:
-            return "", "", ""
-        platzhalter = ",".join("?" * len(refs))
-        row = self.conn.execute(
-            "SELECT campaign_id, group_id, tracking_code FROM tracking_events "  # noqa: S608
-            f"WHERE user_ref IN ({platzhalter}) AND tracking_code <> '' "  # noqa: S608
-            "ORDER BY occurred_at, event_id LIMIT 1",
-            tuple(refs),
-        ).fetchone()
-        if row is None:
-            return "", "", ""
-        return row["campaign_id"], row["group_id"], row["tracking_code"]
-
-    def ereignis_bereits_gezaehlt(self, event_type: EventType, user_ref: str) -> bool:
-        """Gab es dieses Ereignis fuer diesen Menschen schon?
-
-        Nur fuer die Stufen aus ``EINMAL_JE_MENSCH``. Geprueft wird ueber alle
-        Kennungen desselben Menschen - sonst zaehlte derselbe Download vor und
-        nach dem Registrieren zweimal.
-        """
-        refs = self.kennungen(user_ref)
-        if not refs:
-            return False
-        platzhalter = ",".join("?" * len(refs))
-        row = self.conn.execute(
-            "SELECT 1 FROM tracking_events "  # noqa: S608
-            f"WHERE event_type = ? AND user_ref IN ({platzhalter}) LIMIT 1",  # noqa: S608
-            (event_type.value, *refs),
-        ).fetchone()
-        return row is not None
-
-    def events_for_code(self, tracking_code: str) -> list[TrackingEvent]:
-        """Alle Ereignisse, die diesem Tracking-Code zugeordnet sind."""
-        rows = self.conn.execute(
-            "SELECT * FROM tracking_events WHERE tracking_code = ? "
-            "ORDER BY occurred_at, event_id",
-            (tracking_code,),
-        ).fetchall()
-        return [self._row_to_event(row) for row in rows]
-
-    def event_counts(self) -> dict[str, int]:
-        rows = self.conn.execute(
-            "SELECT event_type, COUNT(*) AS anzahl FROM tracking_events GROUP BY event_type"
-        ).fetchall()
-        return {row["event_type"]: int(row["anzahl"]) for row in rows}
-
-    def counts_by(self, spalte: str) -> dict[tuple[str, str], int]:
-        """Ereigniszahlen je Gruppe bzw. Kampagne.
-
-        ``spalte`` ist ``group_id``, ``campaign_id`` oder ``tracking_code`` -
-        alle drei sind eigene Spaltennamen dieser Tabelle, keine Eingabe von
-        aussen.
-        """
-        if spalte not in {"group_id", "campaign_id", "tracking_code"}:
-            raise ValueError(f"Unzulaessige Spalte: {spalte}")
-        rows = self.conn.execute(
-            f"SELECT {spalte} AS schluessel, event_type, COUNT(*) AS anzahl "  # noqa: S608
-            f"FROM tracking_events WHERE {spalte} <> '' "  # noqa: S608
-            "GROUP BY schluessel, event_type"
-        ).fetchall()
-        return {(row["schluessel"], row["event_type"]): int(row["anzahl"]) for row in rows}
-
-    # -- Empfehlungen ---------------------------------------------------
-    def referral_code_for(self, user_ref: str) -> str | None:
-        row = self.conn.execute(
-            "SELECT referral_code FROM referral_codes WHERE user_ref = ?", (user_ref,)
-        ).fetchone()
-        return row["referral_code"] if row else None
-
-    def user_for_referral_code(self, referral_code: str) -> str | None:
-        row = self.conn.execute(
-            "SELECT user_ref FROM referral_codes WHERE referral_code = ?", (referral_code,)
-        ).fetchone()
-        return row["user_ref"] if row else None
-
-    def save_referral_code(self, referral_code: str, user_ref: str) -> None:
-        self.conn.execute(
-            "INSERT OR IGNORE INTO referral_codes (referral_code, user_ref, created_at) "
-            "VALUES (?,?,?)",
-            (referral_code, user_ref, _iso(datetime.now(UTC))),
-        )
-        self.conn.commit()
-
-    def referral_codes_vergeben(self) -> set[str]:
-        return {row["referral_code"] for row in self.conn.execute(
-            "SELECT referral_code FROM referral_codes"
-        )}
-
-    def save_referral(self, referral: Referral) -> int:
-        cursor = self.conn.execute(
-            """
-            INSERT INTO referrals (
-                referral_code, referrer_user_ref, referred_user_ref, status,
-                campaign_id, group_id, created_at, updated_at, note
-            ) VALUES (?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(referred_user_ref) DO UPDATE SET
-                status     = excluded.status,
-                updated_at = excluded.updated_at,
-                note       = excluded.note
-            """,
-            (
-                referral.referral_code,
-                referral.referrer_user_ref,
-                referral.referred_user_ref,
-                referral.status.value,
-                referral.campaign_id,
-                referral.group_id,
-                _iso(referral.created_at),
-                _iso(referral.updated_at),
-                referral.note,
-            ),
-        )
-        self.conn.commit()
-        return int(cursor.lastrowid or 0)
-
-    def referral_for_referred(self, referred_user_ref: str) -> Referral | None:
-        row = self.conn.execute(
-            "SELECT * FROM referrals WHERE referred_user_ref = ?", (referred_user_ref,)
-        ).fetchone()
-        return self._row_to_referral(row) if row else None
-
-    def referrals_of(self, referrer_user_ref: str) -> list[Referral]:
-        rows = self.conn.execute(
-            "SELECT * FROM referrals WHERE referrer_user_ref = ? ORDER BY created_at",
-            (referrer_user_ref,),
-        ).fetchall()
-        return [self._row_to_referral(row) for row in rows]
-
-    def all_referrals(self, status: ReferralStatus | None = None) -> list[Referral]:
-        if status is None:
-            rows = self.conn.execute("SELECT * FROM referrals ORDER BY created_at DESC").fetchall()
-        else:
-            rows = self.conn.execute(
-                "SELECT * FROM referrals WHERE status = ? ORDER BY created_at DESC",
-                (status.value,),
-            ).fetchall()
-        return [self._row_to_referral(row) for row in rows]
-
-    def referral_counts(self) -> dict[str, int]:
-        rows = self.conn.execute(
-            "SELECT status, COUNT(*) AS anzahl FROM referrals GROUP BY status"
-        ).fetchall()
-        return {row["status"]: int(row["anzahl"]) for row in rows}
-
-    # -- Praemien -------------------------------------------------------
-    def save_reward(self, reward: Reward) -> bool:
-        """Legt eine Praemie an. Returns: True, wenn sie neu war.
-
-        Eine bereits vergebene Regel wird nicht erneut vergeben - sonst
-        entstuenden aus einem einzigen erreichten Schwellenwert beliebig viele
-        Praemien.
-        """
-        cursor = self.conn.execute(
-            """
-            INSERT OR IGNORE INTO rewards (
-                user_ref, rule_id, reward_type, value, status,
-                earned_at, updated_at, note
-            ) VALUES (?,?,?,?,?,?,?,?)
-            """,
-            (
-                reward.user_ref,
-                reward.rule_id,
-                reward.reward_type.value,
-                reward.value,
-                reward.status.value,
-                _iso(reward.earned_at),
-                _iso(reward.updated_at),
-                reward.note,
-            ),
-        )
-        self.conn.commit()
-        return cursor.rowcount > 0
-
-    def set_reward_status(self, user_ref: str, rule_id: str, status: RewardStatus) -> int:
-        cursor = self.conn.execute(
-            "UPDATE rewards SET status = ?, updated_at = ? WHERE user_ref = ? AND rule_id = ?",
-            (status.value, _iso(datetime.now(UTC)), user_ref, rule_id),
-        )
-        self.conn.commit()
-        return cursor.rowcount
-
-    def rewards_of(self, user_ref: str) -> list[Reward]:
-        rows = self.conn.execute(
-            "SELECT * FROM rewards WHERE user_ref = ? ORDER BY earned_at", (user_ref,)
-        ).fetchall()
-        return [self._row_to_reward(row) for row in rows]
-
-    def all_rewards(self) -> list[Reward]:
-        rows = self.conn.execute("SELECT * FROM rewards ORDER BY earned_at DESC").fetchall()
-        return [self._row_to_reward(row) for row in rows]
-
     # -- Audit und Merkposten -------------------------------------------
     def audit(self, action: str, subject: str = "", detail: str = "") -> None:
         """Haelt jede Entscheidung fest - auch die abgelehnten.
@@ -3723,20 +3001,6 @@ class MarketingStore:
 
     # -- Umwandlung -----------------------------------------------------
     @staticmethod
-    def _row_to_event(row: sqlite3.Row) -> TrackingEvent:
-        return TrackingEvent(
-            event_id=row["event_id"],
-            tracking_code=row["tracking_code"],
-            campaign_id=row["campaign_id"],
-            group_id=row["group_id"],
-            user_ref=row["user_ref"],
-            event_type=row["event_type"],
-            occurred_at=row["occurred_at"],
-            visitor_hash=row["visitor_hash"],
-            source=row["source"],
-        )
-
-    @staticmethod
     def _row_to_versuch(row: sqlite3.Row) -> PostVersuch:
         return PostVersuch(
             versuch_id=row["versuch_id"],
@@ -3753,35 +3017,6 @@ class MarketingStore:
             ausgeloest_von=row["ausgeloest_von"],
             begonnen_am=row["begonnen_am"],
             beendet_am=row["beendet_am"],
-        )
-
-    @staticmethod
-    def _row_to_referral(row: sqlite3.Row) -> Referral:
-        return Referral(
-            referral_id=row["referral_id"],
-            referral_code=row["referral_code"],
-            referrer_user_ref=row["referrer_user_ref"],
-            referred_user_ref=row["referred_user_ref"],
-            status=row["status"],
-            campaign_id=row["campaign_id"],
-            group_id=row["group_id"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-            note=row["note"],
-        )
-
-    @staticmethod
-    def _row_to_reward(row: sqlite3.Row) -> Reward:
-        return Reward(
-            reward_id=row["reward_id"],
-            user_ref=row["user_ref"],
-            rule_id=row["rule_id"],
-            reward_type=row["reward_type"],
-            value=row["value"],
-            status=row["status"],
-            earned_at=row["earned_at"],
-            updated_at=row["updated_at"],
-            note=row["note"],
         )
 
     @staticmethod

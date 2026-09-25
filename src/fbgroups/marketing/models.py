@@ -135,9 +135,8 @@ class GroupMarketing(BaseModel):
     # loeschte beim Ausschliessen die Information, dass er in der Gruppe
     # bereits Mitglied war - und beim Wiederaufnehmen faengt er von vorn an.
     #
-    # Der Tracking-Code bleibt bei einem Ausschluss unberuehrt gueltig: Er
-    # steht moeglicherweise in einem veroeffentlichten Beitrag. Ausschliessen
-    # ist eine Entscheidung ueber die eigene Arbeit, kein Widerruf des Codes.
+    # Die Zuordnung bleibt bei einem Ausschluss bestehen: Ausschliessen ist
+    # eine Entscheidung ueber die eigene Arbeit, kein Widerruf.
     bearbeiten: bool = True
     ausschlussgrund: str = ""
     notes: str = ""
@@ -176,7 +175,7 @@ class Campaign(BaseModel):
 
     **Beschreibung und Auswahlregel sind zwei verschiedene Dinge.** ``audiences``
     und ``cities`` sagen, *wen* die Kampagne bewirbt; die ``target_*``-Felder
-    sagen, *welche Gruppen* einen Tracking-Code bekommen. Frueher war beides
+    sagen, *welche Gruppen* zugeordnet werden. Frueher war beides
     dasselbe Feld. Das faellt erst auf, wenn man es auseinanderziehen will: Eine
     Kampagne darf "Batreeq Syrian Germany" heissen, syrische Zielgruppen
     bewerben und trotzdem den gesamten Bestand abdecken.
@@ -194,11 +193,8 @@ class Campaign(BaseModel):
     language: str = ""
     message_template: str = ""             # Vorlage zum Selberposten, kein Automat
     landing_page: str = ""
-    # Wohin ein Klick fuehrt: "store" (Play Store, Code ueberlebt ueber den
-    # Install Referrer) oder "landing" (die eigene Seite, Code in der Adresse).
-    # **Leer heisst: die Vorgabe aus der Konfiguration.** Nicht "landing" -
-    # sonst muesste jede bestehende Kampagne einzeln umgestellt werden, und
-    # eine neue Vorgabe waere wirkungslos.
+    # Bis 25.09.2026 das Ziel eines Tracking-Links ("store" oder "landing").
+    # Die Spalte bleibt, gelesen wird sie nicht mehr.
     ziel: str = ""
     status: CampaignStatus = CampaignStatus.DRAFT
     starts_on: date | None = None
@@ -242,182 +238,12 @@ class Campaign(BaseModel):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
-class EventType(StrEnum):
-    """Stationen auf dem Weg vom Klick zum Kunden.
-
-    ``CLICK`` entsteht im eigenen Redirect-Dienst. Alles danach meldet die
-    Anwendung, in der sich die Leute registrieren - dieses Projekt kann es
-    nicht wissen.
-
-    **Jede Stufe steht fuer sich.** Sie sind keine Kette, die man der Reihe
-    nach durchlaufen muss: Wer sich registriert und die App nie herunterlaedt,
-    ist ein gueltiger Zustand; wer herunterlaedt, ohne sich je registriert zu
-    haben, ebenso. Die Reihenfolge in ``FUNNEL_ORDER`` ist die der Anzeige,
-    keine Bedingung - kein Ereignis setzt ein anderes voraus, und keines
-    erzeugt ein anderes mit.
-
-    ``DOWNLOAD`` heisst: Der Bezug der App wurde ausgeloest. Was genau der
-    ausloesende Moment ist, entscheidet die meldende Anwendung; sie soll ihn
-    so spaet wie moeglich setzen (siehe ``docs/events-api.html``). Der Beweis,
-    dass die App wirklich auf einem Geraet liegt, ist ``ACTIVATION`` - nur die
-    App selbst kann ihn erbringen.
-
-    **``STORE_VISIT`` ist keine Installation.** Es heisst genau: Wir haben
-    diesen Menschen zum Play Store geschickt. Ob er dort auf "Installieren"
-    drueckt, ob die Installation gelingt, ob er die App je oeffnet - davon
-    weiss dieser Dienst nichts, denn der Play Store meldet uns nichts. Die
-    Stufe waere als "Installation" bezeichnet eine Behauptung ueber etwas,
-    das auf einem fremden Geraet geschieht.
-
-    Damit gibt es drei verschiedene Dinge und drei verschiedene Namen:
-    ``STORE_VISIT`` (wir haben weitergeleitet, gemessen von uns),
-    ``DOWNLOAD`` (der Bezug wurde ausgeloest, gemessen von der ausliefernden
-    Stelle) und ``ACTIVATION`` (die App lief wirklich, gemessen von der App).
-    Nur die letzte beweist, dass die App angekommen ist.
-    """
-
-    CLICK = "click"
-    LANDING_VISIT = "landing_visit"
-    STORE_VISIT = "store_visit"
-    REGISTRATION = "registration"
-    DOWNLOAD = "download"
-    ACTIVATION = "activation"
-    QUALIFIED = "qualified"
-    CONVERSION = "conversion"
-
-
-# Reihenfolge des Trichters. Steht hier und nicht in der Auswertung, damit
-# Trichter und Ereignisse nicht auseinanderlaufen koennen.
-#
-# Sie ordnet die *Anzeige*, nicht den Ablauf: Die Zahlen einer Stufe werden
-# unabhaengig von jeder anderen gezaehlt. "Registrierungen 10, Downloads 3"
-# bedeutet nicht, dass sieben Registrierungen fehlerhaft sind - es bedeutet,
-# dass drei der Leute die App geholt haben.
-FUNNEL_ORDER: tuple[EventType, ...] = (
-    EventType.CLICK,
-    EventType.LANDING_VISIT,
-    EventType.STORE_VISIT,
-    EventType.REGISTRATION,
-    EventType.DOWNLOAD,
-    EventType.ACTIVATION,
-    EventType.QUALIFIED,
-    EventType.CONVERSION,
-)
-
-# Ereignisse, die je Mensch hoechstens einmal zaehlen.
-#
-# Ein Download ist von Natur aus wiederholbar: neu laden, zweites Geraet,
-# Neuinstallation. Ohne diese Schranke ueberholte ein einzelner Mensch mit
-# fuenf Versuchen eine Gruppe, die vier Menschen gebracht hat - und genau
-# diese Rangfolge ist der Zweck des ganzen Projekts.
-#
-# ``registration``, ``qualified`` und ``conversion`` stehen bewusst **nicht**
-# darin: Sie sind seit dem 18.08.2026 im Betrieb, und ihre Bedeutung
-# stillschweigend zu aendern machte alte und neue Zahlen unvergleichbar.
-# ``activation`` ebenso - die meldende App bestimmt selbst, was "erstmals
-# geoeffnet" heisst, und meldet es einmal.
-EINMAL_JE_MENSCH: frozenset[EventType] = frozenset({EventType.DOWNLOAD})
-
-
-class TrackingEvent(BaseModel):
-    """Ein einzelnes Ereignis.
-
-    ``user_ref`` ist die undurchsichtige Kennung aus der Zielanwendung - nie
-    ein Name, nie eine Adresse, nie eine Telefonnummer. Sie steht nur dort,
-    wo es sie schon gibt; ein Klick hat keine.
-
-    ``visitor_hash`` ist kein Personenbezug, sondern ein taeglich wechselnder
-    Pruefwert zum Aussortieren doppelter Klicks. Er ist nicht zurueckrechenbar
-    und wird nie ausgegeben.
-    """
-
-    event_id: int | None = None
-    tracking_code: str = ""
-    campaign_id: str = ""
-    group_id: str = ""
-    user_ref: str = ""
-    event_type: EventType
-    occurred_at: datetime = Field(default_factory=_utcnow)
-    visitor_hash: str = ""
-    source: str = ""            # "redirect" oder "api"
-
-
-class ReferralStatus(StrEnum):
-    PENDING = "pending"
-    REGISTERED = "registered"
-    QUALIFIED = "qualified"
-    CONVERTED = "converted"
-    REJECTED = "rejected"
-    REVIEW = "review"
-
-
-class Referral(BaseModel):
-    """Eine Empfehlung: ``referrer_user_ref`` hat ``referred_user_ref`` gebracht."""
-
-    referral_id: int | None = None
-    referral_code: str
-    referrer_user_ref: str
-    referred_user_ref: str
-    status: ReferralStatus = ReferralStatus.PENDING
-    campaign_id: str = ""
-    group_id: str = ""
-    created_at: datetime = Field(default_factory=_utcnow)
-    updated_at: datetime = Field(default_factory=_utcnow)
-    note: str = ""
-
-
-class RewardType(StrEnum):
-    FEATURE_UNLOCK = "feature_unlock"
-    PREMIUM_DAYS = "premium_days"
-    CREDITS = "credits"
-    DISCOUNT = "discount"
-    CUSTOM = "custom"
-
-
-class RewardStatus(StrEnum):
-    LOCKED = "locked"
-    EARNED = "earned"
-    CLAIMED = "claimed"
-    EXPIRED = "expired"
-    CANCELLED = "cancelled"
-
-
-class RewardRule(BaseModel):
-    """Eine Praemienregel aus ``config/rewards.yaml``.
-
-    Die Schwellen stehen in der Konfiguration, nicht im Code - eine geaenderte
-    Zahl ist eine fachliche Entscheidung und darf keine Codeaenderung kosten.
-    """
-
-    rule_id: str
-    label_de: str = ""
-    threshold: int = 1
-    metric: str = "qualified"        # zaehlt Referrals in diesem Status
-    reward_type: RewardType = RewardType.CUSTOM
-    value: str = ""
-    active: bool = True
-
-
-class Reward(BaseModel):
-    """Eine erreichte Praemie eines Benutzers."""
-
-    reward_id: int | None = None
-    user_ref: str
-    rule_id: str
-    reward_type: RewardType = RewardType.CUSTOM
-    value: str = ""
-    status: RewardStatus = RewardStatus.EARNED
-    earned_at: datetime = Field(default_factory=_utcnow)
-    updated_at: datetime = Field(default_factory=_utcnow)
-    note: str = ""
-
-
 class PostStatus(StrEnum):
     """Ob der Beitrag dieser Kampagne in dieser Gruppe erledigt ist.
 
     Gehoert zum **Paar** aus Kampagne und Gruppe, nicht zur Gruppe: Dieselbe
     Gruppe kann in zwei Kampagnen stehen und traegt dann zwei Beitraege mit
-    zwei verschiedenen Tracking-Codes. In ``GroupMarketing`` gespeichert
+    zwei verschiedenen Paar-Codes. In ``GroupMarketing`` gespeichert
     verdeckte der zweite Beitrag den ersten, und die Arbeitsliste haette eine
     offene Aufgabe als erledigt gemeldet.
 
@@ -672,98 +498,35 @@ class PostVersuch(BaseModel):
 
 
 class CampaignGroup(BaseModel):
-    """Zuordnung Kampagne <-> Gruppe samt ihrem Tracking-Code.
+    """Zuordnung Kampagne <-> Gruppe samt ihrem Paar-Code.
 
-    Der Code ist ab der Vergabe unveraenderlich: Er steht in veroeffentlichten
-    Beitraegen und in fremden Statistiken. Wuerde er neu berechnet, zeigten
-    alte Links ins Leere oder - schlimmer - auf eine andere Gruppe.
+    Der Code kennzeichnet die Zuordnung im Bestand und ist ab der Vergabe
+    unveraenderlich; das Versuchsprotokoll verweist auf ihn. Nach aussen geht
+    er seit dem 25.09.2026 nicht mehr (siehe ``marketing/tracking.py``).
     """
 
     campaign_id: str
     group_id: str
     tracking_code: str
+    # Die Adressspalten des frueheren Trackings (bis 25.09.2026): der lange
+    # Link, der zweite Code in den Browser und die oeffentlichen Kurzcodes.
+    # Sie bleiben, weil die Spalten bleiben (Migrationen sind additiv), und
+    # tragen bei alten Zuordnungen noch ihre Werte - geschrieben und gelesen
+    # werden sie nicht mehr. ``tracking_code`` selbst ist der Paar-Code.
     tracking_url: str = ""
-
-    # Der zweite Code desselben Paares - derselbe Weg, anderes Ziel.
-    #
-    # ``tracking_code`` fuehrt zum Play Store und **bleibt dabei**: Er steht in
-    # veroeffentlichten Beitraegen, und sein Ziel nachtraeglich umzustellen
-    # aenderte, wohin alte Beitraege fuehren. Dieser hier fuehrt in den
-    # Browser, auf die Landingpage.
-    #
-    # Beide werden vollstaendig gezaehlt. Der Unterschied ist allein das Ziel
-    # **nach** der Weiterleitung - und genau dadurch laesst sich im Trichter
-    # unterscheiden, ob ein Mensch ueber den Store oder den Browser kam.
-    #
-    # Leer heisst "noch nicht vergeben": Ein Code ist endgueltig, und keiner
-    # entsteht auf Vorrat.
     tracking_code_browser: str = ""
     tracking_url_browser: str = ""
-
-    # Der oeffentliche Deckname beider Codes - das, was in einem Beitrag
-    # steht. ``FB-SYR-DUE-004-B`` nennt einem Leser Kanal, Zielgruppe, Stadt
-    # und laufende Nummer; die Kampagnenbuchhaltung gehoert nicht in die
-    # Gruppe. Gezaehlt wird unverandert unter dem inneren Code - der
-    # Kurzcode loest sich in der Weiterleitung auf und taucht in keiner
-    # Auswertung auf (``marketing/kurzcode.py``).
-    #
-    # Leer heisst "noch nicht vergeben": Ein alter Datensatz traegt dann
-    # weiterhin die lange Adresse, und das ist der richtige Rueckfall - eine
-    # Adresse, die laenger ist als noetig, ist besser als keine.
     public_code: str = ""
     public_url: str = ""
     public_code_browser: str = ""
     public_url_browser: str = ""
-
-    def code_fuer(self, ziel: str) -> str:
-        """Der **innere** Code fuer ein Ziel - ``browser`` oder ``store``.
-
-        Faellt auf den Store-Code zurueck, wenn der Browser-Code fehlt: Ein
-        Beitrag ohne Link waere schlimmer als einer mit dem anderen Ziel.
-
-        Dieser Code gehoert in die Datenbank und in jede Auswertung, **nicht**
-        in einen Beitrag. Was dort steht, liefert ``oeffentlicher_code_fuer``.
-        """
-        if ziel == "browser" and self.tracking_code_browser:
-            return self.tracking_code_browser
-        return self.tracking_code
-
-    def oeffentlicher_code_fuer(self, ziel: str) -> str:
-        """Der Code, den ein Mensch zu sehen bekommt.
-
-        Der Kurzcode, solange es einen gibt - sonst der innere. Der Rueckfall
-        ist Absicht und keine Luecke: Ein Datensatz aus der Zeit vor den
-        Kurzcodes soll einen Beitrag bekommen, der funktioniert, und nicht
-        einen ohne Link.
-        """
-        if ziel == "browser" and self.tracking_code_browser:
-            return self.public_code_browser or self.tracking_code_browser
-        return self.public_code or self.tracking_code
-
-    def url_fuer(self, ziel: str) -> str:
-        """Die Adresse, die in den Beitrag geht. Siehe ``oeffentlicher_code_fuer``."""
-        if ziel == "browser" and self.tracking_code_browser:
-            return self.public_url_browser or self.tracking_url_browser
-        return self.public_url or self.tracking_url
-
-    def interne_url_fuer(self, ziel: str) -> str:
-        """Die Adresse mit dem **inneren** Code - fuer Protokolle und Listen.
-
-        Getrennt von ``url_fuer``, weil beide verschiedene Fragen beantworten:
-        "Was geht hinaus?" und "Welcher Datensatz ist das?". Zusammengelegt
-        stuende die Kampagnenbuchhaltung wieder im Beitrag, sobald irgendwo
-        die falsche der beiden gelesen wird.
-        """
-        if ziel == "browser" and self.tracking_url_browser:
-            return self.tracking_url_browser
-        return self.tracking_url
     added_at: datetime = Field(default_factory=_utcnow)
     # -- Protokoll des Beitrags -------------------------------------------
     # Getrennt von ``added_at``: Eine Zuordnung entsteht durch die Regel, ein
     # Beitrag durch einen Menschen. Zwischen beidem liegen oft Wochen.
     post_status: PostStatus = PostStatus.OFFEN
     # Wann er veroeffentlicht wurde. Nur bei Erfolg gesetzt und danach nie
-    # ueberschrieben - der erste Beitrag ist der, auf den die Klicks zurueckgehen.
+    # ueberschrieben.
     posted_at: datetime | None = None
     # Wann zuletzt etwas versucht wurde, gleich mit welchem Ausgang. Trennt
     # "noch nie angefasst" von "gestern gescheitert".
@@ -864,7 +627,7 @@ class Textvorschlag(BaseModel):
     status: VorschlagStatus = VorschlagStatus.ENTWURF
     generiert_am: datetime | None = None
     # Nur beim **ersten** Erfolg gesetzt - dieselbe Regel wie ``posted_at``
-    # am Paar: Die Klicks gehen auf den Beitrag zurueck, der zuerst stand.
+    # am Paar.
     veroeffentlicht_am: datetime | None = None
     # Jeder gemeldete Ausgang zaehlt mit, auch der Erfolg. Beantwortet "wie
     # oft angefasst?", nicht "wie oft schiefgegangen?".

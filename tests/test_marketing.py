@@ -1,8 +1,7 @@
 """Tests der Marketing-Erweiterung.
 
 Zwei Dinge stehen im Mittelpunkt: Der bestehende Bestand darf nicht leiden,
-und ein einmal vergebener Tracking-Code darf sich nie wieder aendern - er steht
-in veroeffentlichten Beitraegen.
+und ein einmal vergebener Code einer Zuordnung darf sich nie wieder aendern.
 """
 
 from __future__ import annotations
@@ -19,13 +18,7 @@ from fbgroups.marketing.models import (
     PermissionStatus,
 )
 from fbgroups.marketing.store import MarketingStore, UnknownCampaignError, UnknownGroupError
-from fbgroups.marketing.tracking import (
-    app_base_url,
-    code_prefix,
-    ist_gueltiger_code,
-    next_tracking_code,
-    tracking_url,
-)
+from fbgroups.marketing.tracking import code_prefix, ist_gueltiger_code, next_tracking_code
 from fbgroups.models import Group
 from fbgroups.storage import SqliteStore
 
@@ -100,32 +93,6 @@ def test_laufende_nummer_zaehlt_je_kuerzel_hoch(config) -> None:
     assert next_tracking_code(_group(), config, vergeben) == "FB-SYR-BER-003"
     # Eine andere Stadt beginnt wieder bei 001.
     assert next_tracking_code(_group(city="Hamburg"), config, vergeben) == "FB-SYR-HAM-001"
-
-
-def test_tracking_url_nutzt_die_basis_url(config, monkeypatch) -> None:
-    monkeypatch.setenv("APP_BASE_URL", "https://batreeq.example/")
-    assert tracking_url("FB-SYR-BER-001", config) == "https://batreeq.example/r/FB-SYR-BER-001"
-
-
-def test_umgebungsvariable_schlaegt_die_konfiguration(config, monkeypatch) -> None:
-    monkeypatch.setenv("APP_BASE_URL", "https://echte-domain.example")
-    assert app_base_url(config) == "https://echte-domain.example"
-
-    # Ohne Variable gilt wieder settings.yaml - welcher Wert dort steht, ist
-    # eine Frage des Betriebs und keine des Verfahrens. Frueher stand hier der
-    # damalige Wert fest verdrahtet; der Wechsel auf die echte Domain machte
-    # den Test rot, obwohl die Vorrangregel unveraendert richtig war.
-    monkeypatch.delenv("APP_BASE_URL")
-    aus_datei = str(config.get("marketing", "app_base_url", default="")).rstrip("/")
-    assert app_base_url(config) == aus_datei
-
-
-def test_ohne_basis_url_bleibt_der_link_leer(config, monkeypatch) -> None:
-    """Ein halber Link waere in einem Beitrag schlimmer als gar keiner."""
-    monkeypatch.setenv("APP_BASE_URL", "")
-    leer = lambda self, *keys, default=None: "" if "app_base_url" in keys else default  # noqa: E731
-    monkeypatch.setattr(type(config), "get", leer)
-    assert tracking_url("FB-SYR-BER-001", config) == ""
 
 
 # --- Kampagnen und Zuordnung -------------------------------------------
@@ -212,27 +179,6 @@ def test_code_ist_ueber_alle_kampagnen_eindeutig(bestand: Path) -> None:
             store.add_link(
                 CampaignGroup(campaign_id="kampagne-b", group_id=REAL_ID_B, tracking_code="FB-X-1")
             )
-
-
-def test_basis_url_wechsel_laesst_die_codes_unberuehrt(bestand: Path) -> None:
-    with MarketingStore(bestand) as store:
-        _kampagne(store)
-        store.add_link(
-            CampaignGroup(
-                campaign_id="batreeq-syrian-germany",
-                group_id=REAL_ID_A,
-                tracking_code="FB-SYR-BER-001",
-                tracking_url="http://localhost:3000/r/FB-SYR-BER-001",
-            )
-        )
-        geaendert = store.refresh_tracking_urls(
-            "batreeq-syrian-germany", lambda code: f"https://batreeq.example/r/{code}"
-        )
-        link = store.link_for("batreeq-syrian-germany", REAL_ID_A)
-
-    assert geaendert == 1
-    assert link.tracking_code == "FB-SYR-BER-001"
-    assert link.tracking_url == "https://batreeq.example/r/FB-SYR-BER-001"
 
 
 # --- Arbeitsstand ------------------------------------------------------

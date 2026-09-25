@@ -325,7 +325,8 @@ _MIGRATIONS: dict[int, tuple[str, ...]] = {
     # spaeter in veroeffentlichten Beitraegen -, und eine Migration, die
     # vierhundert davon auf einmal erfindet, waere ein Knopf mit
     # unumkehrbarer Wirkung, den niemand gedrueckt hat. Die Spalte bleibt
-    # leer, bis ``vergib_browsercode`` sie fuellt.
+    # leer, bis ``vergib_browsercode`` sie fuellt. (Seit dem 25.09.2026 fuellt
+    # sie niemand mehr - das Tracking ist entfernt.)
     19: (
         MARKETING_SCHEMA,
         "ALTER TABLE campaign_groups ADD COLUMN tracking_code_browser TEXT",

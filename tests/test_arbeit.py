@@ -180,27 +180,25 @@ def test_die_wahl_bleibt_ueber_laeufe_hinweg_dieselbe(
     assert nachher == vorher
 
 
-def test_der_tracking_code_steht_nur_im_angezeigten_text(
+def test_gespeichert_wird_der_platzhalter_gezeigt_die_startseite(
     store, campaign, gruppen, gefuellt
 ) -> None:
-    """Gespeichert wird ``{link}``, kopiert wird der eingesetzte Link.
+    """Gespeichert wird ``{link}``, kopiert wird die eingesetzte Adresse.
 
-    Wer den Platzhalter im gespeicherten Text ersetzte, haette einen Text, den
-    kein Sprachmodell und kein zweiter Leser mehr gefahrlos anfassen darf.
+    Seit dem 25.09.2026 ist das die Startseite der App (``marketing.startseite``)
+    - ohne Code, fuer jede Gruppe dieselbe. Der Code der Zuordnung steht in
+    keinem Text, weder gespeichert noch gezeigt.
     """
-    from fbgroups.marketing.lauf import ziel_zu_nummer
+    from fbgroups.marketing.beitrag import startseite
 
     stand = hole(store, campaign, gruppen)
+    adresse = startseite(campaign, load_config())
+    assert adresse
 
     for fassung in stand.posts:
         assert "{link}" in fassung.vorschlag.text
         assert stand.link.tracking_code not in fassung.vorschlag.text
-        # Eingesetzt wird die **oeffentliche** Adresse - die kurze mit dem
-        # Decknamen, und je Fassung die des gewaehlten Ziels. Der
-        # Tracking-Code steht in keinem Text, den ein Mensch zu sehen bekommt:
-        # Er nennt Kanal, Zielgruppe, Stadt und laufende Nummer.
-        ziel = ziel_zu_nummer(fassung.vorschlag.nummer)
-        assert stand.link.url_fuer(ziel) in fassung.angezeigt
+        assert adresse in fassung.angezeigt
         assert stand.link.tracking_code not in fassung.angezeigt
         assert "{link}" not in fassung.angezeigt
 
@@ -812,16 +810,6 @@ def test_eine_unbekannte_zuordnung_wird_abgewiesen(bestand: Path, config) -> Non
     assert antwort.status_code == 404
 
 
-def test_der_arbeiten_knopf_fehlt_im_nur_lesen_zugang(bestand: Path, config) -> None:
-    """Er schreibt - von aussen fuehrte er ins Leere."""
-    from fbgroups.marketing.dashboard import render, sammle_daten
-
-    daten = sammle_daten(config, bestand)
-
-    assert "href='/arbeit/" in render(daten, nur_lesen=False)
-    assert "href='/arbeit/" not in render(daten, nur_lesen=True)
-
-
 def test_ohne_zuordnungen_nennt_die_seite_den_grund(tmp_path: Path, config) -> None:
     """Der haeufigste Griff daneben bekommt Klartext."""
     pfad = tmp_path / "leer.sqlite"
@@ -891,7 +879,7 @@ def test_die_vorschau_nennt_dieselben_zahlen(store, campaign, gruppen, gefuellt)
     )
 
     vorschau = store.zaehle_zuruecksetzbar(KAMPAGNE)
-    getan = store.setze_kampagne_zurueck(KAMPAGNE, auch_ereignisse=True)
+    getan = store.setze_kampagne_zurueck(KAMPAGNE)
 
     assert getan["zuordnungen"] == vorschau["zuordnungen"] == 2
     assert getan["versuche"] == vorschau["versuche"] == 1
@@ -1119,3 +1107,22 @@ def test_das_bearbeitungsfeld_setzt_den_link_beim_kopieren_ein(
     # Das Feld selbst bleibt unveraendert - nur die Zwischenablage bekommt
     # die fertige Fassung.
     assert "e.clipboardData.setData('text/plain'" in seite
+
+
+def test_die_leere_arbeitsseite_bereitet_selbst_vor(store, campaign, gruppen, config) -> None:
+    """``_kette_automatisch``: Texte, Freigabe, Einreihen in einem Zug.
+
+    Am 25.09.2026 blieb hier beim Entfernen des Trackings ein Argument
+    stehen, das es nicht mehr gab - die Arbeitsseite waere bei leerer Liste
+    mit einem TypeError abgebrochen, und kein Test hatte den Weg je gerufen.
+    """
+    from fbgroups.marketing.web import _kette_automatisch
+
+    meldung = _kette_automatisch(store, campaign, gruppen, config)
+
+    assert "Texte" in meldung
+    assert "freigegeben" in meldung
+    assert "eingereiht" in meldung
+    assert all(
+        store.vorschlaege(KAMPAGNE, gid, Texttyp.POST) for gid in gruppen
+    ), "jede Gruppe hat danach ihre Beitragsfassungen"

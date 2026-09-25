@@ -13,9 +13,9 @@ Zwei Entscheidungen tragen das Modul:
   Sonderweg, und die Regel bleibt bei 310 wie bei 10.000 Gruppen dieselbe.
 - **Der Plan nimmt nur hinzu.** Er kennt keinen Schritt, der eine Zuordnung
   entfernt oder einen Code neu berechnet. Was eine Gruppe an Code hat, behaelt
-  sie - auch dann, wenn sie der Regel nicht mehr entspricht. Der Code steht
-  moeglicherweise in einem veroeffentlichten Beitrag; ``nicht_mehr_passend``
-  meldet solche Faelle, statt sie stillschweigend zu bereinigen.
+  sie - auch dann, wenn sie der Regel nicht mehr entspricht. An der
+  Zuordnung haengen Texte und Versuche; ``nicht_mehr_passend`` meldet solche
+  Faelle, statt sie stillschweigend zu bereinigen.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from fbgroups.config import AppConfig
 from fbgroups.marketing.models import Campaign, CampaignGroup
 from fbgroups.marketing.store import MarketingStore
-from fbgroups.marketing.tracking import CodeAllocator, tracking_url
+from fbgroups.marketing.tracking import CodeAllocator
 from fbgroups.models import (
     AKTIVITAET_LABEL,
     AKTIVITAETSSTUFEN,
@@ -205,7 +205,7 @@ class Zuordnungsplan:
     neu: list[tuple[Group, CampaignGroup]] = field(default_factory=list)
     bereits_zugeordnet: int = 0
     # Zugeordnet, entspricht aber der heutigen Regel nicht mehr. Wird gemeldet,
-    # nie entfernt: Der Code kann schon veroeffentlicht sein.
+    # nie entfernt: An der Zuordnung haengen Texte und Versuche.
     nicht_mehr_passend: list[str] = field(default_factory=list)
 
     @property
@@ -257,7 +257,6 @@ def baue_plan(
                     campaign_id=campaign.campaign_id,
                     group_id=group.group_id,
                     tracking_code=code,
-                    tracking_url=tracking_url(code, config),
                 ),
             )
         )

@@ -99,18 +99,6 @@ def test_eine_gruppe_ohne_zuordnung_bleibt_leer(bestand: Path, config) -> None:
     assert zeile["kampagnen_text"] == ""
 
 
-def test_im_nur_lesen_zugang_gibt_es_kein_auswahlfeld(bestand: Path, config) -> None:
-    """Zuordnen vergibt einen Code - das ist kein Lesen."""
-    from fbgroups.marketing.dashboard import render, sammle_daten
-
-    daten = sammle_daten(config, bestand)
-
-    assert "k-zuordnen" in render(daten, nur_lesen=False)
-    # Die Zeichenfunktion bleibt, aber sie gibt im Lesezugang nur die Marken
-    # aus - geprueft ueber den Zweig, der das Feld baut.
-    assert "NUR_LESEN" in render(daten, nur_lesen=True)
-
-
 # --- Zuordnen -------------------------------------------------------------
 
 def test_eine_gruppe_bekommt_einen_code(client: TestClient, bestand: Path) -> None:
@@ -124,7 +112,8 @@ def test_eine_gruppe_bekommt_einen_code(client: TestClient, bestand: Path) -> No
     with MarketingStore(bestand) as store:
         link = store.link_for("zweite", GID_B)
     assert link is not None and link.tracking_code == daten["code"]
-    assert link.tracking_url.endswith(daten["code"])
+    # Seit dem 25.09.2026 entsteht keine Adresse mehr - nur der Code.
+    assert link.tracking_url == ""
 
 
 def test_der_code_kollidiert_nicht_mit_vergebenen(client: TestClient, bestand: Path) -> None:
@@ -446,5 +435,3 @@ def test_die_sammelleiste_traegt_das_kampagnenfeld(bestand: Path, config) -> Non
 
     assert 'id="sammel-kampagne"' in seite
     assert 'id="sammel-zuordnen"' in seite
-    # Und die Leiste ist im Lesezugang ohnehin ausgeblendet.
-    assert "body.nur-lesen .sammel" in seite

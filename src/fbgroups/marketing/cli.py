@@ -28,13 +28,6 @@ from rich.table import Table
 
 from fbgroups.config import AppConfig, load_config
 from fbgroups.marketing import vorlagen
-from fbgroups.marketing.analytics import (
-    code_bericht,
-    funnel,
-    kennzahlen,
-    top_campaigns,
-    top_groups,
-)
 from fbgroups.marketing.beitrag import beitragstext, in_zwischenablage, oeffne_im_browser
 from fbgroups.marketing.models import (
     MARKETING_FORTSCHRITT,
@@ -49,13 +42,9 @@ from fbgroups.marketing.models import (
     PermissionStatus,
     PostStatus,
     QueueZustand,
-    ReferralStatus,
-    RewardStatus,
     Texttyp,
 )
 from fbgroups.marketing.queue import UngueltigerUebergang
-from fbgroups.marketing.referral import code_fuer_benutzer, setze_status
-from fbgroups.marketing.rewards import bewerte_benutzer, fortschritt, load_reward_rules
 from fbgroups.marketing.selection import (
     ALLE,
     Auswahl,
@@ -68,13 +57,7 @@ from fbgroups.marketing.selection import (
     synchronisiere,
 )
 from fbgroups.marketing.store import MarketingStore, UnknownGroupError
-from fbgroups.marketing.tracking import (
-    app_base_url,
-    app_base_url_quelle,
-    ist_lokale_basis,
-    slug,
-    tracking_url,
-)
+from fbgroups.marketing.tracking import slug
 from fbgroups.models import AKTIVITAETSSTUFEN, LISTENPRIORITAETEN, Group
 from fbgroups.scoring import sort_by_rank
 from fbgroups.storage import SqliteStore
@@ -82,11 +65,7 @@ from fbgroups.storage import SqliteStore
 console = Console()
 
 campaign_app = typer.Typer(add_completion=False, help="Kampagnen verwalten.")
-marketing_app = typer.Typer(
-    add_completion=False, help="Arbeitsstand, Auswertung, Empfehlungen und Praemien."
-)
-referral_app = typer.Typer(add_completion=False, help="Empfehlungen verwalten.")
-marketing_app.add_typer(referral_app, name="referral")
+marketing_app = typer.Typer(add_completion=False, help="Arbeitsstand der Gruppen.")
 
 
 def _config() -> AppConfig:
@@ -244,7 +223,7 @@ def campaign_list(
 
 @campaign_app.command("show")
 def campaign_show(campaign_id: str = typer.Argument(...)) -> None:
-    """Zeigt eine Kampagne mit ihren Gruppen und Links."""
+    """Zeigt eine Kampagne mit ihren zugeordneten Gruppen."""
     config = _config()
     with MarketingStore(config.path("sqlite_path")) as store:
         campaign = _kampagne_oder_ende(store, campaign_id)
@@ -253,13 +232,10 @@ def campaign_show(campaign_id: str = typer.Argument(...)) -> None:
     with SqliteStore(config.path("sqlite_path")) as gruppen_store:
         namen = {g.group_id: g for g in gruppen_store.load_groups()}
 
-    basis = app_base_url(config)
-    quelle = app_base_url_quelle(config)
 
     kopf = Table(show_header=False, box=None)
     kopf.add_row("Name", campaign.name)
     kopf.add_row("Status", campaign.status.value)
-    kopf.add_row("Basis-URL", f"{basis or '[red]nicht gesetzt[/red]'}  [dim]({quelle})[/dim]")
     kopf.add_row("Beschreibung", campaign.description or "[dim]-[/dim]")
     kopf.add_row("Zielgruppen", ", ".join(campaign.audiences) or "[dim]alle[/dim]")
     kopf.add_row("Staedte", ", ".join(campaign.cities) or "[dim]alle[/dim]")
@@ -268,18 +244,6 @@ def campaign_show(campaign_id: str = typer.Argument(...)) -> None:
     kopf.add_row("Zeitraum", f"{campaign.starts_on or '-'} bis {campaign.ends_on or '-'}")
     kopf.add_row("Zugeordnete Gruppen", str(len(links)))
     console.print(Panel(kopf, title=f"Kampagne {campaign.campaign_id}"))
-
-    # Ein Link auf den eigenen Rechner sieht aus wie jeder andere. In einem
-    # Beitrag fuehrt er jeden Leser auf dessen eigenen Rechner - deshalb hier
-    # ausdruecklich benannt, statt es dem Auge zu ueberlassen.
-    if basis and ist_lokale_basis(basis):
-        console.print(
-            f"[yellow]Hinweis:[/yellow] '{basis}' zeigt auf diesen Rechner. Fuer die "
-            "Entwicklung richtig, fuer veroeffentlichte Links unbrauchbar.\n"
-            "[dim]Oeffentliche Adresse setzen:  APP_BASE_URL=https://deine-domain.de "
-            "in .env\ndanach:  fbgroups campaign refresh-urls "
-            f"{campaign.campaign_id}[/dim]"
-        )
 
     if links:
         _links_tabelle(links, namen)
@@ -290,18 +254,17 @@ def _links_tabelle(
     namen: dict[str, Group],
     grenze: int = 25,
 ) -> None:
-    """Zeigt die Links. Bei vielen nur den Anfang - 310 Zeilen liest niemand.
+    """Zeigt die Zuordnungen. Bei vielen nur den Anfang - 310 Zeilen liest niemand.
 
     Die vollstaendige Liste holt ``campaign links --export``; im Terminal
     scrollte sie nur die Zusammenfassung aus dem Bild.
     """
     gezeigt = links if grenze <= 0 else links[:grenze]
 
-    table = Table(title="Tracking-Links")
-    table.add_column("Tracking-Code")
+    table = Table(title="Zuordnungen")
+    table.add_column("Code")
     table.add_column("Gruppe")
     table.add_column("Stadt")
-    table.add_column("Link")
 
     for link in gezeigt:
         group = namen.get(link.group_id)
@@ -309,7 +272,6 @@ def _links_tabelle(
             link.tracking_code,
             ((group.name if group else "") or link.group_id)[:34],
             (group.city if group else None) or "[dim]-[/dim]",
-            link.tracking_url or "[dim](keine APP_BASE_URL gesetzt)[/dim]",
         )
     console.print(table)
 
@@ -326,24 +288,19 @@ def campaign_set(
     name: str = typer.Option(None, "--name"),
     description: str = typer.Option(None, "--beschreibung"),
     language: str = typer.Option(None, "--sprache", help="de | ar | translit"),
-    landing_page: str = typer.Option(None, "--landingpage", help="Ziel der Tracking-Links."),
+    landing_page: str = typer.Option(
+        None, "--landingpage", help="Wohin {link} in Beitraegen zeigt (sonst marketing.startseite)."
+    ),
     template: str = typer.Option(None, "--vorlage", help="Textvorlage zum Selberposten."),
     template_file: Path = typer.Option(None, "--vorlage-datei", help="Vorlage aus einer Datei."),
     starts_on: str = typer.Option(None, "--start", help="JJJJ-MM-TT"),
     ends_on: str = typer.Option(None, "--ende", help="JJJJ-MM-TT"),
-    ziel: str = typer.Option(
-        None,
-        "--ziel",
-        help="store | landing | vorgabe - wohin ein Klick fuehrt.",
-    ),
 ) -> None:
     """Aendert eine bestehende Kampagne. Nicht genannte Felder bleiben.
 
     Notwendig, weil eine Kampagne nicht neu angelegt werden darf, um etwa die
     Landingpage zu korrigieren: Beim Loeschen faellt ueber den Fremdschluessel
-    auch die Zuordnung der Gruppen weg - und damit die vergebenen
-    Tracking-Codes. Die stehen aber moeglicherweise schon in veroeffentlichten
-    Beitraegen und muessen bleiben.
+    auch die Zuordnung der Gruppen weg - samt Texten und Stand.
 
     Die Kennung selbst ist nicht aenderbar; sie steckt in jedem Code.
     """
@@ -352,14 +309,6 @@ def campaign_set(
     if template_file:
         # utf-8-sig: Vorlagen entstehen oft in Notepad, das ein BOM schreibt.
         template = template_file.read_text(encoding="utf-8-sig")
-
-    if ziel is not None and ziel not in ("store", "landing", "vorgabe"):
-        console.print(
-            f"[red]Unbekanntes Ziel: {ziel}[/red]\n"
-            "Moeglich: store (Play Store), landing (eigene Seite), "
-            "vorgabe (Wert aus config/settings.yaml)"
-        )
-        raise typer.Exit(code=2)
 
     with MarketingStore(config.path("sqlite_path")) as store:
         campaign = _kampagne_oder_ende(store, campaign_id)
@@ -373,11 +322,6 @@ def campaign_set(
             ("message_template", template),
             ("starts_on", _datum(starts_on) if starts_on else None),
             ("ends_on", _datum(ends_on) if ends_on else None),
-            # "vorgabe" schreibt den leeren Wert - das ist der Weg zurueck zur
-            # Konfigurationsvorgabe. Ohne so ein Wort gaebe es ihn nicht: Ein
-            # leerer Wert auf der Kommandozeile ist von "nicht angegeben" nicht
-            # zu unterscheiden. Dieselbe Vereinbarung wie "alle" bei --stadt.
-            ("ziel", "" if ziel == "vorgabe" else ziel),
         ):
             if wert is not None:
                 setattr(campaign, feld, wert)
@@ -392,7 +336,7 @@ def campaign_set(
 
     console.print(f"[green]{campaign_id}:[/green] {', '.join(geaendert)} aktualisiert.")
     if landing_page:
-        console.print(f"[dim]Klicks auf die Tracking-Links landen jetzt auf {landing_page}[/dim]")
+        console.print(f"[dim]{{link}} zeigt in Beitraegen dieser Kampagne auf {landing_page}[/dim]")
 
 
 @campaign_app.command("status")
@@ -650,15 +594,8 @@ def _plan_ausgeben(
     if plan.nicht_mehr_passend:
         console.print(
             f"[yellow]{len(plan.nicht_mehr_passend)}[/yellow] zugeordnete Gruppen "
-            "entsprechen der Regel nicht mehr. Sie behalten ihren Code - er kann "
-            "in einem veroeffentlichten Beitrag stehen."
-        )
-
-    if not app_base_url(config):
-        console.print(
-            "[yellow]Hinweis:[/yellow] APP_BASE_URL ist nicht gesetzt - die Codes stehen, "
-            "die Links bleiben leer.\nSetzen in .env oder config/settings.yaml, danach: "
-            f"[bold]fbgroups campaign refresh-urls {campaign_id}[/bold]"
+            "entsprechen der Regel nicht mehr. Sie bleiben zugeordnet - an ihnen "
+            "haengen Texte und Versuche."
         )
 
 
@@ -771,15 +708,11 @@ def campaign_links(
     campaign_id: str = typer.Argument(...),
     output: Path = typer.Option(None, "--export", help="Als CSV schreiben."),
 ) -> None:
-    """Listet die Tracking-Links einer Kampagne (optional als CSV)."""
+    """Listet die Zuordnungen einer Kampagne (optional als CSV)."""
     config = _config()
     gruppen_store, store = _stores(config)
     try:
         _kampagne_oder_ende(store, campaign_id)
-        # Fehlende Kurzcodes nachtragen, bevor die Liste entsteht: Wer die
-        # CSV nimmt, um von Hand zu posten, soll dieselbe kurze Adresse
-        # bekommen wie die Automatik - nicht die mit dem Kampagnencode.
-        store.kurzcodes_nachtragen(campaign_id)
         links = store.links_for_campaign(campaign_id)
         namen = {g.group_id: g for g in gruppen_store.load_groups()}
     finally:
@@ -795,100 +728,22 @@ def campaign_links(
         # utf-8-sig und ';' - sonst zeigt Excel Arabisch und Spalten falsch an.
         with output.open("w", encoding="utf-8-sig", newline="") as fh:
             writer = csv.writer(fh, delimiter=";")
-            # ``public_url`` steht **hinten** angehaengt: Die bisherigen
-            # sechs Spalten behalten ihre Stellung, damit eine Tabelle, die
-            # jemand schon gebaut hat, weiter passt. Sie ist die Adresse, die
-            # in einen Beitrag gehoert - die davor ist die des Datensatzes.
-            writer.writerow(
-                [
-                    "tracking_code", "tracking_url", "group_id", "name", "stadt", "url",
-                    "public_url",
-                ]
-            )
+            writer.writerow(["code", "group_id", "name", "stadt", "url"])
             for link in links:
                 group = namen.get(link.group_id)
                 writer.writerow(
                     [
                         link.tracking_code,
-                        link.tracking_url,
                         link.group_id,
                         group.name if group else "",
                         (group.city if group else "") or "",
                         group.url_canonical if group else "",
-                        link.url_fuer("store"),
                     ]
                 )
-        console.print(f"[green]CSV:[/green] {output}  ({len(links)} Links)")
+        console.print(f"[green]CSV:[/green] {output}  ({len(links)} Zuordnungen)")
         return
 
     _links_tabelle(links, namen)
-
-
-@campaign_app.command("kurzlinks")
-def campaign_kurzlinks(
-    campaign_id: str = typer.Argument(
-        "", help="Nur diese Kampagne. Ohne Angabe: der ganze Bestand."
-    ),
-    lesbar: bool = typer.Option(
-        False,
-        "--lesbar",
-        help="Noch nicht veroeffentlichten Zuordnungen einen lesbaren Namen geben "
-        "(b-tarikak.de/t/safar-sham-12).",
-    ),
-) -> None:
-    """Traegt die oeffentlichen Kurzcodes nach - fuer Zuordnungen von frueher.
-
-    Neue Zuordnungen bringen ihren Deckname selbst mit; was hier noch fehlt,
-    stammt aus der Zeit vor dem 14.09.2026. Der Befehl ist wiederholbar und
-    fasst Vorhandenes nie an: Ein vergebener Kurzcode steht moeglicherweise
-    schon in einem Beitrag, und ein Klick darauf muss ankommen.
-
-    Er **aendert keine Tracking-Codes** und keine Auswertung. Was sich
-    aendert, ist allein die Adresse, die ab dem naechsten Beitrag hinausgeht.
-    """
-    config = _config()
-    with MarketingStore(config.path("sqlite_path")) as store:
-        if campaign_id:
-            _kampagne_oder_ende(store, campaign_id)
-        store.merke_link_basis(str(config.get("marketing", "link_basis", default="") or ""))
-        if lesbar:
-            if not store.link_basis():
-                console.print("[red]marketing.link_basis ist nicht gesetzt.[/red]")
-                raise typer.Exit(code=1)
-            umgestellt = store.lesbar_machen(campaign_id)
-            console.print(
-                f"[green]{umgestellt}[/green] noch nicht veroeffentlichte Zuordnung(en) "
-                f"tragen jetzt einen lesbaren Namen unter {store.link_basis()}/ . "
-                "Veroeffentlichte behalten ihre Adresse."
-            )
-        anzahl = store.kurzcodes_nachtragen(campaign_id)
-
-    umfang = f"Kampagne {campaign_id}" if campaign_id else "dem ganzen Bestand"
-    if not anzahl:
-        console.print(f"[green]In {umfang} hat jede Zuordnung ihre kurze Adresse.[/green]")
-        return
-    console.print(
-        f"[green]{anzahl}[/green] Zuordnung(en) in {umfang} haben eine kurze Adresse "
-        "bekommen. Die Tracking-Codes und alle Auswertungen bleiben unveraendert."
-    )
-
-
-@campaign_app.command("refresh-urls")
-def campaign_refresh_urls(campaign_id: str = typer.Argument(...)) -> None:
-    """Schreibt die Links mit der aktuellen APP_BASE_URL neu - Codes bleiben."""
-    config = _config()
-    basis = app_base_url(config)
-    if not basis:
-        console.print("[red]APP_BASE_URL ist nicht gesetzt.[/red]")
-        raise typer.Exit(code=1)
-
-    with MarketingStore(config.path("sqlite_path")) as store:
-        _kampagne_oder_ende(store, campaign_id)
-        geaendert = store.refresh_tracking_urls(
-            campaign_id, lambda code: tracking_url(code, config)
-        )
-
-    console.print(f"[green]{geaendert}[/green] Links auf {basis} umgestellt. Codes unveraendert.")
 
 
 @campaign_app.command("message")
@@ -1833,13 +1688,7 @@ def campaign_auto(
             console.print(f"[red]Gruppe {group_id} ist nicht in der Kampagne {campaign_id}.[/red]")
             raise typer.Exit(code=1)
 
-        from fbgroups.marketing.lauf import ziel_zu_nummer
-
-        text = mit_link(
-            campaign, link, vorschlag.text, config=config,
-            ziel=ziel_zu_nummer(vorschlag.nummer),
-            texttyp=texttyp,
-        )
+        text = mit_link(campaign, link, vorschlag.text, config=config, texttyp=texttyp)
 
     with SqliteStore(config.path("sqlite_path")) as gruppen_store:
         group = next((g for g in gruppen_store.load_groups() if g.group_id == group_id), None)
@@ -2590,24 +2439,14 @@ def campaign_next(
 @campaign_app.command("reset")
 def campaign_reset(
     campaign_id: str = typer.Argument(...),
-    auch_ereignisse: bool = typer.Option(
-        False,
-        "--auch-ereignisse",
-        help="Zusaetzlich Klicks, Registrierungen und Downloads dieser Kampagne loeschen.",
-    ),
     ja: bool = typer.Option(False, "--ja", help="Wirklich ausfuehren (sonst nur zeigen)."),
 ) -> None:
     """Setzt den Beitragsstand einer Kampagne auf Anfang - fuer Testlaeufe.
 
-    **Tracking-Codes bleiben unangetastet.** Ein vergebener Code steht
-    moeglicherweise in einem veroeffentlichten Beitrag; ein Klick darauf muss
-    weiterhin ankommen und gezaehlt werden. Zurueckgesetzt wird der *Stand*,
+    **Die Zuordnungen bleiben unangetastet.** Zurueckgesetzt wird der *Stand*,
     nie die Zuordnung - und ebenso wenig die Gruppen oder der Kooperationsstand.
 
-    Ohne ``--ja`` wird nur gezeigt, was geschaehe. Das ist kein Zierrat:
-    ``--auch-ereignisse`` loescht gemessene Resonanz, und die ist das einzige
-    in dieser Datenbank, was sich nicht wiederherstellen laesst. Sie ist von
-    aussen entstanden und kommt nicht noch einmal.
+    Ohne ``--ja`` wird nur gezeigt, was geschaehe.
     """
     config = _config()
     with MarketingStore(config.path("sqlite_path")) as store:
@@ -2620,32 +2459,21 @@ def campaign_reset(
         tabelle.add_row("Zuordnungen zurueckgesetzt", str(zahlen["zuordnungen"]))
         tabelle.add_row("davon veroeffentlicht", str(zahlen["veroeffentlicht"]))
         tabelle.add_row("Versuchsprotokoll geloescht", str(zahlen["versuche"]))
-        tabelle.add_row(
-            "Ereignisse geloescht",
-            str(zahlen["ereignisse"]) if auch_ereignisse else "0 (bleiben erhalten)",
-        )
         console.print(tabelle)
         console.print()
         console.print(
-            "[dim]Unangetastet: Tracking-Codes und -URLs, die Gruppen selbst, "
+            "[dim]Unangetastet: die Zuordnungen samt Code, die Gruppen selbst, "
             "der Kooperationsstand (Mitglied/kontaktiert) und die Entwuerfe.[/dim]"
         )
 
         if not ja:
             console.print(
                 f"\n[yellow]Nichts geaendert.[/yellow] Wirklich ausfuehren:  "
-                f"fbgroups campaign reset {campaign_id}"
-                f"{' --auch-ereignisse' if auch_ereignisse else ''} --ja"
+                f"fbgroups campaign reset {campaign_id} --ja"
             )
             return
 
-        if auch_ereignisse and zahlen["ereignisse"]:
-            console.print(
-                f"\n[red]{zahlen['ereignisse']} gemessene Ereignisse werden geloescht.[/red] "
-                "Sie sind von aussen entstanden und kommen nicht wieder."
-            )
-
-        getan = store.setze_kampagne_zurueck(campaign_id, auch_ereignisse=auch_ereignisse)
+        getan = store.setze_kampagne_zurueck(campaign_id)
 
     console.print(
         f"\n[green]Zurueckgesetzt.[/green] {getan['zuordnungen']} Zuordnungen stehen wieder "
@@ -2914,7 +2742,6 @@ def marketing_overview() -> None:
             for campaign in campaigns
             for link in store.links_for_campaign(campaign.campaign_id)
         ]
-        zahlen = kennzahlen(store)
     finally:
         gruppen_store.close()
         store.close()
@@ -2931,327 +2758,11 @@ def marketing_overview() -> None:
     table = Table(title="Marketing", show_header=False, box=None)
     table.add_row("Facebook Groups", str(len(gruppen)))
     table.add_row("Active Campaigns", f"{len(aktive)} von {len(campaigns)}")
-    table.add_row("Tracking-Codes", str(len(links)))
-    table.add_row("Clicks", str(zahlen["clicks"]))
-    table.add_row("Registrations", str(zahlen["registrations"]))
-    table.add_row("Downloads", str(zahlen["downloads"]))
-    table.add_row("Activations", str(zahlen["activated"]))
-    table.add_row("Qualified Users", str(zahlen["qualified"]))
-    table.add_row("Conversions", str(zahlen["conversions"]))
-    table.add_row(
-        "Referrals", f"{zahlen['referrals']}  (qualifiziert: {zahlen['referrals_qualified']})"
-    )
-    table.add_row("Rewards", str(zahlen["rewards"]))
+    table.add_row("Zuordnungen", str(len(links)))
     table.add_row("", "")
     for name, anzahl in sorted(nach_status.items(), key=lambda x: -x[1]):
         table.add_row(name, str(anzahl))
     console.print(table)
-
-    if zahlen["clicks"] == 0:
-        console.print(
-            "[dim]Noch keine Klicks. Der Dienst, der sie zaehlt, startet mit: fbgroups serve[/dim]"
-        )
-
-
-@marketing_app.command("analytics")
-def marketing_analytics(
-    top: int = typer.Option(10, "--top", help="Laenge der Bestenlisten."),
-    output: Path = typer.Option(None, "--export", help="Als CSV schreiben."),
-) -> None:
-    """Bestenlisten und Trichter: Welche Gruppe bringt Benutzer?"""
-    config = _config()
-    gruppen_store, store = _stores(config)
-    try:
-        gruppen_namen = {g.group_id: (g.name or g.group_id) for g in gruppen_store.load_groups()}
-        kampagnen_namen = {c.campaign_id: c.name for c in store.load_campaigns()}
-        gruppen_liste = top_groups(store, gruppen_namen)[:top]
-        kampagnen_liste = top_campaigns(store, kampagnen_namen)[:top]
-        stufen = funnel(store)
-    finally:
-        gruppen_store.close()
-        store.close()
-
-    if not gruppen_liste and not kampagnen_liste:
-        console.print(
-            "[yellow]Noch keine Ereignisse.[/yellow] Klicks entstehen, sobald der "
-            "Dienst laeuft (fbgroups serve) und jemand einen Tracking-Link anklickt."
-        )
-        return
-
-    for titel, zeilen in (("Top Groups", gruppen_liste), ("Top Campaigns", kampagnen_liste)):
-        if not zeilen:
-            continue
-        table = Table(title=titel)
-        table.add_column(titel.split()[-1])
-        table.add_column("Clicks", justify="right")
-        table.add_column("Registrations", justify="right")
-        table.add_column("Downloads", justify="right")
-        table.add_column("Qualified", justify="right")
-        table.add_column("Conversions", justify="right")
-        table.add_column("Rate", justify="right")
-        for zeile in zeilen:
-            rate = zeile.conversion_rate
-            table.add_row(
-                zeile.label[:38],
-                str(zeile.clicks),
-                str(zeile.registrations),
-                str(zeile.downloads),
-                str(zeile.qualified),
-                str(zeile.conversions),
-                f"{rate} %" if rate is not None else "[dim]-[/dim]",
-            )
-        console.print(table)
-
-    trichter = Table(title="Conversion Funnel")
-    trichter.add_column("Stufe")
-    trichter.add_column("Anzahl", justify="right")
-    trichter.add_column("Anteil an Clicks", justify="right")
-    for event_type, anzahl, anteil in stufen:
-        trichter.add_row(
-            event_type.value,
-            str(anzahl),
-            f"{anteil} %" if anteil is not None else "[dim]-[/dim]",
-        )
-    console.print(trichter)
-
-    if output:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with output.open("w", encoding="utf-8-sig", newline="") as fh:
-            writer = csv.writer(fh, delimiter=";")
-            writer.writerow(
-                [
-                    "ebene",
-                    "schluessel",
-                    "name",
-                    "clicks",
-                    "landing_visits",
-                    "registrations",
-                    "downloads",
-                    "activations",
-                    "qualified",
-                    "conversions",
-                    "conversion_rate",
-                ]
-            )
-            for ebene, zeilen in (("group", gruppen_liste), ("campaign", kampagnen_liste)):
-                for zeile in zeilen:
-                    writer.writerow(
-                        [
-                            ebene,
-                            zeile.schluessel,
-                            zeile.label,
-                            zeile.clicks,
-                            zeile.landing_visits,
-                            zeile.registrations,
-                            zeile.downloads,
-                            zeile.activations,
-                            zeile.qualified,
-                            zeile.conversions,
-                            zeile.conversion_rate if zeile.conversion_rate is not None else "",
-                        ]
-                    )
-        console.print(f"[green]CSV:[/green] {output}")
-
-
-@marketing_app.command("code")
-def marketing_code(
-    tracking_code: str = typer.Argument(..., help="z. B. FB-SYR-KLN-002"),
-    benutzer: bool = typer.Option(
-        False, "--benutzer", "-b", help="Die Menschen dahinter einzeln zeigen."
-    ),
-) -> None:
-    """Der Trichter eines einzelnen Tracking-Codes.
-
-    Beantwortet die Frage, die eine Gesamtzahl nicht beantwortet: Gehoeren
-    dieser Download und diese Aktivierung wirklich zu **diesem** Code? Mit
-    ``--benutzer`` steht die Begruendung daneben - je Mensch die Kennungen,
-    unter denen er aufgetreten ist, und die Stufen, die auf ihn entfallen.
-    """
-    config = _config()
-    gruppen_store, store = _stores(config)
-    try:
-        namen = {g.group_id: (g.name or g.group_id) for g in gruppen_store.load_groups()}
-        bericht = code_bericht(store, tracking_code, namen)
-    finally:
-        gruppen_store.close()
-        store.close()
-
-    if not bericht.group_id and not bericht.zahlen:
-        console.print(
-            f"[yellow]{tracking_code}[/yellow] ist keiner Gruppe zugeordnet und hat "
-            f"keine Ereignisse.\n"
-            f"Vergebene Codes zeigt: fbgroups campaign links <kampagne>"
-        )
-        raise typer.Exit(code=1)
-
-    kopf = Table(title=f"Tracking-Code {tracking_code}", show_header=False, box=None)
-    kopf.add_row("Facebook-Gruppe", bericht.group_name or "[dim]unbekannt[/dim]")
-    kopf.add_row("Gruppen-ID", bericht.group_id or "[dim]-[/dim]")
-    kopf.add_row("Kampagne", bericht.campaign_id or "[dim]-[/dim]")
-    console.print(kopf)
-
-    stufen = Table(title="Trichter")
-    stufen.add_column("Stufe")
-    stufen.add_column("Anzahl", justify="right")
-    stufen.add_column("Woher", style="dim")
-    for stufe, anzahl in bericht.stufen:
-        stufen.add_row(stufe.value, str(anzahl), _WOHER.get(stufe.value, ""))
-    console.print(stufen)
-
-    if not benutzer:
-        console.print("[dim]Mit --benutzer steht daneben, wer dahintersteckt.[/dim]")
-        return
-
-    if not bericht.benutzer:
-        console.print("[dim]Noch niemand - bisher nur Klicks, und die tragen keine Kennung.[/dim]")
-        return
-
-    wege = Table(title="Menschen hinter diesem Code")
-    wege.add_column("Kennungen")
-    wege.add_column("Stufen")
-    for weg in bericht.benutzer:
-        wege.add_row(
-            "\n".join(weg.kennungen),
-            " -> ".join(stufe.value for stufe in weg.stufen),
-        )
-    console.print(wege)
-
-
-# Wer die Stufe erzeugt. Steht in der Ausgabe, weil die haeufigste Frage bei
-# einer Null lautet "ist das kaputt oder meldet es nur niemand?".
-_WOHER: dict[str, str] = {
-    "click": "Redirect-Dienst (hier)",
-    "landing_visit": "Web-App ueber die API",
-    "registration": "API",
-    "download": "API",
-    "activation": "mobile App ueber die API",
-    "qualified": "API",
-    "conversion": "API",
-}
-
-
-# ---------------------------------------------------------------------------
-# Empfehlungen
-# ---------------------------------------------------------------------------
-
-
-@referral_app.command("code")
-def referral_code(
-    user_ref: str = typer.Argument(..., help="Kennung aus der Zielanwendung."),
-) -> None:
-    """Zeigt den Empfehlungscode eines Benutzers (legt ihn beim ersten Mal an)."""
-    config = _config()
-    with MarketingStore(config.path("sqlite_path")) as store:
-        code = code_fuer_benutzer(store, config, user_ref)
-    console.print(f"[green]{user_ref}:[/green] [bold]{code}[/bold]")
-
-
-@referral_app.command("list")
-def referral_list(
-    status: str = typer.Option(None, "--status", help=" | ".join(s.value for s in ReferralStatus)),
-    top: int = typer.Option(30, "--top", help="0 = alle."),
-) -> None:
-    """Listet Empfehlungen."""
-    config = _config()
-    with MarketingStore(config.path("sqlite_path")) as store:
-        referrals = store.all_referrals(ReferralStatus(status) if status else None)
-
-    if not referrals:
-        console.print("[yellow]Noch keine Empfehlungen.[/yellow]")
-        return
-
-    if top > 0:
-        referrals = referrals[:top]
-
-    table = Table(title="Empfehlungen")
-    table.add_column("Code")
-    table.add_column("Werber")
-    table.add_column("Geworben")
-    table.add_column("Status")
-    table.add_column("Gruppe")
-    for referral in referrals:
-        table.add_row(
-            referral.referral_code,
-            referral.referrer_user_ref,
-            referral.referred_user_ref,
-            referral.status.value,
-            referral.group_id or "[dim]-[/dim]",
-        )
-    console.print(table)
-
-
-@referral_app.command("set")
-def referral_set(
-    referred_user_ref: str = typer.Argument(..., help="Kennung des geworbenen Benutzers."),
-    status: str = typer.Argument(..., help=" | ".join(s.value for s in ReferralStatus)),
-    note: str = typer.Option("", "--notiz"),
-) -> None:
-    """Setzt den Stand einer Empfehlung von Hand - z. B. auf 'review'."""
-    config = _config()
-    with MarketingStore(config.path("sqlite_path")) as store:
-        referral = setze_status(store, referred_user_ref, ReferralStatus(status), note)
-        if referral is None:
-            console.print(f"[red]Keine Empfehlung fuer {referred_user_ref}.[/red]")
-            raise typer.Exit(code=1)
-        neu = bewerte_benutzer(store, load_reward_rules(config.root), referral.referrer_user_ref)
-
-    console.print(f"[green]{referred_user_ref}:[/green] {referral.status.value}")
-    for reward in neu:
-        console.print(f"  [bold]Praemie erreicht:[/bold] {reward.rule_id} ({reward.value})")
-
-
-@marketing_app.command("rewards")
-def marketing_rewards(
-    user_ref: str = typer.Option(None, "--benutzer", help="Nur diesen Benutzer."),
-    claim: str = typer.Option(None, "--einloesen", help="Regel-Kennung als eingeloest markieren."),
-) -> None:
-    """Zeigt Praemienregeln und vergebene Praemien."""
-    config = _config()
-    regeln = load_reward_rules(config.root)
-
-    with MarketingStore(config.path("sqlite_path")) as store:
-        if claim and user_ref:
-            geaendert = store.set_reward_status(user_ref, claim, RewardStatus.CLAIMED)
-            store.audit("reward_eingeloest", user_ref, claim)
-            console.print(f"[green]{geaendert}[/green] Praemie als eingeloest markiert.")
-
-        if user_ref:
-            stand = fortschritt(store, regeln, user_ref)
-            table = Table(title=f"Praemien: {user_ref}")
-            table.add_column("Regel")
-            table.add_column("Braucht", justify="right")
-            table.add_column("Erreicht", justify="right")
-            table.add_column("Praemie")
-            table.add_column("Status")
-            for regel, erreicht, status in stand:
-                table.add_row(
-                    regel.rule_id,
-                    f"{regel.threshold} {regel.metric}",
-                    str(erreicht),
-                    f"{regel.reward_type.value} {regel.value}",
-                    status.value,
-                )
-            console.print(table)
-            return
-
-        vergeben = store.all_rewards()
-
-    table = Table(title="Praemienregeln (config/rewards.yaml)")
-    table.add_column("Regel")
-    table.add_column("Schwelle", justify="right")
-    table.add_column("Typ")
-    table.add_column("Wert")
-    table.add_column("Aktiv")
-    for regel in regeln:
-        table.add_row(
-            regel.rule_id,
-            f"{regel.threshold} {regel.metric}",
-            regel.reward_type.value,
-            regel.value,
-            "ja" if regel.active else "[dim]nein[/dim]",
-        )
-    console.print(table)
-    console.print(f"Vergeben: [bold]{len(vergeben)}[/bold] Praemien.")
 
 
 @marketing_app.command("audit")

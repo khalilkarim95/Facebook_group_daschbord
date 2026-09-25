@@ -13,11 +13,10 @@ Drei Entscheidungen, die man dem Code sonst nicht ansieht:
   Alles Uebrige bleibt lesend: Bewertung, Klassifikation und Trefferdaten
   entstehen aus der Suche und sind reproduzierbar. Sie hier ueberschreiben zu
   koennen hiesse, zwei Wahrheiten ueber denselben Bestand zu fuehren.
-- **Nur ueber localhost erreichbar** (siehe ``web.dashboard``). Der Dienst ist
-  dafuer gedacht, oeffentlich zu stehen: Die Tracking-Links in den Beitraegen
-  zeigen auf ihn. Die Arbeitsliste - welche Gruppen angesprochen werden sollen,
-  wer schon kontaktiert wurde - gehoert aber nicht ins offene Netz. Es gibt
-  keine Anmeldung, also gibt es auch nichts, was sie schuetzen wuerde.
+- **Nur ueber localhost erreichbar** (siehe ``web.dashboard``). Die
+  Arbeitsliste - welche Gruppen angesprochen werden sollen, wer schon
+  kontaktiert wurde - gehoert nicht ins offene Netz. Es gibt keine Anmeldung,
+  also gibt es auch nichts, was sie schuetzen wuerde.
 - **Keine Datei von aussen.** Kein CDN, keine Schriftart, kein Skript von
   Dritten. Die Seite muss ohne Internet funktionieren, und ein Abruf bei einem
   fremden Dienst verriete, woran hier gearbeitet wird.
@@ -36,11 +35,9 @@ from pathlib import Path
 from typing import Any
 
 from fbgroups.config import AppConfig
-from fbgroups.marketing.analytics import funnel, kennzahlen
 from fbgroups.marketing.ausgang import GRUND_BESCHRIFTUNG, Ablehnungsgrund
 from fbgroups.marketing.bezug import Bezug
 from fbgroups.marketing.models import CampaignStatus, MarketingStatus
-from fbgroups.marketing.resonanz import resonanz_je_gruppe
 from fbgroups.marketing.selection import (
     Auswahl,
     auswahl_der_kampagne,
@@ -55,7 +52,6 @@ from fbgroups.models import (
     LISTENPRIORITAETEN,
     Group,
 )
-from fbgroups.scoring import Resonanz
 from fbgroups.storage.sqlite_store import SqliteStore
 
 #: Nur fuer die Sortierung der Spalte "Prioritaet": A++ zuerst, ohne Note
@@ -119,29 +115,6 @@ def regel_kurzfassung(auswahl: Auswahl) -> str:
     teile.append("auch ohne Score" if auswahl.include_unscored else "nur bewertete")
     return " · ".join(teile)
 
-# Welche Ereignisstufen je Gruppe und Kampagne in der Tabelle stehen. Die
-# Reihenfolge ist die des Trichters; die Namen sind die Werte aus EventType,
-# damit Tabelle und counts_by nicht auseinanderlaufen koennen.
-EREIGNISFELDER: tuple[str, ...] = (
-    "click", "registration", "download", "activation", "qualified", "conversion",
-)
-
-_EREIGNIS_LABEL = {
-    "click": "Klicks",
-    "landing_visit": "Landungen",
-    "registration": "Registrierungen",
-    # Ohne Eintrag faellt ereignis_label auf den Rohwert zurueck - im Trichter
-    # standen "store_visit" und "download" englisch zwischen deutschen Stufen.
-    "store_visit": "Store-Besuche",
-    "download": "Downloads",
-    "activation": "Aktivierungen",
-    "qualified": "qualifiziert",
-    "conversion": "Abschluesse",
-}
-
-def ereignis_label(wert: str) -> str:
-    return _EREIGNIS_LABEL.get(wert, wert)
-
 # Reihenfolge der Dringlichkeit: Was oben steht, gewinnt. Ein offener Beitrag
 # neben einem veroeffentlichten heisst "noch offen" - die Gruppe hat noch
 # Arbeit, auch wenn ein Teil erledigt ist.
@@ -194,12 +167,10 @@ def _gruppe_als_zeile(
     marketing_status: str,
     codes: list[str],
     anfragen: int,
-    ereignisse: dict[str, int] | None = None,
     bearbeiten: bool = True,
     ausschlussgrund: str = "",
     passt_zu: list[dict[str, str]] | None = None,
     beitraege: list[dict[str, Any]] | None = None,
-    resonanz: Resonanz | None = None,
     bezuege: list[str] | None = None,
     bezuege_gelesen: int = 0,
     gruende: dict[str, int] | None = None,
@@ -303,31 +274,6 @@ def _gruppe_als_zeile(
         # "Diese Gruppe ist erledigt" darf erst gelten, wenn kein Beitrag mehr
         # aussteht; sonst verschwindet eine offene Aufgabe aus dem Filter.
         "beitrag_status": _beitrag_gesamtstand(beitraege or []),
-        # Die gemessenen Grundlagen des Scores - dieselben Zahlen, aus denen
-        # scoring._resonanz_faktoren rechnet. Sie stehen hier, damit die Zeile
-        # die Bewertung belegen kann statt sie nur zu behaupten.
-        "resonanz": (
-            None
-            if resonanz is None
-            else {
-                "beitraege": resonanz.beitraege,
-                "klicks": resonanz.klicks,
-                "registrierungen": resonanz.registrierungen,
-                "quote": (
-                    round(resonanz.registrierungen / resonanz.klicks * 100, 1)
-                    if resonanz.klicks
-                    else None
-                ),
-                "letzte_regung": (
-                    resonanz.letzte_regung.isoformat() if resonanz.letzte_regung else None
-                ),
-                "erster_beitrag_am": (
-                    resonanz.erster_beitrag_am.isoformat()
-                    if resonanz.erster_beitrag_am
-                    else None
-                ),
-            }
-        ),
         # Die Einzelteile des Scores. Bisher stand nur der Satz in
         # score_reason; fuer eine Tabelle braucht es die Zahlen selbst.
         "punkte": group.score_breakdown.model_dump(),
@@ -340,12 +286,6 @@ def _gruppe_als_zeile(
         # auch die Herkunft der Zahl steht. Zweimal dasselbe Feld waere zwei
         # Wahrheiten ueber dieselbe Zahl.
         "beschreibung": group.description_snippet or "",
-        # Die Trichterzahlen dieser Gruppe. Sie stehen in derselben Zeile wie
-        # Score und Stand, damit sich die Frage "welche Gruppe bringt
-        # tatsaechlich Leute?" mit denselben Filtern beantworten laesst wie
-        # alles andere - eine zweite Bestenliste daneben waere ein zweiter
-        # Satz Zahlen, den man getrennt filtern muesste.
-        **{feld: (ereignisse or {}).get(feld, 0) for feld in EREIGNISFELDER},
     }
 
 def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
@@ -361,23 +301,8 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
     with MarketingStore(db_path) as mstore:
         marketing = mstore.load_all_marketing()
         campaigns = mstore.load_campaigns()
-        zahlen = kennzahlen(mstore)
-        klicks_je_kampagne = mstore.counts_by("campaign_id")
-        klicks_je_gruppe = mstore.counts_by("group_id")
-        trichter = [
-            {
-                "stufe": event_type.value,
-                "label": ereignis_label(event_type.value),
-                "anzahl": anzahl,
-                "anteil": anteil,
-            }
-            for event_type, anzahl, anteil in funnel(mstore)
-        ]
         links = {c.campaign_id: mstore.links_for_campaign(c.campaign_id) for c in campaigns}
         beitrag_zaehler = {c.campaign_id: mstore.post_counts(c.campaign_id) for c in campaigns}
-        # Dieselbe Funktion, die auch 'fbgroups rescore' benutzt - Anzeige und
-        # Bewertung koennen damit nicht auseinanderlaufen.
-        resonanz_je_id = resonanz_je_gruppe(mstore)
 
     codes_je_gruppe: dict[str, list[str]] = {}
     beitraege_je_gruppe: dict[str, list[dict[str, Any]]] = {}
@@ -400,12 +325,6 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
                     "fehler": link.post_error,
                 }
             )
-
-    # counts_by liefert {(schluessel, event_type): anzahl} - hier einmal nach
-    # Gruppe umgedreht, statt fuer jede der 310 Zeilen erneut zu suchen.
-    ereignisse_je_gruppe: dict[str, dict[str, int]] = {}
-    for (group_id, event_type), anzahl in klicks_je_gruppe.items():
-        ereignisse_je_gruppe.setdefault(group_id, {})[event_type] = anzahl
 
     # Welche Kampagnenregel welche Gruppe erfasst. Einmal je Kampagne ueber den
     # Bestand statt je Zeile ueber die Kampagnen: Bei 310 Gruppen und zehn
@@ -446,13 +365,11 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             else "not_contacted",
             codes_je_gruppe.get(g.group_id, []),
             anfragen_je_gruppe.get(g.group_id, 0),
-            ereignisse_je_gruppe.get(g.group_id),
             bearbeiten=marketing[g.group_id].bearbeiten if g.group_id in marketing else True,
             ausschlussgrund=(
                 marketing[g.group_id].ausschlussgrund if g.group_id in marketing else ""
             ),
             beitraege=beitraege_je_gruppe.get(g.group_id, []),
-            resonanz=resonanz_je_id.get(g.group_id),
             passt_zu=passt_je_gruppe.get(g.group_id, []),
             bezuege=[
                 b.value for b in bezuege_je_gruppe[g.group_id].bezuege
@@ -520,8 +437,6 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
 
     kampagnen = []
     for c in campaigns:
-        klicks = klicks_je_kampagne.get((c.campaign_id, "click"), 0)
-        abschluesse = klicks_je_kampagne.get((c.campaign_id, "conversion"), 0)
         # Die Auswahlregel gehoert sichtbar an die Kampagne. Eine Regel, die
         # man nicht nachlesen kann, aendert niemand gern - und "leer heisst
         # keine Einschraenkung" sieht man einem leeren Feld nicht an.
@@ -552,20 +467,8 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
                     "bestand": len(groups),
                 },
                 "gruppen": len(links.get(c.campaign_id, [])),
-                # Wie weit die Kampagne beim Veroeffentlichen ist - in
-                # derselben Zeile wie ihre Trichterzahlen. Ohne Beitrag gibt es
-                # keinen Klick; die beiden Zahlen nebeneinander zeigen sofort,
-                # ob eine schwache Kampagne schwach wirkt oder noch gar nicht
-                # gepostet wurde.
+                # Wie weit die Kampagne beim Veroeffentlichen ist.
                 "beitraege": beitrag_zaehler.get(c.campaign_id, {}),
-                "klicks": klicks,
-                "registrierungen": klicks_je_kampagne.get((c.campaign_id, "registration"), 0),
-                "qualifiziert": klicks_je_kampagne.get((c.campaign_id, "qualified"), 0),
-                "abschluesse": abschluesse,
-                # Ohne Klicks gibt es keine Quote - nicht 0,0 %. Eine Quote
-                # ohne Grundgesamtheit waere eine Aussage, die niemand belegen
-                # kann. Dieselbe Regel wie in analytics.Zeile.conversion_rate.
-                "quote": round(abschluesse / klicks * 100, 1) if klicks else None,
             }
         )
 
@@ -573,7 +476,6 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
         "gruppen": zeilen,
         "kampagnen": kampagnen,
         "auswahl": auswahl,
-        "trichter": trichter,
         # Die Verteilung ueber die Bezuege: mit, ohne (gelesen, nichts
         # gefunden), noch nie gelesen. Die mittlere Zahl betrifft die
         # Behandlung, die fuer ``[]`` noch festgelegt wird.
@@ -585,7 +487,7 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
             "bewertet": len(bewertet),
             "schnitt": schnitt,
             "bestwert": max((z["score"] for z in bewertet), default=None),
-            "tracking_links": sum(len(v) for v in links.values()),
+            "zuordnungen": sum(len(v) for v in links.values()),
             "beitraege_offen": sum(
                 1 for z in zeilen if z["beitrag_status"] in ("offen", "fehlgeschlagen")
             ),
@@ -597,7 +499,6 @@ def sammle_daten(config: AppConfig, db_path: Path) -> dict[str, Any]:
                 for b in z["beitraege"]
                 if b["status"] == "veroeffentlicht"
             ),
-            **zahlen,
         },
         "erzeugt_am": datetime.now().strftime("%d.%m.%Y %H:%M"),
     }
@@ -685,18 +586,12 @@ def _diagramme(gruppen: list[dict[str, Any]]) -> str:
     )
 
 
-def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
+def render(daten: dict[str, Any]) -> str:
     """Baut die vollstaendige Seite.
 
     Die Daten stehen als JSON im Dokument; gefiltert und sortiert wird im
     Browser. ``</`` wird dabei maskiert - ohne das beendete ein Gruppenname mit
     dieser Zeichenfolge das Skript und die Seite bliebe leer.
-
-    ``nur_lesen`` baut dieselben Zahlen ohne die Bedienelemente, die schreiben.
-    Das ist **keine** Absicherung - die schreibenden Wege pruefen selbst, siehe
-    ``web._nur_lokal`` - sondern Aufrichtigkeit: Ein Knopf, dessen Weg mit 404
-    antwortet, sieht aus wie ein Fehler der Seite. Gezeigt wird stattdessen,
-    wo die Aenderung hingehoert.
     """
     k = daten["kennzahlen"]
     daten = {**daten, "staende": [
@@ -724,35 +619,11 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
             _kachel(str(daten["bezug_mit"]), "mit Bezügen"),
             _kachel(str(daten["bezug_ohne"]), "ohne Bezug"),
             _kachel(str(daten["bezug_ungelesen"]), "noch nicht gelesen"),
-            _kachel(str(k["tracking_links"]), "Tracking-Links"),
+            _kachel(str(k["zuordnungen"]), "Zuordnungen"),
             _kachel(str(k["beitraege_veroeffentlicht"]), "Beiträge"),
             _kachel(str(k["beitraege_offen"]), "offen"),
-            # Klicks, Registrierungen, Downloads und "qualifiziert" stehen
-            # seit dem 01.09.2026 nur noch im Trichter darunter. Zweimal
-            # dieselbe Zahl heisst zwei Stellen, an denen sie stimmen muss -
-            # und die Kachel nannte sie ohne ihre Stufe davor und dahinter.
-            _kachel(str(k["referrals"]), "Empfehlungen"),
-            _kachel(str(k["rewards"]), "Prämien"),
         ]
     )
-
-    quote = lambda w: "–" if w is None else f"{w:.1f}".replace(".", ",") + " %"  # noqa: E731
-
-    # Vergebene Links ohne einen einzigen Klick sind der haeufigste stille
-    # Fehler: Die Codes stehen, aber unter der Basis-URL antwortet der Dienst
-    # nicht - dann liefert der Server die Startseite der App statt der
-    # Weiterleitung, und niemand merkt es, weil die Seite ja erscheint.
-    warnung = ""
-    if k["tracking_links"] and not k["clicks"]:
-        warnung = (
-            '<div class="warnung"><b>Noch kein einziger Klick.</b> '
-            + str(k["tracking_links"])
-            + " Tracking-Links sind vergeben. Prüfe, ob unter der Basis-URL wirklich "
-            "dieser Dienst antwortet – <code>/healthz</code> muss dort den Status als "
-            "JSON liefern. Kommt HTML zurück, zeigt die Domain auf eine andere "
-            "Anwendung, und jeder Klick geht verloren, ohne dass es auffällt: "
-            "Der Besucher sieht ja eine Seite.</div>"
-        )
 
     def status_auswahl(aktuell: str) -> str:
         """Die vier Kampagnenzustaende, der aktuelle vorgewaehlt."""
@@ -780,39 +651,16 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
         f"{status_auswahl(c['status'])}"
         f"</select></td>"
         f"<td class='zahl'>{c['gruppen']}</td>"
-        f"<td class='zahl'>{c['klicks']}</td>"
-        f"<td class='zahl'>{c['registrierungen']}</td>"
-        f"<td class='zahl'>{c['qualifiziert']}</td>"
-        f"<td class='zahl'>{c['abschluesse']}</td>"
-        f"<td class='zahl'>{quote(c['quote'])}</td>"
         f"<td class='knopfzelle'>"
-        # Der Weg zur Arbeitsseite. Er schreibt (beginnt einen Versuch) und
-        # erscheint deshalb nur im bedienbaren Zugang - von aussen fuehrte er
-        # ins Leere, und ein Knopf, der 404 antwortet, sieht aus wie ein Fehler.
-        + (
-            ""
-            if nur_lesen
-            else f"<a class='k-arbeit' href='/arbeit/{html.escape(c['id'])}'>Arbeiten</a>"
-        )
-        + f"<button class='k-regel' data-id=\"{html.escape(c['id'])}\">Regel</button>"
+        f"<a class='k-arbeit' href='/arbeit/{html.escape(c['id'])}'>Arbeiten</a>"
+        f"<button class='k-regel' data-id=\"{html.escape(c['id'])}\">Regel</button>"
         f"<button class='k-sync' data-id=\"{html.escape(c['id'])}\">Zuordnen</button>"
         f"<button class='k-weg' data-id=\"{html.escape(c['id'])}\" "
         f"data-name=\"{html.escape(c['name'])}\" title='Kampagne loeschen'>&times;</button>"
         f"</td>"
         f"</tr>"
         for c in daten["kampagnen"]
-    ) or "<tr><td colspan='10' class='leer'>Noch keine Kampagne angelegt.</td></tr>"
-
-    # Der Trichter als Balken: Die Anteile beziehen sich auf die Klicks, damit
-    # zwei Auswertungen vergleichbar bleiben (siehe analytics.funnel).
-    trichter_zeilen = "".join(
-        f"<tr><td>{html.escape(s['label'])}</td>"
-        f"<td class='zahl'>{s['anzahl']}</td>"
-        f"<td class='zahl'>{quote(s['anteil'])}</td>"
-        f"<td class='balkenzelle'><span class='balken' style='width:"
-        f"{min(s['anteil'] or 0, 100):.1f}%'></span></td></tr>"
-        for s in daten["trichter"]
-    )
+    ) or "<tr><td colspan='4' class='leer'>Noch keine Kampagne angelegt.</td></tr>"
 
     # Die Filterwerte der beiden gepflegten Einstufungen. Sie stehen im HTML
     # und nicht im JavaScript, damit die Reihenfolge dieselbe ist wie ueberall
@@ -839,28 +687,15 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
         for wert, anzahl in je_bezug.items()
     )
 
-    # Ausgeblendet wird per CSS, nicht entfernt: Das Skript sucht mehrere
-    # dieser Knoepfe beim Start ueber getElementById und liefe sonst in einen
-    # Fehler, der die ganze Seite leer liesse.
-    koerper_klasse = ' class="nur-lesen"' if nur_lesen else ""
-    nur_lesen_js = "true" if nur_lesen else "false"
     hinweis = (
-        "Nur-Lesen-Ansicht: Zahlen ja, Änderungen nein. Der Stand wird über den "
-        "SSH-Zugang gepflegt – dort steht ein Mensch vor den Knöpfen, die "
-        "Tracking-Codes vergeben."
-        if nur_lesen
-        else "Den Stand kannst du in der Tabelle direkt ändern – er wird sofort "
-        "gespeichert. Alles andere entsteht aus der Suche und ist hier nicht "
-        "änderbar. Facebook meldet nichts von selbst: Was du dort tust, trägst "
-        "du hier nach."
+        "Den Stand kannst du in der Tabelle direkt ändern – er wird sofort "
+        "gespeichert. Alles andere entsteht aus der Mitgliederliste und ist hier "
+        "nicht änderbar. Facebook meldet nichts von selbst: Was du dort tust, "
+        "trägst du hier nach."
     )
     fusszeile = (
-        "Kein Zugriff auf facebook.com. Diese Ansicht zeigt nur an; geändert "
-        "wird über den SSH-Zugang."
-        if nur_lesen
-        else "Kein Zugriff auf facebook.com. Diese Seite ist nur über localhost "
-        "erreichbar – der Dienst selbst beantwortet <code>/r/{code}</code> "
-        "weiterhin für alle."
+        "Kein Zugriff auf facebook.com. Diese Seite ist nur über localhost "
+        "erreichbar und zählt nichts."
     )
 
     return f"""<!doctype html>
@@ -902,14 +737,11 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
      geprueft (Helligkeitsband, Chroma, Kontrast gegen die Kartenflaeche) und
      steht bewusst nicht auf --akzent: dessen Dunkelwert liegt ausserhalb des
      Bandes und traegt als Flaeche zu wenig Gewicht. */
-  /* Die obere Reihe: Datenabdeckung und Trichter nebeneinander. Beide sind
-     Auskunft ueber den ganzen Bestand und gehoeren deshalb vor die Tabelle -
-     der Trichter stand bis zum 01.09.2026 unter dreihundert Zeilen. */
+  /* Die obere Reihe: Auskunft ueber den ganzen Bestand, vor der Tabelle. */
   .oben {{
     display: flex; flex-wrap: wrap; gap: 12px;
     align-items: flex-start; margin-bottom: 20px;
   }}
-  .oben > .trichter {{ flex: 1 1 420px; min-width: 320px; }}
   .oben h2 {{ margin: 0 0 8px; }}
   .oben table {{ font-size: 13px; }}
   .oben th, .oben td {{ padding: 6px 10px; }}
@@ -1026,7 +858,7 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   h2 {{ font-size: 15px; margin: 28px 0 10px; }}
   footer {{ color: var(--leise); font-size: 12px; margin-top: 28px; }}
   .tabelle-rahmen {{ overflow-x: auto; }}
-  /* Die Kampagnen stehen fuer sich und nicht neben dem Trichter: Bei zehn
+  /* Die Kampagnen stehen fuer sich und nicht neben den Diagrammen: Bei zehn
      Kampagnen lief die Tabelle in der halben Breite ueber, und ausgerechnet
      die Knopfspalte verschwand im waagerechten Bildlauf - man sah die
      Kampagne, konnte sie aber nicht bedienen. */
@@ -1077,11 +909,6 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   .spalten {{ display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }}
   .spalten > section {{ flex: 1; min-width: 320px; }}
   h2 {{ font-size: 16px; margin: 24px 0 8px; }}
-  .warnung {{
-    background: var(--karte); border: 1px solid var(--mittel);
-    border-left: 4px solid var(--mittel); border-radius: 8px;
-    padding: 10px 14px; margin-bottom: 16px; font-size: 13px;
-  }}
   /* Sammelleiste: erscheint erst, wenn etwas ausgewaehlt ist - sonst stuende
      dauerhaft eine Schaltflaeche da, die nichts tut. */
   .sammel {{
@@ -1140,7 +967,7 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
                white-space: nowrap; }}
   .k-arbeit:hover {{ background: #2563eb; }}
   /* Zurueckhaltend, obwohl es der folgenreichste Knopf der Seite ist: Er
-     loescht Tracking-Codes, die in veroeffentlichten Beitraegen stehen.
+     loescht alle Zuordnungen der Kampagne samt Texten.
      Auffaellig gestaltet lockte er zum Ausprobieren - die Warnung steht
      stattdessen im Dialog, wo sie gelesen wird. */
   .k-weg {{ cursor: pointer; padding: 6px 10px; border-radius: 6px;
@@ -1159,46 +986,23 @@ def render(daten: dict[str, Any], *, nur_lesen: bool = False) -> str:
   .b-uebersprungen   {{ background: var(--b-aus-bg);    color: var(--b-aus-fg); }}
   .b-fehler {{ font-size: 11px; color: var(--b-fehler-fg); }}
   .b-leer {{ color: var(--leise); font-size: 12px; }}
-  /* Gemessene Resonanz */
-  .res {{ font-size: 12px; line-height: 1.45; white-space: nowrap; }}
-  .res b {{ font-size: 13px; }}
-  /* Nur-Lesen: alles weg, was einen schreibenden Weg ruft. */
   .sammel-teiler {{ color: var(--rand); padding: 0 .2rem; }}
-  body.nur-lesen .sammel,
-  body.nur-lesen th.auswahl, body.nur-lesen td.auswahl,
-  body.nur-lesen .knopfzelle, body.nur-lesen .k-status,
-  body.nur-lesen .neu-kampagne,
   /* Ein Stand, den die Automatik fuehrt - als Text, nicht als Feld. Ein
      Auswahlfeld mit zwei Werten liesse ihn beim naechsten Anfassen fallen. */
   .stand-fest {{ font-size:.85rem; opacity:.85; font-style:italic; }}
 </style>
 </head>
-<body{koerper_klasse}>
+<body>
 <h1>Batraqiq – Gruppenübersicht</h1>
 <p class="hinweis">
   {hinweis}
   Stand: {html.escape(daten["erzeugt_am"])}
 </p>
 
-{warnung}
-
 <div class="kacheln">{kacheln}</div>
 
 <div class="oben">
 {diagramme}
-<section class="trichter">
-<h2>Trichter</h2>
-<div class="tabelle-rahmen">
-<table>
-  <thead><tr>
-    <th>Stufe</th><th class="zahl">Anzahl</th>
-    <th class="zahl" title="Anteil an den Klicks – nicht an der vorigen Stufe.
-So bleiben zwei Auswertungen vergleichbar.">Anteil</th><th></th>
-  </tr></thead>
-  <tbody>{trichter_zeilen}</tbody>
-</table>
-</div>
-</section>
 </div>
 
 <div class="filter">
@@ -1288,7 +1092,7 @@ genau die Liste, die noch zu beurteilen ist.">
   <input type="text" id="sammel-grund" placeholder="Grund für den Ausschluss (optional)">
   <button id="sammel-aus">Ausschließen</button>
   <button id="sammel-ein">Wieder aufnehmen</button>
-  <span class="hinweis">Der Tracking-Code bleibt in jedem Fall gültig.</span>
+  <span class="hinweis">Die Zuordnungen bleiben in jedem Fall bestehen.</span>
   <span class="sammel-teiler">·</span>
   <select id="sammel-kampagne" title="Die gewählten Gruppen dieser Kampagne zuordnen">
     <option value="">Kampagne wählen …</option>
@@ -1313,26 +1117,10 @@ erkannt wurden (Reisender, Mitnahme, Gepaeck ...). Sie ersetzen die
 Zielklasse A-D. 'keine' heisst gelesen und nichts gefunden, 'ungelesen'
 heisst, dass noch kein Beitrag gelesen wurde.">Bezüge</th>
     <th data-sort="kampagnen_text"
-        title="Zu welchen Kampagnen diese Gruppe gehoert. Zuordnen vergibt einen
-Tracking-Code - der wird nie zurueckgenommen, er steht spaeter in
-veroeffentlichten Beitraegen.">Kampagne</th>
+        title="Zu welchen Kampagnen diese Gruppe gehoert.">Kampagne</th>
     <th data-sort="marketing_label">Stand</th>
     <th data-sort="beitrag_status"
-        title="Der Beitrag dieser Kampagne in dieser Gruppe. Der Text trägt den
-Tracking-Link genau dieser Gruppe – er entsteht aus der Zuordnung, nicht aus
-einer Liste im Programm.">Beitrag</th>
-    <th class="zahl" data-sort="click">Klicks</th>
-    <th class="zahl" data-sort="registration">Registr.</th>
-    <th class="zahl" data-sort="download"
-        title="Der Bezug der App wurde ausgeloest. Zaehlt je Mensch einmal und
-haengt an keiner anderen Stufe: Wer sich registriert und nicht herunterlaedt,
-und wer herunterlaedt, ohne sich zu registrieren, sind beide gueltige
-Faelle.">Downl.</th>
-    <th class="zahl" data-sort="activation"
-        title="Die App wurde erstmals geoeffnet - der einzige Beleg dafuer, dass
-sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv.</th>
-    <th class="zahl" data-sort="qualified">qualif.</th>
-    <th class="zahl" data-sort="conversion">Absch.</th>
+        title="Der Beitrag dieser Kampagne in dieser Gruppe.">Beitrag</th>
   </tr></thead>
   <tbody id="zeilen"></tbody>
 </table>
@@ -1359,9 +1147,7 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
 <table>
   <thead><tr>
     <th>Name</th><th>Status</th>
-    <th class="zahl">Gruppen</th><th class="zahl">Klicks</th>
-    <th class="zahl">Registr.</th><th class="zahl">qualif.</th>
-    <th class="zahl">Absch.</th><th class="zahl">Quote</th>
+    <th class="zahl">Gruppen</th>
     <th class="aktionen-kopf">Aktionen</th>
   </tr></thead>
   <tbody>{kampagnen_zeilen}</tbody>
@@ -1424,8 +1210,8 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
     <div class="breit knopfreihe">
       <button id="k-anlegen">Anlegen</button>
       <span class="zart">
-        Legt einen Entwurf an – <strong>ohne</strong> Tracking-Codes zu vergeben.
-        Die Codes kommen erst über „Zuordnen“, und dort wird vorher gerechnet.
+        Legt einen Entwurf an – <strong>ohne</strong> Gruppen zuzuordnen.
+        Das geschieht erst über „Zuordnen“, und dort wird vorher gerechnet.
       </span>
     </div>
   </div>
@@ -1440,7 +1226,6 @@ sie wirklich auf einem Geraet liegt. Nur die App selbst kann ihn liefern.">Aktiv
 
 <script>
 const DATEN = {nutzlast};
-const NUR_LESEN = {nur_lesen_js};
 const zeilen = DATEN.gruppen;
 let sortSpalte = "score", sortAb = true;
 
@@ -1574,15 +1359,10 @@ function gefiltert() {{
     if (mitglieder === "nein") return z.mitglieder === null;
     return z.mitglieder !== null && z.mitglieder >= Number(mitglieder);
   }};
-  // "Gemessen" heisst: irgendeine Quelle hat etwas geliefert - die
-  // Beitragsliste, die eigene Resonanz oder ein datierter Suchtreffer.
-  // Welche es war, steht im Tooltip; zum Filtern zaehlt nur, ob ueberhaupt.
+  // "Gemessen" heisst: irgendeine Quelle hat etwas geliefert. Welche es
+  // war, steht im Tooltip; zum Filtern zaehlt nur, ob ueberhaupt.
   const passtAktivitaet = (z) => {{
     if (!aktivitaet) return true;
-    // Die Resonanz ist eine gemessene Quelle, steht aber nicht am Datensatz:
-    // sie entsteht beim Bewerten aus den Klicks und wird nicht in
-    // ``activity_source`` geschrieben. Ohne den dritten Teil galt eine Gruppe
-    // mit "Aktivitaet 4.41 (resonanz)" im Score hier als unbekannt.
     const gemessen = z.aktivitaet_quelle !== null || z.posts_pro_tag !== null
                      || ((z.punkte || {{}}).activity || 0) > 0;
     if (aktivitaet === "ja") return gemessen;
@@ -1711,7 +1491,7 @@ function zeichne() {{
   zeichneBlaetterleiste(alle.length, seiten);
 
   document.getElementById("zeilen").innerHTML = alle.length === 0
-    ? "<tr><td colspan='15' class='leer'>Keine Gruppe passt zu diesem Filter.</td></tr>"
+    ? "<tr><td colspan='8' class='leer'>Keine Gruppe passt zu diesem Filter.</td></tr>"
     : liste.map((z) => {{
         const klasse = z.score === null ? "keine" : z.score >= 90 ? "hoch"
                      : z.score >= 70 ? "mittel" : "";
@@ -1738,12 +1518,6 @@ function zeichne() {{
           <td class="kampagnen-zelle">${{kampagnenZelle(z)}}</td>
           <td>${{standZelle(z)}}</td>
           <td>${{beitragZelle(z)}}</td>
-          <td class="zahl">${{z.click}}</td>
-          <td class="zahl">${{z.registration}}</td>
-          <td class="zahl">${{z.download}}</td>
-          <td class="zahl">${{z.activation}}</td>
-          <td class="zahl">${{z.qualified}}</td>
-          <td class="zahl">${{z.conversion}}</td>
         </tr>`;
       }}).join("");
 }}
@@ -1775,7 +1549,7 @@ document.getElementById("s-pro-seite").addEventListener("change", (e) => {{
   zeichne();
 }});
 
-// --- Gemessene Resonanz ------------------------------------------------
+// --- Score-Bestandteile -------------------------------------------------
 
 // Klartext fuer die Score-Bestandteile. Dieselben Namen wie scoring._LABELS -
 // eine zweite Liste liefe beim naechsten neuen Bestandteil auseinander, und
@@ -1811,20 +1585,12 @@ function kampagnenZelle(z) {{
   ).join("");
 
   const passend = z.passt_zu || [];
-  if (NUR_LESEN) {{
-    // Im Lesezugang wird nichts vergeben, also kein Knopf - der Hinweis, dass
-    // etwas aussteht, bleibt aber sichtbar.
-    const offen = passend.map((k) =>
-      `<span class="k-offen" title="Passt zur Regel, noch nicht zugeordnet">`
-      + `${{esc(k.name)}}</span>`).join("");
-    return marken + offen || '<span class="zart">–</span>';
-  }}
 
   // Vorschlaege zuerst: Sie sind das, wonach man sucht. Ein Klick ordnet zu.
   const vorschlaege = passend.map((k) =>
     `<button type="button" class="k-vorschlag" data-gruppe="${{esc(z.id)}}"`
     + ` data-kampagne="${{esc(k.id)}}" data-name="${{esc(k.name)}}"`
-    + ` title="Passt zur Auswahlregel - klicken vergibt den Tracking-Code">`
+    + ` title="Passt zur Auswahlregel - klicken ordnet zu">`
     + `+ ${{esc(k.name)}}</button>`).join("");
 
   // Das Auswahlfeld nennt JEDE Kampagne, in der die Gruppe noch nicht steht -
@@ -1838,15 +1604,15 @@ function kampagnenZelle(z) {{
   // ist die Abkuerzung, das Feld die vollstaendige Liste - dass eine Kampagne
   // in beiden steht, ist kein Widerspruch.
   //
-  // Entfernt wird hier nie: Zuordnen vergibt einen Tracking-Code, und der
-  // steht spaeter in veroeffentlichten Beitraegen. Deshalb nennt das Feld nur
-  // Kampagnen, die noch dazukommen KOENNEN, und heisst "+".
+  // Entfernt wird hier nie: An einer Zuordnung haengen Texte und Versuche.
+  // Deshalb nennt das Feld nur Kampagnen, die noch dazukommen KOENNEN, und
+  // heisst "+".
   const drin = new Set((z.beitraege || []).map((b) => b.kampagne));
   const waehlbar = (DATEN.kampagnen || []).filter((k) => !drin.has(k.id));
 
   const auswahl = waehlbar.length
     ? '<select class="k-zuordnen" data-gruppe="' + esc(z.id) + '"'
-      + ' title="Gruppe einer Kampagne zuordnen - vergibt einen Tracking-Code">'
+      + ' title="Gruppe einer Kampagne zuordnen">'
       + '<option value="">+ Kampagne …</option>'
       + waehlbar.map((k) => `<option value="${{esc(k.id)}}">${{esc(k.name)}}</option>`).join("")
       + '</select>'
@@ -1978,7 +1744,6 @@ function passtBezug(z, wahl) {{
 }}
 
 function standZelle(z) {{
-  if (NUR_LESEN) return esc(z.marketing_label);
   if (!STAND_VON_HAND.includes(z.marketing)) {{
     return `<span class="stand-fest" title="Wird von der Automatik gefuehrt">`
       + esc(z.marketing_label) + `</span>`;
@@ -2003,7 +1768,7 @@ function standZelle(z) {{
 
 function beitragZelle(z) {{
   if (!z.beitraege.length) {{
-    return '<span class="b-leer">kein Tracking-Link</span>';
+    return '<span class="b-leer">nicht zugeordnet</span>';
   }}
   return '<div class="beitrag">' + z.beitraege.map((b) => {{
     const fehler = b.fehler
@@ -2018,9 +1783,9 @@ function beitragZelle(z) {{
 }}
 
 // --- Kampagnen ---------------------------------------------------------
-// Anlegen und Zuordnen sind getrennt: Ein Tracking-Code ist endgueltig, er
-// steht spaeter in veroeffentlichten Beitraegen. Deshalb rechnet "Zuordnen"
-// erst und fragt dann - dieselbe Rechnung, die danach ausgefuehrt wird.
+// Anlegen und Zuordnen sind getrennt: Eine Zuordnung wird nicht
+// zurueckgenommen. Deshalb rechnet "Zuordnen" erst und fragt dann -
+// dieselbe Rechnung, die danach ausgefuehrt wird.
 (function fuelleAuswahl() {{
   if (!document.getElementById("k-prioritaeten") || !DATEN.auswahl) return;
   // Note und Stufe kommen aus der Aufzaehlung, nicht aus dem Bestand: Eine
@@ -2233,11 +1998,10 @@ document.addEventListener("click", async (ereignis) => {{
       alert("Nichts zu tun: " + plan.bereits_zugeordnet + " Gruppen sind bereits zugeordnet.");
       return;
     }}
-    const frage = plan.neu + " Gruppen bekommen einen neuen Tracking-Code.\\n"
+    const frage = plan.neu + " Gruppen werden neu zugeordnet.\\n"
       + "Bereits zugeordnet: " + plan.bereits_zugeordnet + "\\n"
       + (plan.beispiele.length ? "Beispiele: " + plan.beispiele.join(", ") + "\\n" : "")
-      + "\\nEin vergebener Code wird nie zurueckgenommen - er steht spaeter in "
-      + "veroeffentlichten Beitraegen. Ausfuehren?";
+      + "\\nEine Zuordnung wird nicht zurueckgenommen. Ausfuehren?";
     if (!confirm(frage)) return;
 
     const echt = await (await fetch("/kampagnen/" + encodeURIComponent(id) + "/sync", {{
@@ -2272,16 +2036,11 @@ document.addEventListener("click", async (ereignis) => {{
       }})).json();
 
     let frage = 'Kampagne "' + (knopf.dataset.name || id) + '" loeschen?\\n\\n'
-      + vorschau.zuordnungen + " Zuordnungen samt Tracking-Codes\\n"
-      + vorschau.versuche + " Versuche\\n"
-      + vorschau.ereignisse_bleiben + " Ereignisse bleiben erhalten\\n";
+      + vorschau.zuordnungen + " Zuordnungen samt Texten\\n"
+      + vorschau.versuche + " Versuche\\n";
     if (vorschau.veroeffentlichte_codes) {{
-      // Der einzige Teil, der sich nicht wiederherstellen laesst: Diese Codes
-      // stehen in Beitraegen, die wirklich abgesetzt wurden.
-      frage += "\\nACHTUNG: " + vorschau.veroeffentlichte_codes
-        + " dieser Codes stehen in veroeffentlichten Facebook-Beitraegen.\\n"
-        + "Ein Klick darauf fuehrt danach ins Leere (404), und den Beitrag\\n"
-        + "kann niemand mehr zurueckholen.\\n";
+      frage += "\\nACHTUNG: In " + vorschau.veroeffentlichte_codes
+        + " dieser Gruppen wurde bereits veroeffentlicht.\\n";
     }}
     frage += "\\nDas laesst sich nicht rueckgaengig machen. Wirklich loeschen?";
     if (!confirm(frage)) return;
@@ -2318,13 +2077,9 @@ document.addEventListener("change", async (ereignis) => {{
 
 async function zuordnen(gruppe, kampagne, name, element) {{
 
-  // Ein Tracking-Code wird nie zurueckgenommen - er steht spaeter in
-  // veroeffentlichten Beitraegen. Deshalb wird gefragt, obwohl es nur eine
-  // Gruppe ist: Der Unterschied zwischen "eine" und "vierhundert" ist die
-  // Menge, nicht die Endgueltigkeit.
-  if (!confirm('Gruppe der Kampagne "' + name + '" zuordnen?\\n\\n'
-      + "Sie bekommt dabei einen eigenen Tracking-Code. Ein vergebener Code "
-      + "wird nie zurueckgenommen.")) return;
+  // Eine Zuordnung wird nicht zurueckgenommen - deshalb wird gefragt,
+  // obwohl es nur eine Gruppe ist.
+  if (!confirm('Gruppe der Kampagne "' + name + '" zuordnen?')) return;
 
   element.disabled = true;
   try {{
@@ -2432,13 +2187,12 @@ async function sammelZuordnen() {{
   }}
   const name = feld.options[feld.selectedIndex].textContent;
 
-  // Gefragt wird mit der **Zahl**, nicht nur mit dem Namen: Ein Tracking-Code
-  // wird nie zurueckgenommen, und wie viele Codes gleich entstehen, ist die
-  // Angabe, die man vorher gegenlesen will.
+  // Gefragt wird mit der **Zahl**, nicht nur mit dem Namen: Wie viele
+  // Zuordnungen gleich entstehen, ist die Angabe, die man vorher gegenlesen
+  // will.
   if (!confirm(ids.length + (ids.length === 1 ? " Gruppe" : " Gruppen")
       + ' der Kampagne "' + name + '" zuordnen?\\n\\n'
-      + "Jede bekommt einen eigenen Tracking-Code. Ein vergebener Code wird "
-      + "nie zurückgenommen. Bereits zugeordnete bleiben unverändert.")) return;
+      + "Bereits zugeordnete bleiben unverändert.")) return;
 
   const knoepfe = document.querySelectorAll("#sammel button");
   knoepfe.forEach((k) => k.disabled = true);

@@ -787,31 +787,6 @@ def test_loeschen_nimmt_die_zuordnungen_mit(mit_zuordnungen: Path) -> None:
         assert store.links_for_campaign("batreeq-syrian-germany") == []
 
 
-def test_die_ereignisse_ueberleben_das_loeschen(mit_zuordnungen: Path) -> None:
-    """Eine Auswertung von gestern behaelt ihre Zahlen.
-
-    Sie haengen an keinem Fremdschluessel. Was danach fehlt, ist allein der Weg
-    vom Code zurueck zur Gruppe.
-    """
-    from fbgroups.marketing.models import EventType, TrackingEvent
-
-    with MarketingStore(mit_zuordnungen) as store:
-        links = store.links_for_campaign("batreeq-syrian-germany")
-        store.record_event(
-            TrackingEvent(
-                tracking_code=links[0].tracking_code,
-                campaign_id="batreeq-syrian-germany",
-                group_id=links[0].group_id,
-                event_type=EventType.CLICK,
-            )
-        )
-
-        store.delete_campaign("batreeq-syrian-germany")
-
-        assert store.event_counts().get(EventType.CLICK.value) == 1
-        assert store.resolve_code(links[0].tracking_code) is None
-
-
 def test_loeschen_ist_von_aussen_nicht_moeglich(mit_zuordnungen: Path, config) -> None:
     pytest.importorskip("fastapi", reason="nur mit dem optionalen web-Zusatz")
     from fastapi.testclient import TestClient

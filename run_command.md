@@ -27,9 +27,9 @@ bash ./umzug-lokal.sh --weiterleitung  # nginx: alte Links auf die Startseite (w
 
 Vorher Waechter und Lauf beenden (das Skript prueft es) und die Uebersicht
 schliessen. Die Passphrase des Schluessels wird einmal gefragt. Danach steht
-`data/umgezogen.txt`; ab dann verweigern `umzug-lokal.sh` und `ausrollen.sh`
-den Dienst - beide haetten den veralteten Server-Bestand wieder ins Spiel
-gebracht. `--weiterleitung` laeuft trotzdem: Es fasst nur nginx an.
+`data/umgezogen.txt`; ab dann verweigert `umzug-lokal.sh` einen zweiten
+Umzug - er holte den veralteten Server-Bestand zurueck. `--weiterleitung`
+laeuft trotzdem: Es fasst nur nginx an. (`ausrollen.sh` gibt es nicht mehr.)
 
 ## 1. Bestand und Kampagnen
 
@@ -47,9 +47,10 @@ gebracht. `--weiterleitung` laeuft trotzdem: Es fasst nur nginx an.
 & $py -m fbgroups.cli campaign fortschritt batreeq-syrian-germany
 ```
 
-Eine Mitgliederliste wird **hier** eingelesen, nicht mehr beim Ausrollen.
-`sync` vergibt noch Tracking-Codes, bis das Tracking entfernt ist - erst
-`--dry-run` lesen.
+Eine Mitgliederliste wird **hier** eingelesen. `sync` ordnet zu und vergibt
+dabei je Gruppe einen Code, der nirgends hinausgeht (seit dem 25.09.2026
+gibt es kein Tracking mehr) - trotzdem erst `--dry-run` lesen: Eine
+Zuordnung wird nicht zurueckgenommen.
 
 ## 2. Die Automatik
 
@@ -83,8 +84,7 @@ sichert den Bestand einmal am Tag:
 
 Nur von diesem Rechner erreichbar (127.0.0.1) und damit voll bedienbar. Der
 Lauf braucht sie nicht - sie ist Ansicht und Arbeitsseite, kein Teil der
-Automatik. `/r/{code}` **nie zum Testen** aufrufen: Es zaehlt jeden Aufruf
-als Klick; zum Pruefen `/healthz`.
+Automatik. Zum Pruefen, ob der Dienst laeuft: `/healthz`.
 
 ## 4. Protokoll
 

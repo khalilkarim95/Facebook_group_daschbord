@@ -1,17 +1,13 @@
-"""Redirect-Dienst, Meldeschnittstelle und Uebersichtsseite.
+"""Der oertliche Dienst: Uebersicht, Arbeitsseite und Stand der Automatik.
 
-``GET  /``           Uebersicht ueber den Bestand - localhost, oder lesend
-                     ueber nginx mit Passwort (``UEBERSICHT_TOKEN``)
-``GET  /r/{code}``   Klick zaehlen und zur Landingpage weiterleiten
-``POST /events``     die Zielanwendung meldet, was danach passiert ist
+``GET  /``                 Uebersicht ueber den Bestand
+``GET  /arbeit/{kampagne}`` die Arbeitsseite einer Kampagne
+``GET  /automatik``        Stand der Kommentarautomatik (Zahlen, keine Knoepfe)
 
-Der Dienst spricht **nicht** mit facebook.com und veroeffentlicht nichts. Er
-sieht nur die Leute, die einen unserer Links anklicken.
-
-Datensparsamkeit ist eingebaut: Es werden weder IP-Adressen noch Kopfzeilen
-gespeichert. Zur Erkennung doppelter Klicks entsteht daraus ein taeglich
-wechselnder Pruefwert, der nicht zurueckrechenbar ist. Wer sich registriert,
-erscheint nur als undurchsichtige Kennung aus der Zielanwendung.
+Seit dem Umzug (25.09.2026) laeuft er nur auf diesem Rechner, und seit dem
+Ende des Trackings am selben Tag zaehlt er nichts mehr: ``/r/``, ``/t/``,
+``/events`` und ``/referral`` gibt es nicht mehr. Er spricht **nicht** mit
+facebook.com und veroeffentlicht nichts.
 
 FastAPI ist eine **optionale** Abhaengigkeit:
 
@@ -23,16 +19,10 @@ meldet dann, was fehlt.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-import html
-import json
-import os
-import secrets
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
@@ -56,22 +46,16 @@ from fbgroups.marketing.dashboard import (
     status_label,
 )
 from fbgroups.marketing.models import (
-    EINMAL_JE_MENSCH,
     Campaign,
     CampaignGroup,
     CampaignStatus,
-    EventType,
     JobStatus,
     MarketingStatus,
     PostStatus,
     QueueZustand,
-    ReferralStatus,
     TextQuelle,
     Texttyp,
-    TrackingEvent,
 )
-from fbgroups.marketing.referral import code_fuer_benutzer, lege_empfehlung_an, setze_status
-from fbgroups.marketing.rewards import bewerte_benutzer, load_reward_rules
 from fbgroups.marketing.selection import auswahl_der_kampagne, baue_plan, synchronisiere
 from fbgroups.marketing.store import MarketingStore
 from fbgroups.marketing.tracking import slug
@@ -91,25 +75,14 @@ try:
 except ImportError:  # pragma: no cover - haengt von der Installation ab
     FASTAPI_VERFUEGBAR = False
 
-SALT_SCHLUESSEL = "visitor_salt"
 
 
-# Absenderadressen, die als "derselbe Rechner" gelten. Der Dienst steht
-# oeffentlich - die Tracking-Links zeigen auf ihn -, die Arbeitsliste darf aber
-# nicht mit heraus. Es gibt keine Anmeldung, also entscheidet die Herkunft.
+# Absenderadressen, die als "derselbe Rechner" gelten. Es gibt keine
+# Anmeldung, also entscheidet die Herkunft.
 # Sie stammt aus der Verbindung selbst, nicht aus einer Kopfzeile, und ist
 # deshalb nicht vorzutaeuschen. ``testclient`` vergibt Starlettes Testclient
 # im selben Prozess - von aussen kann diese Adresse nicht auftreten.
 LOKALE_ADRESSEN = {"127.0.0.1", "::1", "localhost", "testclient"}
-
-# Welches Ereignis welchen Empfehlungsstand ergibt. Steht hier, damit die
-# Zuordnung an einer Stelle nachlesbar ist.
-_REFERRAL_STUFE = {
-    EventType.REGISTRATION: ReferralStatus.REGISTERED,
-    EventType.QUALIFIED: ReferralStatus.QUALIFIED,
-    EventType.CONVERSION: ReferralStatus.CONVERTED,
-}
-
 
 class StandMeldung(BaseModel):
     """Ein Mensch traegt nach, was er bei Facebook getan hat.
@@ -126,10 +99,10 @@ class StandMeldung(BaseModel):
 class KampagneNeu(BaseModel):
     """Eine neue Kampagne - ohne dass dabei ein einziger Code entsteht.
 
-    Anlegen und Zuordnen sind bewusst getrennt. Ein Tracking-Code ist
-    endgueltig: Er steht spaeter in veroeffentlichten Beitraegen und wird nie
-    zurueckgenommen. Ein Formular, das beim Speichern still 400 Codes vergibt,
-    waere ein Knopf mit unumkehrbarer Wirkung. Die Kampagne beginnt deshalb als
+    Anlegen und Zuordnen sind bewusst getrennt. Eine Zuordnung wird nicht
+    zurueckgenommen, sobald an ihr Texte und Versuche haengen. Ein Formular,
+    das beim Speichern still 400 Zuordnungen anlegt, waere ein Knopf mit
+    kaum umkehrbarer Wirkung. Die Kampagne beginnt deshalb als
     ``draft``, ohne Zuordnungen und mit ``auto_assign`` aus.
     """
 
@@ -167,8 +140,6 @@ class VorbereitenMeldung(BaseModel):
     """
 
     schritt: str = Field(pattern="^(text|text_neu|draft|approve|enqueue|reset|zurueckholen)$")
-    #: Nur bei ``reset``: auch die gemessene Resonanz loeschen.
-    auch_ereignisse: bool = False
 
 
 class SammelZuordnenMeldung(BaseModel):
@@ -188,9 +159,8 @@ class LoeschMeldung(BaseModel):
     """Bestaetigung fuer das Loeschen einer Kampagne.
 
     ``bestaetigt`` ist Vorgabe **false**: Der erste Aufruf zeigt nur, was
-    verlorenginge. Ein Loeschen nimmt ueber ``ON DELETE CASCADE`` jeden
-    Tracking-Code dieser Kampagne mit - steht einer in einem veroeffentlichten
-    Beitrag, fuehrt der Link dort danach ins Leere. Dieselbe Vorsicht wie bei
+    verlorenginge. Ein Loeschen nimmt ueber ``ON DELETE CASCADE`` jede
+    Zuordnung dieser Kampagne mit, samt Texten. Dieselbe Vorsicht wie bei
     ``SyncMeldung.dry_run``.
     """
 
@@ -201,9 +171,9 @@ class ZuordnenMeldung(BaseModel):
     """Eine Gruppe einer Kampagne zuordnen - oder die Zuordnung entfernen.
 
     ``entfernen`` gibt es, weil eine Zuordnung aus Versehen entstehen kann und
-    ein Tracking-Code, der **nie** in einem Beitrag stand, nichts bindet.
-    Sobald einer veroeffentlicht wurde, weist der Weg das Entfernen ab: Der
-    Link im Beitrag muss weiter ankommen.
+    eine, zu der nie etwas veroeffentlicht wurde, nichts bindet. Sobald
+    veroeffentlicht wurde, weist der Weg das Entfernen ab - dafuer gibt es
+    "Ausschliessen".
     """
 
     campaign_id: str = Field(min_length=1, max_length=64)
@@ -355,292 +325,6 @@ class BeitragMeldung(BaseModel):
     grund: str = Field(default="", max_length=200)
 
 
-class EventMeldung(BaseModel):
-    """Was die Zielanwendung meldet.
-
-    ``user_ref`` ist eine undurchsichtige Kennung aus der Zielanwendung. Namen,
-    E-Mail-Adressen oder Telefonnummern gehoeren nicht hierher und werden auch
-    nicht gespeichert, wenn sie faelschlich mitgeschickt wuerden - das Modell
-    kennt schlicht keine solchen Felder.
-
-    ``anon_ref`` ist die Kennung, unter der derselbe Mensch **vorher** anonym
-    unterwegs war - die, die sich die Web-App im Browser gibt, bevor es ein
-    Konto gibt. Sie ist der Grund, warum die Zuordnung den Uebergang zum
-    angemeldeten Benutzer ueberlebt: Der erste Besuch traegt sie, die
-    Registrierung traegt beide, alles danach nur noch ``user_ref``. Wer sie
-    weglaesst, verliert die Gruppe genau an dieser Stelle.
-
-    Vor der Anmeldung darf ``anon_ref`` auch allein stehen: Ein Download ohne
-    Konto ist ein gueltiger Fall und wird ueber sie zugeordnet.
-    """
-
-    event_type: EventType
-    user_ref: str = Field(default="", max_length=128)
-    anon_ref: str = Field(default="", max_length=128)
-    tracking_code: str = Field(default="", max_length=64)
-    referral_code: str = Field(default="", max_length=64)
-    occurred_at: datetime | None = None
-
-
-def _events_token() -> str:
-    """Gemeinsames Geheimnis fuer ``POST /events`` - aus der Umgebung.
-
-    Leer heisst: keine Pruefung. Das ist der Entwicklungsfall und der Grund,
-    warum die Tests ohne Einrichtung laufen; im Betrieb gehoert der Weg dann
-    hinter einen Proxy, der nur den eigenen Rechner durchlaesst.
-
-    Mit Schluessel ist der Weg von aussen benutzbar - und das ist der Punkt:
-    Die Zielanwendung laeuft in einem Container und erreicht ``127.0.0.1`` des
-    Wirts gar nicht. Die Alternative waere, den Dienst zusaetzlich an das
-    Docker-Gateway zu binden; dessen Adresse wechselt aber, sobald das
-    Compose-Netz neu entsteht, und offen waere er dann fuer jeden Container.
-
-    Der Weg braucht den Schutz unabhaengig davon: Er schreibt Registrierungen,
-    Empfehlungen und damit Praemien. Ohne Pruefung koennte jeder Praemien
-    ausloesen.
-    """
-    return os.environ.get("EVENTS_TOKEN", "").strip()
-
-
-def _uebersicht_token() -> str:
-    """Geheimnis, mit dem nginx eine bestandene Passwortpruefung bezeugt.
-
-    Die Uebersicht bleibt an ``127.0.0.1`` gebunden. Wer sie von aussen sehen
-    will, kommt ueber einen nginx-Block mit ``auth_basic``, der diese Kopfzeile
-    setzt - und der Dienst zeigt sie dann **schreibgeschuetzt**.
-
-    Der Wert muss geheim sein, obwohl ``proxy_set_header`` eine vom Besucher
-    mitgeschickte Kopfzeile ueberschreibt: Sonst haengt der Schutz daran, dass
-    jeder kuenftige Block das Ueberschreiben nicht vergisst - auch der, den in
-    zwei Jahren jemand anders schreibt. Ein Weg, der Auskunft gibt, bringt
-    seinen Schutz besser selbst mit, als ihn von einer Datei nebenan zu borgen.
-
-    Leer heisst: kein Zugang von aussen. Das ist die Vorgabe und der Fall, in
-    dem die Tests ohne Einrichtung laufen.
-    """
-    return os.environ.get("UEBERSICHT_TOKEN", "").strip()
-
-
-def _visitor_hash(store: MarketingStore, ip: str) -> str:
-    """Taeglich wechselnder Pruefwert statt gespeicherter IP-Adresse.
-
-    Seit dem 24.09.2026 aus IP und Tagesdatum, ohne User-Agent (Wunsch des
-    Nutzers). Zwei Besucher hinter derselben Adresse zaehlen damit am selben
-    Tag als **ein** Klick.
-
-    Der Zufallsschluessel entsteht einmal und bleibt in der Datenbank. Durch
-    das Tagesdatum im Wert laesst sich ein Besucher nicht ueber Tage hinweg
-    verfolgen - genau so viel, wie das Aussortieren doppelter Klicks braucht.
-    """
-    salt = store.meta(SALT_SCHLUESSEL)
-    if not salt:
-        salt = secrets.token_hex(16)
-        store.set_meta(SALT_SCHLUESSEL, salt)
-
-    roh = f"{ip}|{date.today().isoformat()}"
-    return hmac.new(salt.encode(), roh.encode(), hashlib.sha256).hexdigest()[:16]
-
-
-# User-Agents, die eine Linkvorschau erzeugen, statt dass ein Mensch klickt:
-# Facebook selbst beim Posten, WhatsApp/Telegram/Slack & Co. beim Weiterleiten
-# oder Anzeigen der Karte (Titel, Bild, Beschreibung). Kein Anspruch auf
-# Vollstaendigkeit - neue Muster werden ergaenzt, sobald sie im nginx-Protokoll
-# auffallen.
-_VORSCHAU_USER_AGENTS = (
-    "facebookexternalhit",
-    "facebookcatalog",
-    "whatsapp",
-    "telegrambot",
-    "slackbot",
-    "slack-imgproxy",
-    "discordbot",
-    "linkedinbot",
-    "twitterbot",
-    "skypeuripreview",
-    "vkshare",
-)
-
-
-def _ist_linkvorschau(user_agent: str) -> bool:
-    """Erkennt einen automatischen Vorschau-Abruf statt eines Klicks.
-
-    Ein frisch geposteter Link wird von der Plattform selbst abgerufen, um die
-    Vorschaukarte zu bauen - oft von mehreren IPs und mehrfach ueber die Zeit
-    verteilt. Ohne diese Erkennung zaehlte jeder dieser Abrufe als eigener
-    Klick: Ein einzelner Livetest zeigte 25 Klicks fuer einen einzigen
-    Menschen, alle mit demselben ``facebookexternalhit``-User-Agent.
-    """
-    ua = user_agent.lower()
-    return any(muster in ua for muster in _VORSCHAU_USER_AGENTS)
-
-
-def _vorschauseite(config: AppConfig, eigene_url: str, ziel: str) -> str:
-    """Die Karte, die eine Plattform aus einem Tracking-Link baut.
-
-    **Warum der Dienst das selbst beantwortet.** Der Abruf folgt sonst der
-    Weiterleitung und nimmt, was am Ziel steht - beim Store-Code die Karte
-    von Google, beim Browser-Code die der Landingpage. Dieselbe App zeigte
-    damit je nach Fassung ein anderes Gesicht, und im ersten automatisch
-    gesetzten Beitrag stand gar keines: nur die nackte Adresse.
-
-    ``og:url`` ist bewusst die **eigene** Adresse und nicht das Ziel: Sonst
-    fuehrte die Karte an der Zaehlung vorbei, und der Klick, den sie
-    ausloest, waere keiner Gruppe zuzuordnen.
-
-    **Keine Meta-Weiterleitung.** Hier stand bis zum 14.09.2026
-    ``<meta http-equiv='refresh'>`` auf das Ziel - und genau daran ist die
-    Karte gescheitert: Facebooks Abrufer folgt einer Meta-Weiterleitung und
-    beschreibt, was er am Ende findet. Bei einem Store-Code war das
-    ``play.google.com``, und im Beitrag stand die Karte von Google statt der
-    der App. Die sorgfaeltig gesetzten Angaben darueber las niemand mehr.
-
-    Weitergeleitet wird jetzt mit einer Zeile JavaScript. Der Unterschied ist
-    der Punkt: Ein Browser fuehrt sie aus, ein Abrufer nicht - der Mensch, der
-    hier landet, kommt weiter, und die Plattform bleibt bei dem stehen, was
-    ausdruecklich fuer sie geschrieben ist. Der Mensch sieht diese Seite
-    ohnehin fast nie; er bekommt die 302.
-
-    ``og:url`` ist bewusst die **eigene** Adresse und nicht das Ziel: Sonst
-    fuehrte die Karte an der Zaehlung vorbei.
-    """
-    titel = str(config.get("marketing", "vorschau", "titel", default="") or "")
-    beschreibung = str(config.get("marketing", "vorschau", "beschreibung", default="") or "")
-    bild = str(config.get("marketing", "vorschau", "bild", default="") or "")
-    seitenname = str(config.get("marketing", "vorschau", "seitenname", default="") or "") or titel
-
-    e = html.escape
-    # Die Adresse im JavaScript geht durch die JSON-Kodierung: Sie stammt aus
-    # der Konfiguration und aus ``play_store_url``, also nicht vom Besucher -
-    # aber ein Apostroph darin beendete sonst die Zeichenkette, und aus einem
-    # Tippfehler in der Konfiguration wuerde eine kaputte Seite.
-    ziel_js = json.dumps(ziel)
-    return (
-        "<!doctype html>"
-        "<html lang='ar' dir='rtl'><head><meta charset='utf-8'>"
-        f"<title>{e(titel)}</title>"
-        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        f"<meta name='description' content='{e(beschreibung)}'>"
-        "<meta property='og:type' content='website'>"
-        f"<meta property='og:site_name' content='{e(seitenname)}'>"
-        "<meta property='og:locale' content='ar_AR'>"
-        f"<meta property='og:title' content='{e(titel)}'>"
-        f"<meta property='og:description' content='{e(beschreibung)}'>"
-        f"<meta property='og:image' content='{e(bild)}'>"
-        f"<meta property='og:image:secure_url' content='{e(bild)}'>"
-        f"<meta property='og:image:alt' content='{e(seitenname)}'>"
-        f"<meta property='og:url' content='{e(eigene_url)}'>"
-        "<meta name='twitter:card' content='summary_large_image'>"
-        f"<meta name='twitter:title' content='{e(titel)}'>"
-        f"<meta name='twitter:description' content='{e(beschreibung)}'>"
-        f"<meta name='twitter:image' content='{e(bild)}'>"
-        "</head><body>"
-        f"<a href='{e(ziel)}'>{e(titel)}</a>"
-        f"<script>location.replace({ziel_js});</script>"
-        "</body></html>"
-    )
-
-
-def play_store_url(tracking_code: str, config: AppConfig) -> str:
-    """Die Play-Store-Adresse dieser App - mit dem Code im ``referrer``.
-
-    ``referrer`` ist das einzige Feld, das eine Installation ueberlebt: Google
-    reicht es nach dem Einrichten an die App weiter (Play Install Referrer),
-    und die App liest es beim ersten Start. Ohne dieses Feld endet die
-    Zuordnung am Store - die Landingpage-Adresse mit ``?ref=`` sieht ein
-    Play-Store-Install nie.
-
-    Der Code wird **prozentkodiert**. Er enthaelt heute nur Buchstaben, Ziffern
-    und Bindestriche, aber die Kuerzel kommen aus der Konfiguration und koennen
-    sich aendern; ein ungeschuetztes ``&`` darin zerlegte die Adresse.
-    """
-    paket = str(config.get("marketing", "store", "android_package", default="")).strip()
-    vorlage = (
-        str(config.get("marketing", "store", "play_url", default="")).strip()
-        or "https://play.google.com/store/apps/details?id={package}&referrer={referrer}"
-    )
-    if not paket:
-        return ""
-    return vorlage.replace("{package}", quote(paket, safe="")).replace(
-        "{referrer}", quote(tracking_code, safe="")
-    )
-
-
-def _ziel_gewaehlt(campaign: Campaign | None, config: AppConfig) -> str:
-    """ "store" oder "landing" - die Kampagne entscheidet, sonst die Vorgabe.
-
-    Leer an der Kampagne heisst ausdruecklich "die Vorgabe", nicht "landing":
-    Sonst waere eine geaenderte Vorgabe fuer den Bestand wirkungslos, und das
-    faellt erst auf, wenn keine Installation mehr zugeordnet wird.
-    """
-    if campaign is not None and campaign.ziel.strip():
-        return campaign.ziel.strip().lower()
-    return str(config.get("marketing", "ziel", default="landing")).strip().lower()
-
-
-def _ziel_url(
-    store: MarketingStore,
-    tracking_code: str,
-    config: AppConfig,
-    *,
-    referrer: str = "",
-) -> tuple[str, bool]:
-    """Wohin ein Klick fuehrt. Returns: (Adresse, ist_store).
-
-    ``ist_store`` gehoert dazu, weil der Aufrufer daran entscheidet, ob ein
-    ``store_visit`` mitgeschrieben wird - und weil es nicht aus der Adresse
-    zurueckzulesen ist, ohne sie zu zerlegen.
-
-    ``referrer`` ist der Code, der an Google weitergereicht wird - und damit
-    der einzige, der in der Adresszeile eines Menschen landet. Er steht hier
-    getrennt von ``tracking_code``, weil die beiden verschiedene Fragen
-    beantworten: Jenes ist der Datensatz, dieses die Beschriftung. Ohne
-    Angabe bleibt es beim Tracking-Code - ein Aufrufer, der nichts sagt,
-    aendert nichts.
-
-    Faellt der Store aus (keine Package-ID eingetragen), wird auf die
-    Landingpage ausgewichen **und das nicht als Store-Besuch gezaehlt**. Eine
-    fehlende Kennung ist ein Einrichtungsfehler; ihn als Store-Besuch zu
-    zaehlen machte ihn unsichtbar.
-    """
-    link = store.resolve_code(tracking_code)
-    campaign = store.load_campaign(link.campaign_id) if link is not None else None
-
-    # **Das Ziel haengt am Code, nicht mehr an der Kampagne.**
-    #
-    # Bis zum 31.08.2026 entschied ``campaign.ziel`` fuer alle Codes einer
-    # Kampagne gemeinsam. Mit ``marketing.ziel: store`` fuehrten damit
-    # saemtliche Links zum Play Store, und die Web-Anwendung kam in keinem
-    # Beitrag vor - obwohl es sie gibt.
-    #
-    # Jetzt traegt jedes Paar zwei Codes: der bestehende zum Store, ein
-    # zweiter (``...-B``) in den Browser. Beide werden vollstaendig gezaehlt;
-    # der Unterschied ist allein das Ziel **nach** der Weiterleitung, und
-    # dadurch laesst sich im Trichter unterscheiden, woher ein Mensch kam.
-    #
-    # Die Kampagneneinstellung gilt weiterhin fuer alles, was **kein**
-    # Browser-Code ist - ein bestehender Beitrag fuehrt damit dorthin, wohin
-    # er immer gefuehrt hat.
-    if store.ziel_des_codes(tracking_code) == "browser":
-        # Die eigene Landingpage der Kampagne geht vor - sie ist die
-        # ausdrueckliche Angabe. Sonst das allgemeine Browserziel; erst
-        # zuletzt der Rueckfall, damit ein Klick nie ins Leere geht.
-        if campaign is not None and campaign.landing_page:
-            return campaign.landing_page, False
-        browser_url = str(config.get("marketing", "browser_url", default="")).strip()
-        if browser_url:
-            return browser_url, False
-        return (str(config.get("marketing", "fallback_url", default="")) or "/"), False
-
-    if _ziel_gewaehlt(campaign, config) == "store":
-        adresse = play_store_url(referrer or tracking_code, config)
-        if adresse:
-            return adresse, True
-
-    if campaign is not None and campaign.landing_page:
-        return campaign.landing_page, False
-    return (str(config.get("marketing", "fallback_url", default="")) or "/"), False
-
-
 def _kette_automatisch(
     store: MarketingStore,
     campaign: Campaign,
@@ -679,7 +363,7 @@ def _kette_automatisch(
     teile: list[str] = []
     for schritt in ("text", "approve", "enqueue"):
         try:
-            getan, hinweis = _vorbereiten(store, campaign, gruppen, schritt, False, config)
+            getan, hinweis = _vorbereiten(store, campaign, gruppen, schritt, config)
         except (UngueltigerUebergang, ValueError) as exc:
             getan, hinweis = 0, str(exc)
         # Die Zahl steht vorn, nicht der Satz: "Freigegeben." laesst offen, ob
@@ -695,7 +379,6 @@ def _vorbereiten(
     campaign: Campaign,
     gruppen: dict[str, Any],
     schritt: str,
-    auch_ereignisse: bool,
     config: AppConfig,
 ) -> tuple[int, str]:
     """Fuehrt einen Vorbereitungsschritt aus. Returns: (betroffen, Hinweis).
@@ -714,11 +397,8 @@ def _vorbereiten(
     links = store.links_for_campaign(campaign_id)
 
     if schritt == "reset":
-        zahlen = store.setze_kampagne_zurueck(campaign_id, auch_ereignisse=auch_ereignisse)
-        hinweis = f"{zahlen['versuche']} Versuche geloescht"
-        if auch_ereignisse:
-            hinweis += f", {zahlen['ereignisse']} Ereignisse geloescht"
-        return zahlen["zuordnungen"], hinweis
+        zahlen = store.setze_kampagne_zurueck(campaign_id)
+        return zahlen["zuordnungen"], f"{zahlen['versuche']} Versuche geloescht"
 
     if schritt in ("text", "text_neu"):
         from fbgroups.marketing import vorlagen
@@ -730,7 +410,7 @@ def _vorbereiten(
         if eigene and vorlagen.PLATZHALTER_LINK not in eigene:
             return 0, (
                 "Die eigene Vorlage der Kampagne enthaelt kein {link} - "
-                "die Gruppen bekaemen nie einen Klick gutgeschrieben."
+                "der Beitrag nennte den Weg zur App nicht."
             )
 
         # "text_neu" schreibt auch dort, wo schon etwas steht. Der Weg fuer
@@ -872,19 +552,6 @@ def _vorbereiten(
     return 0, f"Unbekannter Schritt: {schritt}"
 
 
-def lauf_ziel(nummer: int) -> str:
-    """Das Ziel der n-ten Fassung - ``browser`` oder ``store``.
-
-    Duenner Durchgriff auf ``lauf.ziel_zu_nummer``, damit die Regel an genau
-    einer Stelle steht. Zwei Fassungen davon koennten auseinanderlaufen, und
-    der Unterschied fiele erst auf, wenn ein Beitrag mit dem falschen Ziel in
-    einer Gruppe steht.
-    """
-    from fbgroups.marketing.lauf import ziel_zu_nummer
-
-    return ziel_zu_nummer(nummer)
-
-
 def _facebook_verbunden(config: AppConfig) -> bool:
     """Liegt eine angemeldete Browsersitzung fuer die Automatisierung vor?
 
@@ -918,45 +585,13 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
     pfad = db_path or cfg.path("sqlite_path")
 
     app = FastAPI(
-        title="fbgroups Tracking",
-        description=(
-            "Zaehlt Klicks auf Tracking-Links und nimmt Meldungen der "
-            "Zielanwendung entgegen. Kein Zugriff auf facebook.com."
-        ),
+        title="fbgroups",
+        description="Uebersicht und Arbeitsseite. Kein Zugriff auf facebook.com.",
         version="1.0",
     )
 
     def _store() -> MarketingStore:
         return MarketingStore(pfad)
-
-    # Der Vorspann der lesbaren Adressen (``marketing.link_basis``) muss dort
-    # stehen, wo die Namen vergeben werden - im Speicher. Beim Start
-    # geschrieben, damit jede Zuordnung danach ihn kennt, auch die ueber die
-    # Kommandozeile auf dem Server.
-    if pfad.exists():
-        with MarketingStore(pfad) as _anfang:
-            _anfang.merke_link_basis(str(cfg.get("marketing", "link_basis", default="") or ""))
-
-    def _pruefe_token(request: Request) -> None:
-        """Prueft ``X-Events-Token`` - fuer die Wege, die die Zielanwendung ruft.
-
-        Leerer Schluessel heisst: keine Pruefung. Das ist der Entwicklungsfall
-        und der Grund, warum die Tests ohne Einrichtung laufen. Im Betrieb
-        steht der Schluessel in ``/opt/fbgroups/app/.env``.
-
-        401 statt 404: Anders als bei der Uebersicht ist hier nichts zu
-        verbergen - die Gegenstelle ist eine Anwendung und soll den
-        Unterschied zwischen "falscher Schluessel" und "Weg gibt es nicht"
-        sehen koennen.
-        """
-        erwartet = _events_token()
-        if not erwartet:
-            return
-        # Zeitkonstanter Vergleich: Ein frueher Abbruch bei der ersten
-        # abweichenden Stelle verraet ueber viele Versuche den Schluessel.
-        gesendet = request.headers.get("x-events-token", "")
-        if not hmac.compare_digest(gesendet, erwartet):
-            raise HTTPException(status_code=401, detail="Ungueltiger Schluessel")
 
     def _nur_lokal(request: Request) -> None:
         """Laesst nur Aufrufe vom selben Rechner durch - und keine fremde Seite.
@@ -964,9 +599,9 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         Zwei Pruefungen, weil sie zwei verschiedene Faelle abdecken:
 
         1. **Absenderadresse.** Sie stammt aus der Verbindung, nicht aus einer
-           Kopfzeile, und ist deshalb nicht vorzutaeuschen. Der Dienst darf
-           oeffentlich stehen, damit die Tracking-Links funktionieren; die
-           Arbeitsliste bleibt trotzdem auf diesem Rechner.
+           Kopfzeile, und ist deshalb nicht vorzutaeuschen. Der Dienst horcht
+           ohnehin nur auf ``127.0.0.1``; die Pruefung haelt auch dann, wenn
+           ihn jemand anders bindet.
         2. **Herkunft der Seite.** Ohne sie koennte jede beliebige Webseite,
            die du im Browser offen hast, an ``localhost`` schreiben - der
            Browser saesse ja auf demselben Rechner. Der Weg nimmt ausserdem
@@ -983,42 +618,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         herkunft = request.headers.get("origin", "")
         if herkunft and urlparse(herkunft).hostname not in LOKALE_ADRESSEN:
             raise HTTPException(status_code=404, detail="Not Found")
-
-    def _pruefe_uebersicht(request: Request) -> bool:
-        """Laesst die Uebersicht durch und sagt, ob sie schreibgeschuetzt ist.
-
-        Zwei Zugaenge mit verschiedenen Rechten:
-
-        * **vom selben Rechner** (SSH-Tunnel): die volle Seite, Aenderungen
-          moeglich.
-        * **ueber nginx mit Passwort**: dieselben Zahlen, aber nur lesend.
-
-        Der Unterschied ist Absicht, kein Rest. Die schreibenden Wege vergeben
-        Tracking-Codes, und ein vergebener Code wird nie zurueckgenommen - er
-        steht spaeter in veroeffentlichten Beitraegen. Ein abhandengekommenes
-        Passwort soll Zahlen zeigen koennen, aber nicht mit einem Klick 400
-        Codes vergeben. Wer aendern will, baut den Tunnel auf; das ist ein
-        Handgriff und keine taegliche Huerde.
-
-        Rueckgabe: ``True``, wenn die Seite schreibgeschuetzt zu bauen ist.
-        """
-        absender = request.client.host if request.client else ""
-        herkunft = request.headers.get("origin", "")
-        lokal = absender in LOKALE_ADRESSEN and (
-            not herkunft or urlparse(herkunft).hostname in LOKALE_ADRESSEN
-        )
-        if lokal:
-            return False
-
-        erwartet = _uebersicht_token()
-        # Zeitkonstant, aus demselben Grund wie bei _pruefe_token.
-        gesendet = request.headers.get("x-uebersicht-token", "")
-        if erwartet and hmac.compare_digest(gesendet, erwartet):
-            return True
-
-        # 404 wie bisher: Wer den Dienst oeffentlich stellt, soll nicht
-        # nebenbei verraten, dass es hier eine Arbeitsliste gibt.
-        raise HTTPException(status_code=404, detail="Not Found")
 
     @app.get("/automatik")
     def automatik_stand(request: Request):  # noqa: ANN202
@@ -1168,18 +767,13 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
 
     @app.get("/", response_class=HTMLResponse)
     def dashboard(request: Request):  # noqa: ANN202
-        """Uebersicht ueber den Bestand - vom selben Rechner oder lesend.
+        """Uebersicht ueber den Bestand - nur vom selben Rechner.
 
-        Ohne einen der beiden Zugaenge ist der Weg nicht vorhanden (404, nicht
-        403): Wer den Dienst oeffentlich stellt, soll damit nicht nebenbei
-        verraten, dass es hier ueberhaupt eine Arbeitsliste gibt.
-
-        Die schreibenden Wege darunter pruefen weiterhin mit ``_nur_lokal``.
-        Der Schreibschutz der Seite ist damit nicht die Absicherung, sondern
-        ihre sichtbare Entsprechung.
+        Bis zum Umzug (25.09.2026) gab es daneben einen Lesezugang ueber nginx
+        mit Passwort; ohne Server gibt es nur noch diesen einen Zugang.
         """
-        nur_lesen = _pruefe_uebersicht(request)
-        return HTMLResponse(render(sammle_daten(cfg, pfad), nur_lesen=nur_lesen))
+        _nur_lokal(request)
+        return HTMLResponse(render(sammle_daten(cfg, pfad)))
 
     @app.get("/arbeit/{campaign_id}", response_class=HTMLResponse)
     def arbeit(  # noqa: ANN202
@@ -1323,8 +917,8 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         """Kampagne und Zuordnung nachschlagen - fuer alle drei Vorschlagswege.
 
         Dreimal dasselbe zu schreiben hiesse, dass die dritte Kopie irgendwann
-        die laxere ist. Ein Vorschlag ohne Zuordnung hat keinen Tracking-Code
-        und damit keinen Link - er duerfte gar nicht entstehen.
+        die laxere ist. Ein Vorschlag ohne Zuordnung duerfte gar nicht
+        entstehen.
         """
         campaign = store.load_campaign(campaign_id)
         if campaign is None:
@@ -1396,7 +990,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     "text": vorschlag.text,
                     "angezeigt": mit_link(
                         campaign, link, vorschlag.text, config=cfg,
-                        ziel=lauf_ziel(vorschlag.nummer),
                         texttyp=meldung.texttyp,
                     ),
                     "stand": vorschlag.status.value,
@@ -1443,7 +1036,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     "text": vorschlag.text,
                     "angezeigt": mit_link(
                         campaign, link, vorschlag.text, config=cfg,
-                        ziel=lauf_ziel(vorschlag.nummer),
                         texttyp=meldung.texttyp,
                     ),
                     "stand": vorschlag.status.value,
@@ -1558,7 +1150,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
 
             text = mit_link(
                 campaign, link, vorschlag.text, config=cfg,
-                ziel=lauf_ziel(meldung.nummer),
                 texttyp=meldung.texttyp,
             )
 
@@ -1839,10 +1430,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         ``enqueue`` reiht nach Score ein. Wer hier klickt, bekommt nichts
         anderes als wer dort tippt - es gibt nur einen Weg durch die
         Zustandsmaschine.
-
-        ``reset`` loescht bewusst **nicht** die Ereignisse, solange nicht
-        ``auch_ereignisse`` gesetzt ist: Gemessene Resonanz ist das Einzige,
-        was sich nicht wiederherstellen laesst.
         """
         _nur_lokal(request)
         with SqliteStore(pfad) as gruppen_store:
@@ -1853,9 +1440,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
             if campaign is None:
                 raise HTTPException(status_code=404, detail="Unbekannte Kampagne")
 
-            getan, hinweis = _vorbereiten(
-                store, campaign, gruppen, meldung.schritt, meldung.auch_ereignisse, cfg
-            )
+            getan, hinweis = _vorbereiten(store, campaign, gruppen, meldung.schritt, cfg)
             store.audit("vorbereiten_" + meldung.schritt, campaign_id, str(getan))
             zaehler = store.job_counts(campaign_id)
 
@@ -1887,7 +1472,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         nichts veroeffentlicht wurde.
         """
         _nur_lokal(request)
-        from fbgroups.marketing.tracking import CodeAllocator, tracking_url
+        from fbgroups.marketing.tracking import CodeAllocator
 
         with SqliteStore(pfad) as gruppen_store:
             gruppe = next((g for g in gruppen_store.load_groups() if g.group_id == group_id), None)
@@ -1905,14 +1490,13 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 if vorhanden is None:
                     return JSONResponse({"group_id": group_id, "zugeordnet": False})
                 if vorhanden.posted_at is not None:
-                    # Der Code steht in einem veroeffentlichten Beitrag. Ein
-                    # Klick darauf muss ankommen und gezaehlt werden - auch
-                    # dann, wenn die Gruppe nicht mehr bearbeitet wird. Dafuer
-                    # gibt es "Ausschliessen", das den Code gueltig laesst.
+                    # An der Zuordnung haengt ein veroeffentlichter Beitrag
+                    # samt Versuchsprotokoll. Fuer "nicht mehr bearbeiten"
+                    # gibt es "Ausschliessen", das die Geschichte stehen laesst.
                     raise HTTPException(
                         status_code=409,
                         detail="Zu dieser Zuordnung wurde bereits veroeffentlicht. "
-                        "Der Tracking-Code bleibt gueltig - stattdessen ausschliessen.",
+                        "Stattdessen ausschliessen.",
                     )
                 store.remove_link(meldung.campaign_id, group_id)
                 store.audit("zuordnung_entfernt", f"{meldung.campaign_id}/{group_id}")
@@ -1935,7 +1519,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                     campaign_id=meldung.campaign_id,
                     group_id=group_id,
                     tracking_code=code,
-                    tracking_url=tracking_url(code, cfg),
                 )
             )
             store.audit("zuordnung_einzeln", f"{meldung.campaign_id}/{group_id}", code)
@@ -1972,7 +1555,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
         """
         _nur_lokal(request)
         from fbgroups.marketing.selection import vergabereihenfolge
-        from fbgroups.marketing.tracking import CodeAllocator, tracking_url
+        from fbgroups.marketing.tracking import CodeAllocator
 
         gewuenscht = list(dict.fromkeys(meldung.group_ids))  # Reihenfolge egal, Dubletten weg
         with SqliteStore(pfad) as gruppen_store:
@@ -2003,7 +1586,6 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                         campaign_id=campaign_id,
                         group_id=gruppe.group_id,
                         tracking_code=code,
-                        tracking_url=tracking_url(code, cfg),
                     )
                 )
                 codes[gruppe.group_id] = code
@@ -2028,11 +1610,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
 
         Ohne ``bestaetigt`` antwortet der Weg mit dem, was verlorenginge, und
         aendert nichts. Der Grund steht in ``store.delete_campaign``: Die
-        Tracking-Codes gehen mit, und ein Code in einem veroeffentlichten
-        Beitrag laesst sich nicht zurueckholen.
-
-        Die Ereignisse bleiben - eine Auswertung von gestern behaelt ihre
-        Zahlen. Was fehlt, ist danach der Weg vom Code zurueck zur Gruppe.
+        Zuordnungen gehen mit, samt Texten und Stand.
         """
         _nur_lokal(request)
         with _store() as store:
@@ -2097,8 +1675,7 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
 
         Speichern vergibt **keinen** Code. Die Regel sagt nur, welche Gruppen
         in Frage kommen; die Codes entstehen erst durch "Zuordnen", und dort
-        wird noch einmal gefragt. Ein Tracking-Code ist endgueltig - er steht
-        spaeter in veroeffentlichten Beitraegen.
+        wird noch einmal gefragt.
 
         Die Antwort enthaelt denselben Plan, den auch ``sync`` ausfuehren
         wuerde (``selection.baue_plan``). Eine zweite Zaehlung koennte davon
@@ -2261,10 +1838,8 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
     def bearbeiten_setzen(meldung: BearbeitenMeldung, request: Request):  # noqa: ANN202
         """Nimmt Gruppen in die Arbeitsliste auf oder schliesst sie aus.
 
-        Der Tracking-Code bleibt dabei unangetastet gueltig. Ein Ausschluss ist
-        eine Entscheidung ueber die eigene Arbeit, kein Widerruf des Codes -
-        der steht moeglicherweise schon in einem veroeffentlichten Beitrag, und
-        ein Klick darauf muss weiter gezaehlt werden und ankommen.
+        Die Zuordnung bleibt dabei bestehen. Ein Ausschluss ist eine
+        Entscheidung ueber die eigene Arbeit, kein Widerruf.
         """
         _nur_lokal(request)
 
@@ -2302,267 +1877,5 @@ def create_app(config: AppConfig | None = None, db_path: Path | None = None) -> 
                 "grund": "" if meldung.bearbeiten else meldung.grund,
             }
         )
-
-    # ``/t/`` ist dieselbe Weiterleitung unter dem lesbaren Namen
-    # (``b-tarikak.de/t/safar-sham-12``, 23.09.2026); nginx auf b-tarikak.de
-    # reicht den Pfad hierher. ``/r/`` bleibt fuer jeden Link, der schon in
-    # einer Gruppe steht.
-    @app.get("/t/{tracking_code}")
-    @app.get("/r/{tracking_code}")
-    def redirect(tracking_code: str, request: Request):  # noqa: ANN202
-        """Zaehlt den Klick und leitet weiter.
-
-        Ein unbekannter Code wird nicht stillschweigend weitergeleitet: Er
-        deutet auf einen Tippfehler oder einen veralteten Beitrag hin, und ein
-        stiller Umweg wuerde das verschleiern.
-        """
-        with _store() as store:
-            treffer = store.aufloesen(tracking_code)
-            if treffer is None:
-                store.audit("klick_unbekannter_code", tracking_code)
-                raise HTTPException(status_code=404, detail="Unbekannter Tracking-Code")
-
-            link = treffer.link
-            # **Ab hier gilt der innere Code.** In der Adresse kann der
-            # oeffentliche Deckname gestanden haben; gezaehlt, entdoppelt und
-            # gespeichert wird unter dem inneren. Sonst stuenden dieselben
-            # Klicks je nach Alter des Beitrags unter zwei Codes, und jede
-            # Auswertung zerfiele in zwei Haelften.
-            intern = treffer.interner_code
-            oeffentlich = treffer.oeffentlicher_code
-
-            user_agent = request.headers.get("user-agent", "")
-            vorschau = _ist_linkvorschau(user_agent)
-            if not vorschau:
-                besucher = _visitor_hash(
-                    store,
-                    request.client.host if request.client else "",
-                )
-                if not store.klick_bereits_gezaehlt(intern, besucher):
-                    store.record_event(
-                        TrackingEvent(
-                            tracking_code=intern,
-                            campaign_id=link.campaign_id,
-                            group_id=link.group_id,
-                            event_type=EventType.CLICK,
-                            visitor_hash=besucher,
-                            source="redirect",
-                        )
-                    )
-            # Der Play-Store-``referrer`` traegt den **oeffentlichen** Code:
-            # Er steht gleich in der Adresszeile des Menschen. Was aus der App
-            # damit zurueckkommt, loest ``POST /events`` wieder auf.
-            ziel, ist_store = _ziel_url(store, intern, cfg, referrer=treffer.oeffentlicher_code)
-
-            if ist_store and not vorschau:
-                # Eine eigene Stufe, und sie heisst mit Bedacht nicht
-                # "Installation": Gemessen ist, dass wir diesen Menschen zum
-                # Play Store geschickt haben. Ob er dort installiert, meldet
-                # uns niemand - der Beweis kommt erst als ``activation`` aus
-                # der App selbst.
-                store.record_event(
-                    TrackingEvent(
-                        tracking_code=intern,
-                        campaign_id=link.campaign_id,
-                        group_id=link.group_id,
-                        event_type=EventType.STORE_VISIT,
-                        visitor_hash=_visitor_hash(
-                            store,
-                            request.client.host if request.client else "",
-                        ),
-                        source="redirect",
-                    )
-                )
-
-        # Der Vorschau-Abruf bekommt die Karte, nicht das Ziel - aber nur,
-        # wenn ein Bild eingetragen ist. Ohne Bild zeigt Facebook ohnehin
-        # keine Karte, und die Weiterleitung zum Ziel ist dann das Bessere:
-        # Dort steht wenigstens die Karte der Landingpage oder des Stores.
-        if vorschau and cfg.get("marketing", "vorschau", "bild", default=""):
-            return HTMLResponse(_vorschauseite(cfg, str(request.url), ziel))
-
-        # 302, nicht 301: Ein dauerhaft gemerkter Umzug wuerde spaetere Klicks
-        # am Zaehler vorbeifuehren.
-        if ist_store:
-            # Die Play-Adresse traegt den Code bereits im ``referrer`` - das
-            # ist das Feld, das die Installation ueberlebt. Ein zweites ``ref``
-            # daneben brauchte niemand und Google reichte es nicht weiter.
-            return RedirectResponse(url=ziel, status_code=302)
-        trenner = "&" if "?" in ziel else "?"
-        # ``ref`` traegt den oeffentlichen Code: Er landet in der Adresszeile
-        # des Besuchers und spaeter in den Meldungen der Web-App. Dort wird er
-        # wieder aufgeloest - gespeichert wird nie der Deckname.
-        return RedirectResponse(url=f"{ziel}{trenner}ref={oeffentlich}", status_code=302)
-
-    @app.post("/events")
-    def melde_ereignis(meldung: EventMeldung, request: Request):  # noqa: ANN202
-        """Nimmt ein Ereignis der Zielanwendung entgegen.
-
-        **Jede Stufe steht fuer sich.** Kein Ereignis setzt ein anderes
-        voraus, keines erzeugt ein anderes mit: Eine Registrierung ohne
-        Download ist gueltig, ein Download ohne Registrierung ebenso. Das
-        Einzige, was sie verbindet, ist die Zuordnung - die Frage, welcher
-        Facebook-Gruppe dieses Ereignis zu verdanken ist.
-
-        Zugeordnet wird in dieser Reihenfolge: mitgeschickter Tracking-Code,
-        sonst der erste bekannte Code dieses Menschen ueber alle seine
-        Kennungen hinweg. Findet sich keiner, bleibt das Ereignis **ohne**
-        Zuordnung - es einer beliebigen Gruppe zuzuschlagen waere eine
-        erfundene Zahl, und erfundene Zahlen sind schlimmer als fehlende.
-
-        Bei ``registration`` mit ``referral_code`` entsteht zugleich die
-        Empfehlung - mit allen Pruefungen. Wird sie abgewiesen, ist das
-        Ereignis trotzdem gueltig: Der Mensch hat sich ja registriert.
-
-        Ist ``EVENTS_TOKEN`` gesetzt, muss die Kopfzeile ``X-Events-Token``
-        stimmen. 401 statt 404: Anders als bei der Uebersicht ist hier nichts
-        zu verbergen - die Gegenstelle ist eine Anwendung, und sie soll den
-        Unterschied zwischen "falscher Schluessel" und "Weg gibt es nicht"
-        sehen koennen.
-        """
-        _pruefe_token(request)
-
-        with _store() as store:
-            # Unter welcher Kennung dieses Ereignis steht. Vor der Anmeldung
-            # gibt es nur die anonyme; sie ist dann die einzige Spur, die den
-            # Menschen mit seinem ersten Besuch verbindet.
-            kennung = meldung.user_ref or meldung.anon_ref
-
-            # Beide Kennungen in einer Meldung heisst: derselbe Mensch, neuer
-            # Name. Das muss VOR der Zuordnung geschehen - sonst sucht die
-            # Erbschaft im naechsten Schritt noch in der falschen Haelfte.
-            if meldung.user_ref and meldung.anon_ref:
-                store.verknuepfe_kennung(meldung.anon_ref, meldung.user_ref)
-
-            campaign_id = group_id = ""
-            tracking_code = ""
-
-            if meldung.tracking_code:
-                treffer = store.aufloesen(meldung.tracking_code)
-                if treffer is not None:
-                    campaign_id = treffer.link.campaign_id
-                    group_id = treffer.link.group_id
-                    # **Der innere Code, nicht der gemeldete.** Was die App
-                    # meldet, hat sie aus ``?ref=`` oder aus dem
-                    # Play-``referrer``, und dort steht der oeffentliche
-                    # Deckname. Ihn zu speichern zerlegte jede Auswertung in
-                    # zwei Haelften - eine fuer Beitraege vor dem 14.09.2026
-                    # und eine danach.
-                    tracking_code = treffer.interner_code
-                else:
-                    # Ein Code, den es nicht gibt (Tippfehler, alter Beitrag,
-                    # abgeschnittene URL). Ihn zu speichern erfaende eine
-                    # Spalte in jeder Auswertung je Code; verworfen wird er
-                    # zugunsten der Erbschaft, die den Menschen kennt.
-                    store.audit(
-                        "ereignis_unbekannter_code", meldung.tracking_code, meldung.event_type.value
-                    )
-
-            if not tracking_code and kennung:
-                # Ohne Code die erste bekannte Zuordnung dieses Menschen erben -
-                # ueber alle seine Kennungen hinweg. Sonst blieben spaete
-                # Stufen ohne Gruppe, und genau die sind die interessanten.
-                campaign_id, group_id, tracking_code = store.erste_zuordnung(kennung)
-
-            # Ein Ereignis, das je Mensch nur einmal zaehlt (Download), wird
-            # beim zweiten Mal nicht gespeichert. Die Meldung ist trotzdem
-            # angekommen - die Antwort sagt beides.
-            if (
-                meldung.event_type in EINMAL_JE_MENSCH
-                and kennung
-                and (store.ereignis_bereits_gezaehlt(meldung.event_type, kennung))
-            ):
-                return JSONResponse(
-                    {
-                        "gespeichert": meldung.event_type.value,
-                        "gezaehlt": False,
-                        "grund": "bereits gezaehlt",
-                        "tracking_code": tracking_code,
-                    }
-                )
-
-            store.record_event(
-                TrackingEvent(
-                    tracking_code=tracking_code,
-                    campaign_id=campaign_id,
-                    group_id=group_id,
-                    user_ref=kennung,
-                    event_type=meldung.event_type,
-                    occurred_at=meldung.occurred_at or datetime.now(UTC),
-                    source="api",
-                )
-            )
-
-            # ``tracking_code`` in der Antwort ist kein Geheimnis - er steht in
-            # veroeffentlichten Facebook-Beitraegen. Er ist der Beleg: Die
-            # meldende Anwendung sieht, welcher Gruppe ihr Ereignis
-            # zugeschlagen wurde, und kann das protokollieren, statt es
-            # spaeter aus zwei Datenbanken zusammensuchen zu muessen.
-            antwort: dict[str, Any] = {
-                "gespeichert": meldung.event_type.value,
-                "gezaehlt": True,
-                "tracking_code": tracking_code,
-            }
-
-            if meldung.event_type is EventType.REGISTRATION and meldung.user_ref:
-                # Jeder Registrierte bekommt seinen eigenen Empfehlungscode.
-                antwort["referral_code"] = code_fuer_benutzer(store, cfg, meldung.user_ref)
-
-                if meldung.referral_code:
-                    _referral, entscheidung = lege_empfehlung_an(
-                        store,
-                        meldung.referral_code,
-                        meldung.user_ref,
-                        campaign_id,
-                        group_id,
-                    )
-                    antwort["referral"] = entscheidung.grund
-                    if not entscheidung.angenommen and entscheidung.status is not None:
-                        antwort["referral_status"] = entscheidung.status.value
-
-            stufe = _REFERRAL_STUFE.get(meldung.event_type)
-            if stufe is not None and meldung.user_ref:
-                referral = setze_status(store, meldung.user_ref, stufe)
-                if referral is not None:
-                    # Der Werber kann durch diese Stufe eine Praemie erreichen.
-                    neu = bewerte_benutzer(
-                        store, load_reward_rules(cfg.root), referral.referrer_user_ref
-                    )
-                    if neu:
-                        antwort["rewards_neu"] = [r.rule_id for r in neu]
-
-            return JSONResponse(antwort)
-
-    @app.get("/referral/{user_ref}")
-    def referral_stand(user_ref: str, request: Request) -> dict[str, Any]:
-        """Empfehlungsstand eines Benutzers - fuer die Anzeige in der App.
-
-        Hinter demselben Schluessel wie ``POST /events``. Bisher trug diesen
-        Weg allein nginx, der ihn nicht nach aussen durchlaesst: Wer den Block
-        um ein ``location /`` erweitert, gaebe damit unbeabsichtigt Auskunft
-        ueber die Empfehlungen jedes Benutzers, dessen Kennung jemand raet.
-        Ein Weg, der Auskunft ueber Menschen gibt, soll seinen Schutz selbst
-        mitbringen und ihn nicht von einer Datei nebenan borgen.
-        """
-        _pruefe_token(request)
-        with _store() as store:
-            referrals = store.referrals_of(user_ref)
-            return {
-                "user_ref": user_ref,
-                "referral_code": code_fuer_benutzer(store, cfg, user_ref),
-                "referrals": {
-                    status.value: sum(1 for r in referrals if r.status is status)
-                    for status in ReferralStatus
-                },
-                "rewards": [
-                    {
-                        "rule_id": r.rule_id,
-                        "type": r.reward_type.value,
-                        "value": r.value,
-                        "status": r.status.value,
-                    }
-                    for r in store.rewards_of(user_ref)
-                ],
-            }
 
     return app

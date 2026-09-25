@@ -46,33 +46,17 @@ def beitragstext(
     *,
     config: AppConfig,
 ) -> str:
-    """Setzt den gespeicherten Text mit dem Link **dieser** Gruppe zusammen.
+    """Der fertige Text dieser Zuordnung - Beitrag oder Kommentar.
 
-    Die einzige Stelle, an der ein fertiger Text entsteht - ``campaign
-    message``, ``queue``, ``next``, die Arbeitsseite und die Uebersicht lesen
-    alle hier. Eine zweite Fassung koennte abweichen, und der Unterschied
-    fiele erst auf, wenn ein Beitrag mit dem falschen Code veroeffentlicht
-    ist; zurueckholen laesst er sich dann nicht mehr.
-
-    ``texttyp`` waehlt **nur**, welches Feld gelesen wird - Beitrag oder
-    Kommentar. Die Ersetzung bleibt fuer beide dieselbe und an dieser einen
-    Stelle: Ein zweiter Weg fuer den Kommentar waere ein zweiter Ort, an dem
-    ein Tracking-Code in einen Text kommt.
-
-    ``{link}`` ist der Platzhalter, um den es geht. Der Code steht bewusst
-    nirgends fest im Text: Bei 300 Gruppen sind das 300 verschiedene Links,
-    und jeder einzelne von Hand eingetragen waere eine Fehlerquelle je Gruppe.
+    Die einzige Stelle, an der ein fertiger Text aus dem Datensatz entsteht -
+    ``campaign message``, ``queue``, ``next``, die Arbeitsseite und die
+    Uebersicht lesen alle hier. ``texttyp`` waehlt **nur**, welches Feld
+    gelesen wird; die Ersetzung steht in ``mit_link``.
 
     **Der Text der Zuordnung geht der Vorlage vor.** Steht in
     ``link.post_text`` etwas, ist das der Text, den ein Mensch fuer *diese*
     Gruppe geschrieben oder freigegeben hat - er darf nicht von der
-    allgemeinen Vorlage ueberstimmt werden. Ohne diesen Vorrang gaebe ein
-    Mensch eine Fassung frei und eine andere ginge hinaus, und der
-    Unterschied fiele erst in der Gruppe auf.
-
-    Die Ersetzung bleibt dieselbe, gleich woher der Text stammt: Ein
-    Vorschlag von Claude enthaelt ``{link}`` und sonst nichts Linkartiges -
-    ``ki.pruefe_platzhalter`` laesst nichts anderes durch.
+    allgemeinen Vorlage ueberstimmt werden.
     """
     # Die Vorlage der Kampagne faengt nur den **Beitrag** auf. Sie ist als
     # Beitrag geschrieben; unter einem fremden Beitrag stuende sie als
@@ -85,77 +69,68 @@ def beitragstext(
     return mit_link(campaign, link, text, config=config, texttyp=texttyp)
 
 
+def startseite(campaign: Campaign, config: AppConfig) -> str:
+    """Wohin ``{link}`` zeigt: die Startseite der App - ohne Code, ohne Zaehlung.
+
+    Die ``landing_page`` der Kampagne, sonst ``marketing.startseite``. Bis zum
+    25.09.2026 stand hier der Tracking-Link der Gruppe
+    (``go.b-tarikak.de/r/...``); das Tracking ist entfernt, und jede Gruppe
+    bekommt dieselbe Adresse.
+    """
+    eigene = (campaign.landing_page or "").strip()
+    if eigene:
+        return eigene
+    return str(config.get("marketing", "startseite", default="") or "").strip()
+
+
 def mit_link(
     campaign: Campaign,
     link: CampaignGroup,
     text: str,
     *,
     config: AppConfig,
-    ziel: str = "store",
     texttyp: Texttyp = Texttyp.POST,
 ) -> str:
     """Setzt die spaeten Platzhalter in einen **beliebigen** Text dieser Gruppe.
 
-    Herausgeloest aus ``beitragstext``, seit eine Gruppe nicht mehr einen Text
-    hat, sondern fuenf: Die Fassungen liegen in ``campaign_group_texte`` und
-    nicht in ``link.post_text``, gebraucht wird aber genau dieselbe Ersetzung.
-    Sie ein zweites Mal hinzuschreiben waere ein zweiter Ort, an dem ein
-    Tracking-Code in einen Text kommt - und der Unterschied zwischen beiden
-    fiele erst auf, wenn ein Beitrag mit dem falschen Code in einer Gruppe
-    steht.
-
-    ``beitragstext`` ist damit nur noch die Frage "welches Feld?"; die
-    Ersetzung selbst steht hier, an einer Stelle.
+    ``{link}`` und ``{landing_page}`` werden zur Startseite der App
+    (``startseite``). Eine Stelle fuer die Ersetzung - Arbeitsseite,
+    Kommandozeile und Lauf lesen alle hier.
 
     **``{datum}`` steht hier und nicht in ``vorlagen.fuelle``.** Es traegt den
     laufenden Monat, und der aendert sich - eingesetzt und mitgespeichert
     stuende in einem Beitrag, der drei Wochen nach dem Erzeugen hinausgeht,
-    der Monat von damals; eine Frage nach Reisenden im letzten Monat ist
-    schlicht falsch. Deshalb ist das ``config`` verpflichtend und nicht
-    optional: Ein Aufrufer, der es vergessen darf, laesst ``{datum}`` in
-    geschweiften Klammern im Beitrag stehen, und das faellt erst in der Gruppe
-    auf.
+    der Monat von damals. Deshalb ist das ``config`` verpflichtend: Ein
+    Aufrufer, der es vergessen darf, laesst ``{datum}`` in geschweiften
+    Klammern im Beitrag stehen.
 
-    **Ein Kommentar bekommt keinen Tracking-Link** (``texttyp``,
-    23.09.2026). Der Platzhalter wird dort samt seiner Hinfuehrung
-    herausgenommen (``ohne_link``), und ans Ende kommt die **freie** Adresse
-    ``marketing.kommentar_adresse`` (``https://b-tarikak.de/home``) - ohne
-    Code, sie zaehlt nichts. Der Beitrag behaelt seinen Tracking-Link; das
-    Tracking selbst bleibt unberuehrt.
+    **Ein Kommentar bekommt keine Adresse** (``texttyp``, 23.09.2026). Der
+    Platzhalter wird dort samt seiner Hinfuehrung herausgenommen
+    (``ohne_link``), und ans Ende kommt der Schlusssatz
+    ``marketing.kommentar_schluss`` (``kommentar_adresse``).
     """
     if texttyp is Texttyp.KOMMENTAR:
         text = mit_kommentaradresse(ohne_link(text), kommentar_adresse(config))
 
     # 1. Erst Spintax aufloesen (z. B. {Hallo|Hi}), Platzhalter bleiben stehen
     text = parse_spintax(text)
-    
+
     # 2. Dann die festen Platzhalter ersetzen
+    adresse = startseite(campaign, config)
     return (
-        # Das Ziel entscheidet, welcher der beiden Codes hineinkommt. Ohne
-        # Angabe der Store-Code - das ist das Verhalten, das bis zum
-        # 31.08.2026 fuer alle Links galt, und ein Aufrufer, der nichts sagt,
-        # soll nichts veraendern.
-        setze_adresse(text, link.url_fuer(ziel))
-        # **Der oeffentliche Code, nicht der innere.** Was hier eingesetzt
-        # wird, steht gleich in einer Facebook-Gruppe; "FB-SYR-DUE-004-B"
-        # nennt jedem Leser Kanal, Zielgruppe, Stadt und laufende Nummer -
-        # das ist unsere Buchhaltung und keine Auskunft fuer ihn. Gezaehlt
-        # wird weiterhin unter dem inneren Code: Die Weiterleitung loest den
-        # Decknamen auf, bevor sie ein Ereignis schreibt.
-        .replace("{tracking_code}", link.oeffentlicher_code_fuer(ziel))
-        .replace("{landing_page}", campaign.landing_page)
+        setze_adresse(text, adresse)
+        .replace("{landing_page}", adresse)
         .replace("{datum}", monat_jetzt(config, sprache_der_kampagne(campaign, config)))
     )
 
 #: Was nach der Ersetzung noch in geschweiften Klammern stehen darf: nichts.
 #: Ein Platzhalter, der es bis in die Gruppe schafft, ist kein Schoenheits-
-#: fehler - er ist ein Beitrag, dessen Gruppe nie einen Klick bekommt.
+#: fehler - er steht woertlich in der Gruppe.
 _OFFENER_PLATZHALTER = re.compile(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}")
 
 
-#: Platzhalter, die in einem Kommentar eine Adresse ergaeben. ``{tracking_code}``
-#: steht dabei: Er ist keine Adresse, aber der Deckname der Adresse.
-_ADRESS_PLATZHALTER = ("{link}", "{landing_page}", "{tracking_code}")
+#: Platzhalter, die in einem Kommentar eine Adresse ergaeben.
+_ADRESS_PLATZHALTER = ("{link}", "{landing_page}")
 
 #: Wo ein Satz oder Satzteil vor dem Link endet. Gedankenstrich und Komma
 #: stehen dabei, weil die deutschen Vorlagen den Link so anhaengen ("... im
@@ -252,8 +227,8 @@ def mit_kommentaradresse(text: str, adresse: str) -> str:
 
     Hinter den letzten Satz, mit einem Leerzeichen: "... من سوريا.
     https://b-tarikak.de/home" (das Beispiel des Nutzers). Steht sie schon
-    darin, geschieht nichts; der vorbereitete Text vom Server traegt sie
-    bereits, und der Lauf haengt sie nicht ein zweites Mal an.
+    darin, geschieht nichts; der vorbereitete Text traegt sie bereits, und
+    der Lauf haengt sie nicht ein zweites Mal an.
     """
     from fbgroups.urls import tracking_adresse_im_text
 
@@ -299,11 +274,9 @@ def setze_adresse(text: str, adresse: str) -> str:
     Textes abgesetzt - der vorbereitete war aufgeloest, der neue nicht.
     Zwischen "Text waehlen" und "Text absenden" fehlte die Ersetzung ganz.
 
-    Getrennt von ``mit_link``, weil es zwei verschiedene Ausgangslagen sind:
-    Jene baut die Adresse aus Kampagne und Zuordnung, diese bekommt sie
-    fertig - der Arbeitsrechner im Fernbetrieb hat keine Zuordnung, nur die
-    Adresse. **Ersetzt wird an beiden Stellen hier**, damit es eine
-    Ersetzung bleibt und nicht zwei werden.
+    Getrennt von ``mit_link``, weil der Lauf die Adresse fertig bekommt.
+    **Ersetzt wird an beiden Stellen hier**, damit es eine Ersetzung bleibt
+    und nicht zwei werden.
     """
     return text.replace("{link}", adresse)
 
@@ -311,10 +284,9 @@ def setze_adresse(text: str, adresse: str) -> str:
 def offene_platzhalter(text: str) -> list[str]:
     """Was nach der Ersetzung noch in geschweiften Klammern steht.
 
-    Die letzte Frage vor dem Absenden, und sie ist kein Luxus: Ein Text mit
-    ``{link}`` sieht richtig aus, und seine Gruppe bekommt nie einen Klick
-    gutgeschrieben. Dass er gar nicht erst hinausgeht, ist die einzige
-    Antwort, die den Fehler nicht in eine Gruppe traegt.
+    Die letzte Frage vor dem Absenden: Ein Text mit ``{link}`` stuende
+    woertlich in der Gruppe. Dass er gar nicht erst hinausgeht, ist die
+    einzige Antwort, die den Fehler nicht in eine Gruppe traegt.
 
     Spintax (``{a|b}``) faellt nicht darunter - es ist zu diesem Zeitpunkt
     ohnehin aufgeloest, und ein ``|`` passt nicht auf das Muster.

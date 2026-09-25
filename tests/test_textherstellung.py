@@ -450,7 +450,10 @@ def test_der_editor_schreibt_den_text_dieser_gruppe(
     # die angezeigte Fassung mit eingesetztem Link. Der Browser rechnet das
     # eine nicht in das andere um.
     assert antwort.json()["text"] == "Von Hand fuer Bonn {link}"
-    assert "go.b-tarikak.de/r/" in antwort.json()["angezeigt"]
+    angezeigt = antwort.json()["angezeigt"]
+    assert "{link}" not in angezeigt
+    assert "b-tarikak.de" in angezeigt
+    assert "/r/" not in angezeigt
 
     with MarketingStore(bestand) as store:
         vorschlag = store.vorschlag(KAMPAGNE, "100000000000001", Texttyp.POST, 1)
@@ -573,12 +576,9 @@ def test_jede_spalte_hat_ihren_eigenen_kopierknopf(
     seite = _seite(client, bestand)
     assert "id='kopieren-post'" in seite
     assert "id='kopieren-kommentar'" in seite
-    # Die Adresse steht auf der Seite - aber als kurze, oeffentliche. Welche
-    # Gruppe oben steht, entscheidet der Score; der Kurzcode ist deshalb
-    # nicht vorhersagbar, der Vorspann schon.
-    assert "go.b-tarikak.de/r/" in seite
-    # Und der Tracking-Code steht in keinem Text, der gleich kopiert wird.
-    assert "go.b-tarikak.de/r/FB-SYR-BON-00" not in seite
+    # Eingesetzt ist die Startseite der App, kein Tracking-Link.
+    assert "b-tarikak.de" in seite
+    assert "go.b-tarikak.de/r/" not in seite
 
 
 def test_beide_spalten_melden_ihren_eigenen_ausgang(

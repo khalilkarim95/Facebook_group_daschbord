@@ -1104,22 +1104,6 @@ def vorlage_zu_nummer(nummer: int, *, vorlagen: int = VORLAGEN_JE_TOPF) -> int:
     return ((nummer - 1) % max(vorlagen, 1)) + 1
 
 
-def ziel_zu_nummer(nummer: int) -> str:
-    """Welches Ziel der n-te Kommentar traegt - ``browser`` oder ``store``.
-
-    Ungerade in den Browser, gerade in den Store: ``1 → browser``,
-    ``2 → store``, ``3 → browser`` ... Eine Rechnung und kein gespeicherter
-    Zeiger, aus demselben Grund wie bei der Vorlagenwahl - dieselbe Fassung
-    ergibt nach einem Abbruch wieder dasselbe Ziel.
-
-    Beide Ziele werden **vollstaendig gezaehlt**; der Unterschied ist allein,
-    wohin die Weiterleitung fuehrt. Dadurch laesst sich im Trichter
-    unterscheiden, ob ein Mensch ueber den Play Store oder ueber die
-    Web-Anwendung kam.
-    """
-    return "browser" if nummer % 2 == 1 else "store"
-
-
 def naechste_nummer(
     veroeffentlicht: set[int],
     gescheitert: set[int] | None = None,

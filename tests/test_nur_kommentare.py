@@ -127,8 +127,9 @@ def test_ein_angehaengter_link_faellt_mit_seiner_zeile() -> None:
 def test_mit_link_nimmt_den_link_nur_aus_dem_kommentar(config) -> None:
     """Der Kommentar verliert den Link - der Beitrag behaelt ihn.
 
-    Das Tracking selbst bleibt unberuehrt: Dieselbe Zuordnung mit derselben
-    Adresse ergibt als Beitrag weiterhin den Link.
+    Im Beitrag steht seit dem 25.09.2026 die Startseite der App, nicht mehr
+    die Adresse der Zuordnung (``public_url``) - auch wenn eine alte
+    Zuordnung sie noch traegt.
     """
     kampagne = Campaign(campaign_id=KAMPAGNE, name="K", language="ar")
     zuordnung = _zuordnung()
@@ -141,7 +142,8 @@ def test_mit_link_nimmt_den_link_nur_aus_dem_kommentar(config) -> None:
 
     assert kommentar == f"شفت تطبيق بطريقك. {SCHLUSS}"
     _ist_ohne_adresse(kommentar)
-    assert OEFFENTLICH in beitrag, "der Beitrag traegt seinen Link unveraendert"
+    assert beitrag == f"شفت تطبيق بطريقك. حمّله من هنا: {LANDING}"
+    assert OEFFENTLICH not in beitrag
 
 
 def test_beitragstext_zeigt_den_kommentar_ohne_link(config) -> None:

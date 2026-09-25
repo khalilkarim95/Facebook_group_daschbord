@@ -91,40 +91,8 @@ _KONFIDENZ_MITGLIEDER = {
 # mehr nicht. Eine Beitragszahl je Tag ist daraus nicht abzuleiten.
 _KONFIDENZ_AKTIVITAET = {
     ActivitySource.FACEBOOK: 1.0,
-    ActivitySource.RESONANZ: 0.8,
     ActivitySource.SEARCH_DATES: 0.35,
 }
-
-
-@dataclass(frozen=True)
-class Resonanz:
-    """Was eine Gruppe tatsaechlich gebracht hat - gemessen, nicht geschaetzt.
-
-    Die Zahlen stammen aus den eigenen Tracking-Ereignissen: jemand hat den
-    Link in dieser Gruppe angeklickt und sich danach registriert. Sie
-    beantworten die Aktivitaetsfrage anders als eine Beitragszahl, und in
-    mancher Hinsicht besser: Eine Gruppe mit 500 Mitgliedern, die 40
-    Registrierungen bringt, ist mehr wert als eine mit 5.000, die zwei bringt.
-    Deshalb ist die Resonanz eine **Quelle des Bestandteils ``activity``** und
-    kein eigener Block mehr - zwei Bloecke waeren zweimal dieselbe Frage.
-
-    ``beitraege`` ist die Zahl der **veroeffentlichten** Beitraege. Sie
-    entscheidet, ob ueberhaupt gemessen wurde: Ohne Beitrag sagen null Klicks
-    nichts ueber die Gruppe aus, sondern nur ueber uns.
-
-    Das Modul kennt dabei weder MarketingStore noch Datenbank - die Zahlen
-    werden hereingereicht. Der Kern bleibt frei von der Marketing-Erweiterung,
-    so wie diese den Bestand nicht veraendert.
-    """
-
-    beitraege: int = 0
-    klicks: int = 0
-    registrierungen: int = 0
-    letzte_regung: datetime | None = None
-    # Aeltester veroeffentlichter Beitrag dieser Gruppe. Er sagt, seit wann
-    # gemessen wird; ein Beitrag von heute Morgen hatte noch keine Gelegenheit,
-    # Klicks zu sammeln.
-    erster_beitrag_am: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +130,6 @@ class Lage:
 
     group: Group
     config: AppConfig
-    resonanz: Resonanz | None = None
     jetzt: datetime | None = None
 
     @property
@@ -222,20 +189,6 @@ def gewichte(config: AppConfig) -> dict[str, float]:
 # ---------------------------------------------------------------------------
 
 
-def _tage_seit(zeitpunkt: datetime | None, jetzt: datetime) -> float | None:
-    """Tage zwischen damals und jetzt - unabhaengig von der Zeitzonenangabe.
-
-    Aus der Datenbank kommen die Zeitpunkte mit Zeitzone, aus einem Test
-    gelegentlich ohne. Ein direkter Vergleich der beiden wirft einen
-    TypeError, und der faellt erst im Betrieb auf.
-    """
-    if zeitpunkt is None:
-        return None
-    if zeitpunkt.tzinfo is None:
-        zeitpunkt = zeitpunkt.replace(tzinfo=UTC)
-    return max((jetzt - zeitpunkt).total_seconds() / 86400.0, 0.0)
-
-
 @bestandteil("members", "Mitglieder", 25.0)
 def _members(lage: Lage) -> Befund | None:
     """Die Groesse der Gruppe, logarithmisch gestuft.
@@ -272,78 +225,6 @@ def _members(lage: Lage) -> Befund | None:
     )
 
 
-def _resonanz_faktor(lage: Lage) -> Befund | None:
-    """Die gemessene Resonanz als Aktivitaetsmass - oder ``None``.
-
-    ``None`` heisst ausdruecklich **nicht** "keine Resonanz". Es heisst: Wir
-    haben noch nicht gemessen. Beide Faelle gleich zu behandeln waere der
-    schwerste Fehler an dieser Stelle - eine Gruppe, in der wir nie gepostet
-    haben, stuende dann neben einer, deren Beitrag niemand angeklickt hat.
-    Nicht messbar sind zwei Faelle:
-
-    * **Kein veroeffentlichter Beitrag.** Null Klicks sind dann eine Aussage
-      ueber uns, nicht ueber die Gruppe.
-    * **Der Beitrag ist zu frisch.** Wer vor zwei Stunden gepostet hat, hat
-      noch keine Klicks - eine Null waere hier eine Behauptung ueber die
-      Zukunft. Die Schonfrist steht in ``scoring.resonanz.schonfrist_tage``.
-    """
-    resonanz = lage.resonanz
-    if resonanz is None or resonanz.beitraege <= 0:
-        return None
-
-    hole = lage.config.get
-    schonfrist = float(hole("scoring", "resonanz", "schonfrist_tage", default=3) or 0)
-    alter = _tage_seit(resonanz.erster_beitrag_am, lage.zeitpunkt)
-    if alter is not None and alter < schonfrist:
-        return None
-
-    ziel_quote = float(hole("scoring", "resonanz", "ziel_quote", default=0.15) or 0.15)
-    mindest_klicks = float(hole("scoring", "resonanz", "mindest_klicks", default=20) or 1)
-    ziel_klicks = float(hole("scoring", "resonanz", "ziel_klicks_je_beitrag", default=25) or 1)
-    halbwert = float(hole("scoring", "resonanz", "aktualitaet_tage", default=30) or 30)
-
-    # Engagement: die Registrierungsquote, gemessen an einer erreichbaren
-    # Zielquote - nicht an 100 %. Eine Quote von 15 % ist hervorragend; wer
-    # dagegen auf 1,0 normiert, gibt selbst der besten Gruppe ein Sechstel
-    # der Punkte und macht den Bestandteil wirkungslos.
-    #
-    # Der zweite Faktor ist die Belastbarkeit: 1 Klick und 1 Registrierung
-    # sind 100 % und beweisen nichts. Erst ab "mindest_klicks" zaehlt die
-    # Quote voll - darunter anteilig.
-    quote = resonanz.registrierungen / resonanz.klicks if resonanz.klicks else 0.0
-    belastbar = min(1.0, resonanz.klicks / mindest_klicks) if mindest_klicks > 0 else 1.0
-    engagement = min(1.0, quote / ziel_quote) * belastbar if ziel_quote > 0 else 0.0
-
-    # Reichweite: Klicks je veroeffentlichtem Beitrag. Je Beitrag, nicht
-    # absolut - sonst gewaenne die Gruppe, in der wir am oeftesten gepostet
-    # haben, statt der, die am besten wirkt.
-    je_beitrag = resonanz.klicks / resonanz.beitraege
-    reichweite = min(1.0, je_beitrag / ziel_klicks) if ziel_klicks > 0 else 0.0
-
-    # Aktualitaet: linearer Abfall bis "aktualitaet_tage". Eine Gruppe, die
-    # vor einem halben Jahr zuletzt reagiert hat, ist heute keine gute Wahl -
-    # auch wenn ihre Gesamtzahlen gut aussehen.
-    tage = _tage_seit(resonanz.letzte_regung, lage.zeitpunkt)
-    aktualitaet = 0.0 if tage is None else max(0.0, 1.0 - tage / halbwert)
-
-    # Die drei Anteile stehen in der Konfiguration, nicht hier: Wie schwer die
-    # Registrierungsquote gegen die blosse Reichweite wiegt, ist eine
-    # fachliche Entscheidung. Sie werden auf ihre Summe normiert, damit ein
-    # Tippfehler die Obergrenze von 1,0 nicht sprengt.
-    anteile = hole("scoring", "resonanz", "anteile", default={}) or {}
-    gewicht_e = float(anteile.get("engagement", 0.60))
-    gewicht_r = float(anteile.get("reichweite", 0.25))
-    gewicht_a = float(anteile.get("aktualitaet", 0.15))
-    summe = gewicht_e + gewicht_r + gewicht_a or 1.0
-
-    faktor = (engagement * gewicht_e + reichweite * gewicht_r + aktualitaet * gewicht_a) / summe
-    return Befund(
-        faktor=round(min(1.0, faktor), 4),
-        konfidenz=_KONFIDENZ_AKTIVITAET[ActivitySource.RESONANZ],
-        quelle="resonanz",
-    )
-
-
 @bestandteil("activity", "Aktivitaet", 25.0)
 def _activity(lage: Lage) -> Befund | None:
     """Wie viel in der Gruppe geschieht - aus der besten verfuegbaren Quelle.
@@ -353,18 +234,15 @@ def _activity(lage: Lage) -> Befund | None:
     ein schlechterer Platz als eine mit 20.000 und taeglichem Betrieb. Wer
     beides aus derselben Zahl ableitete, koennte den Fall nicht abbilden.
 
-    Zwei Quellen in absteigender Aussagekraft, die erste vorhandene gewinnt:
+    Die Quelle ist ``group.activity_factor`` - die erhobene Zahl. Woher sie
+    stammt, steht in ``activity_source``; gepflegt wird sie von Hand bzw.
+    ueber die Uebersicht. Fehlt sie, ist das Ergebnis ``None``: kein
+    Ersatzwert, keine Null.
 
-    1. ``group.activity_factor`` - die erhobene Zahl. Woher sie stammt, steht
-       in ``activity_source``; gepflegt wird sie von Hand bzw. ueber die
-       Uebersicht.
-    2. Die gemessene Resonanz: Klicks und Registrierungen aus unseren eigenen
-       Beitraegen. Sie misst, was von dort zu **uns** kommt.
-    3. Nichts davon - dann ``None``. Kein Ersatzwert, keine Null.
-
-    Die Reihenfolge ist nicht beliebig: Die erhobene Zahl misst die Gruppe,
-    die Resonanz misst uns. Beides ist Aktivitaet, aber das erste ist die
-    Antwort auf die gestellte Frage.
+    Bis zum 25.09.2026 gab es eine zweite Quelle, die gemessene Resonanz
+    (Klicks und Registrierungen aus unseren Tracking-Links). Mit dem Tracking
+    ist sie entfallen; der Enum-Wert ``ActivitySource.RESONANZ`` bleibt, weil
+    Bestandsdaten ihn tragen koennen.
 
     Eine dritte Quelle gab es bis zum 20.09.2026: die Frische des juengsten
     indexierten Suchtreffers (``ActivitySource.SEARCH_DATES``). Mit der
@@ -385,11 +263,6 @@ def _activity(lage: Lage) -> Befund | None:
             ),
             quelle=quelle.value if quelle else "ohne Angabe",
         )
-
-    # 2. Die eigene Resonanz.
-    gemessen = _resonanz_faktor(lage)
-    if gemessen is not None:
-        return gemessen
 
     return None
 
@@ -566,17 +439,10 @@ def _data_confidence(befunde: dict[str, Befund], gewichtung: dict[str, float]) -
 def score_group(
     group: Group,
     config: AppConfig,
-    resonanz: Resonanz | None = None,
     *,
     jetzt: datetime | None = None,
 ) -> Group:
-    """Berechnet Score, Aufschluesselung, Konfidenz, Datenqualitaet und Status.
-
-    ``resonanz`` sind die gemessenen Tracking-Zahlen dieser Gruppe; ohne sie
-    faellt der Bestandteil ``activity`` auf seine uebrigen Quellen zurueck.
-    Der Aufrufer holt die Zahlen (siehe ``marketing.resonanz.resonanz_je_gruppe``) -
-    dieses Modul kennt die Marketing-Erweiterung nicht und soll sie nicht kennen.
-    """
+    """Berechnet Score, Aufschluesselung, Konfidenz, Datenqualitaet und Status."""
     group.data_quality = assess_data_quality(group)
 
     # 1. Ungueltige, erfundene oder geprueft tote URLs werden nicht bewertet.
@@ -603,7 +469,7 @@ def score_group(
         return group
 
     gewichtung = gewichte(config)
-    lage = Lage(group=group, config=config, resonanz=resonanz, jetzt=jetzt)
+    lage = Lage(group=group, config=config, jetzt=jetzt)
 
     befunde: dict[str, Befund] = {}
     for name in gewichtung:
@@ -652,18 +518,14 @@ def sort_by_rank(groups: list[Group]) -> list[Group]:
     return sorted(groups, key=_rangfolge)
 
 
-def score_all(
-    groups: list[Group],
-    config: AppConfig,
-    resonanz: dict[str, Resonanz] | None = None,
-) -> list[Group]:
+def score_all(groups: list[Group], config: AppConfig) -> list[Group]:
     """Bewertet alle Gruppen und sortiert sie - die beste zuerst.
 
     Nicht bewertbare Datensaetze stehen am Ende - sie sind kein schlechtes
     Ergebnis, sondern ein offener Punkt fuer die manuelle Nachpflege.
     """
     for group in groups:
-        score_group(group, config, (resonanz or {}).get(group.group_id))
+        score_group(group, config)
 
     return sorted(groups, key=_rangfolge)
 

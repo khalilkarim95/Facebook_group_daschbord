@@ -8,7 +8,8 @@
 #   bash ./umzug-lokal.sh --weiterleitung
 #                                   nur nginx: alte Links auf die Startseite (auch danach)
 #
-# GIT BASH, NICHT POWERSHELL - aus demselben Grund wie bei ausrollen.sh.
+# GIT BASH, NICHT POWERSHELL: Durch ssh fliessen binaere Stroeme, und
+# PowerShell 5.1 reicht zwischen zwei Programmen Text statt Bytes weiter.
 # Die Passphrase des Schluessels wird einmal gefragt, nicht bei jedem Schritt.
 #
 # Ohne --plan, in dieser Reihenfolge:
@@ -24,8 +25,7 @@
 #   6. Server: Dienst und Timer abschalten. Geloescht wird dort NICHTS - die
 #      Datei bleibt als Rueckfallebene liegen.
 #   7. Hier: erste Sicherung, Vermerk data/umgezogen.txt. Ab dann verweigert
-#      ausrollen.sh den Dienst: Es wuerde den Dienst auf dem Server wieder
-#      starten und Mitgliederlisten in einen Bestand einlesen, der nicht mehr gilt.
+#      dieses Skript einen zweiten Umzug.
 #
 # DIE ALTEN TRACKING-LINKS (go.b-tarikak.de/r/..., b-tarikak.de/t/...) stehen
 # in veroeffentlichten Beitraegen. Ab Schritt 2 antwortet nginx dort mit 502,
@@ -50,7 +50,7 @@
 set -euo pipefail
 
 SCHLUESSEL="$HOME/.ssh/b-tarikak_vps_new"
-# Als root wie ausrollen.sh: Dienst anhalten und abschalten darf karim nicht.
+# Als root: Dienst anhalten und abschalten darf karim nicht.
 ZIEL="${FBG_ZIEL:-root@159.195.216.246}"
 BESTAND="/opt/fbgroups/app/data/groups.sqlite"
 FERN_PY="/opt/fbgroups/venv/bin/python"

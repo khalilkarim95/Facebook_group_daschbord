@@ -230,14 +230,6 @@ def hole_oder_starte_lauf(
         # an tat die Automatik nichts mehr. ``0`` heisst: kein Lauf - der
         # Aufrufer sagt, warum.
         return 0, False
-    # Die oeffentlichen Kurzcodes der eingefrorenen Kampagnen nachtragen -
-    # einmal beim Einfrieren und nicht bei jedem Schritt. Neue Zuordnungen
-    # bringen ihren Deckname selbst mit (``add_link``); was hier noch fehlt,
-    # stammt aus der Zeit vor dem 14.09.2026. Ohne diesen Griff bekaemen
-    # genau die dreihundert Bestandsgruppen weiterhin die lange Adresse mit
-    # dem Kampagnencode - also gerade die, um die es geht.
-    for campaign_id in kampagnen:
-        store.kurzcodes_nachtragen(campaign_id)
     return store.starte_lauf(kampagnen, ziel_je_gruppe=ziel_je_gruppe), True
 
 
@@ -987,7 +979,7 @@ def _text_schritt(
     technik: _Technikwaechter,
 ) -> bool:
     """Schritt 5: ein Beitrag oder ein Kommentar - in der besten Gruppe zuerst."""
-    from fbgroups.marketing.beitrag import kommentar_adresse, mit_link
+    from fbgroups.marketing.beitrag import kommentar_adresse, mit_link, startseite
 
     with MarketingStore(pfad) as store:
         vorschlag = texte_sicherstellen(store, schritt, gruppen, config)
@@ -997,12 +989,6 @@ def _text_schritt(
 
         campaign = store.load_campaign(schritt.campaign_id)
         link = store.link_for(schritt.campaign_id, schritt.group_id)
-        # Der oeffentliche Deckname, falls er noch fehlt - der oertliche Lauf
-        # geht denselben Weg wie der Fernbetrieb. Zwei Wege mit zwei Adressen
-        # fuer dieselbe Gruppe waere genau der Unterschied, den niemand
-        # bemerkt, bis er in zwei Beitraegen steht.
-        if link is not None and not link.public_code:
-            link = store.vergib_kurzcodes(schritt.campaign_id, schritt.group_id) or link
         if campaign is None or link is None:
             # Frueher endete hier der ganze Lauf. Eine verschwundene
             # Zuordnung ist aber ein Fall dieser einen Gruppe - die naechste
@@ -1010,33 +996,16 @@ def _text_schritt(
             _ueberspringen(store, lauf_id, schritt, "Kampagne oder Zuordnung fehlt")
             return False
 
-        ziel = lauf.ziel_zu_nummer(schritt.nummer)
-        text = mit_link(
-            campaign, link, vorschlag.text, config=config, ziel=ziel,
-            texttyp=schritt.texttyp,
-        )
-        # Die **Adresse** getrennt vom Text - und seit dem 23.09.2026 nur noch
-        # fuer den Beitrag. **Ein Kommentar traegt keinen Link** (Anweisung
-        # des Nutzers); ``mit_link`` nimmt ihn samt Hinfuehrung heraus, und
-        # eine Adresse, die hier mitreiste, koennte ihn nur zurueckbringen.
+        text = mit_link(campaign, link, vorschlag.text, config=config, texttyp=schritt.texttyp)
+        # Die **Adresse** getrennt vom Text: fuer den Beitrag die Startseite
+        # der App, fuer den Kommentar der Schlusssatz
+        # (``marketing.kommentar_schluss``). **Ein Kommentar traegt keinen
+        # Link** (23.09.2026); ``mit_link`` nimmt ihn samt Hinfuehrung heraus.
         link_url = (
-            link.url_fuer(ziel)
+            startseite(campaign, config)
             if schritt.texttyp is Texttyp.POST
-            # Fuer den Kommentar die **freie** Adresse ohne Tracking
-            # (``marketing.kommentar_adresse``, 23.09.2026).
             else kommentar_adresse(config)
         )
-        # **Ohne Kurzcode geht die Buchhaltung hinaus.** ``url_fuer`` faellt
-        # auf den inneren Code zurueck, und der nennt jedem Leser Kanal,
-        # Zielgruppe, Stadt und laufende Nummer ("FB-SYR-BER-010-B"). Das ist
-        # kein Fehlschlag - ein Beitrag ohne Link waere schlimmer -, aber es
-        # ist genau die lange rohe Adresse, die im Beitrag nichts zu suchen
-        # hat. Gesagt wird es hier, weil es sonst erst auffaellt, wenn der
-        # Beitrag in der Gruppe steht; nachgetragen wird es mit
-        # ``campaign kurzlinks``.
-        ohne_kurzcode = bool(link_url) and link.oeffentlicher_code_fuer(
-            ziel
-        ) == link.code_fuer(ziel)
         wartezeit = _wartezeit(store, kaltmodus_aktiv, abstand)
 
     gruppe = gruppen.get(schritt.group_id)
@@ -1057,13 +1026,6 @@ def _text_schritt(
             f"von {schritt.runde_gruppen}[/dim]"
         )
 
-    if ohne_kurzcode:
-        console.print(
-            f"[yellow]  Kein Kurzcode - die lange Adresse geht hinaus: {link_url}[/yellow]"
-        )
-        console.print(
-            f"[dim]  Nachtragen mit: fbgroups campaign kurzlinks {schritt.campaign_id}[/dim]"
-        )
 
     if trocken:
         console.print("[dim]  --dry-run: nichts wird abgesetzt[/dim]")

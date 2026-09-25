@@ -315,112 +315,27 @@ def test_gruppenname_kann_das_skript_nicht_beenden(tmp_path: Path, config) -> No
 
 # --- Trichterzahlen auf der Seite ---------------------------------------
 
-def _ereignisse(pfad: Path, group_id: str, *typen: str) -> None:
-    """Schreibt Ereignisse, wie sie sonst der Redirect und die App melden."""
-    from fbgroups.marketing.models import EventType, TrackingEvent
-
-    with MarketingStore(pfad) as store:
-        for typ in typen:
-            store.record_event(
-                TrackingEvent(
-                    tracking_code="FB-SYR-BER-001",
-                    campaign_id="batreeq",
-                    group_id=group_id,
-                    user_ref="user-1" if typ != "click" else "",
-                    event_type=EventType(typ),
-                )
-            )
-
-
-def test_zahlen_stehen_in_der_zeile_der_gruppe(bestand: Path, config) -> None:
-    """Die Frage "welche Gruppe bringt Leute?" muss dieselben Filter haben.
-
-    Eine zweite Bestenliste daneben waere ein zweiter Satz Zahlen, den man
-    getrennt filtern und getrennt sortieren muesste.
-    """
-    _ereignisse(bestand, REAL_ID_A, "click", "click", "registration", "qualified")
-
+def test_kacheln_zaehlen_die_zuordnungen(bestand: Path, config) -> None:
     daten = sammle_daten(config, bestand)
-    zeile = next(z for z in daten["gruppen"] if z["id"] == REAL_ID_A)
-
-    assert zeile["click"] == 2
-    assert zeile["registration"] == 1
-    assert zeile["qualified"] == 1
-    assert zeile["conversion"] == 0
-
-
-def test_gruppe_ohne_ereignisse_zeigt_null_und_nicht_leer(bestand: Path, config) -> None:
-    daten = sammle_daten(config, bestand)
-    zeile = next(z for z in daten["gruppen"] if z["id"] == REAL_ID_B)
-
-    assert zeile["click"] == 0
-    assert zeile["conversion"] == 0
-
-
-def test_kacheln_zaehlen_die_vergebenen_links(bestand: Path, config) -> None:
-    daten = sammle_daten(config, bestand)
-    assert daten["kennzahlen"]["tracking_links"] == 1
-
-
-def test_trichter_steht_auf_der_seite(bestand: Path, config) -> None:
-    _ereignisse(bestand, REAL_ID_A, "click", "registration")
-
-    daten = sammle_daten(config, bestand)
-    stufen = {s["stufe"]: s["anzahl"] for s in daten["trichter"]}
-
-    assert stufen["click"] == 1
-    assert stufen["registration"] == 1
-    assert "Trichter" in render(daten)
-
-
-def test_quote_ohne_klicks_ist_kein_null_prozent(bestand: Path, config) -> None:
-    """Eine Quote ohne Grundgesamtheit gibt es nicht - auch nicht auf der Seite."""
-    daten = sammle_daten(config, bestand)
-    kampagne = next(c for c in daten["kampagnen"] if c["id"] == "batreeq")
-
-    assert kampagne["klicks"] == 0
-    assert kampagne["quote"] is None
-    assert "–" in render(daten)
-
-
-def test_hinweis_wenn_links_vergeben_sind_aber_kein_klick_ankommt(
-    bestand: Path, config
-) -> None:
-    """Der haeufigste stille Fehler: Die Domain zeigt auf eine andere Anwendung.
-
-    Der Besucher sieht dann eine Seite, der Klick geht aber verloren. Ohne
-    Hinweis faellt das erst auf, wenn jemand die Zahlen vermisst.
-    """
-    seite = render(sammle_daten(config, bestand))
-    assert "Noch kein einziger Klick" in seite
-
-    _ereignisse(bestand, REAL_ID_A, "click")
-    assert "Noch kein einziger Klick" not in render(sammle_daten(config, bestand))
+    assert daten["kennzahlen"]["zuordnungen"] == 1
 
 
 # --- Arbeitsentscheidung: bearbeiten wir diese Gruppe? -----------------
 
-def test_ausschliessen_laesst_den_tracking_code_gueltig(
+def test_ausschliessen_laesst_die_zuordnung_stehen(
     client: TestClient, bestand: Path
 ) -> None:
-    """Die wichtigste Zusage: Ein Ausschluss widerruft keinen Code.
-
-    Der Code steht moeglicherweise schon in einem veroeffentlichten Beitrag.
-    Wer ihn dort anklickt, muss weiter ankommen - und der Klick muss gezaehlt
-    werden. Ausschliessen ist eine Entscheidung ueber die eigene Arbeit, nicht
-    ueber bereits veroeffentlichte Links.
-    """
+    """Ein Ausschluss ist eine Entscheidung ueber die eigene Arbeit, kein
+    Widerruf: Die Zuordnung samt Code bleibt."""
     antwort = client.post(
         "/bearbeiten",
         json={"group_ids": [REAL_ID_A], "bearbeiten": False, "grund": "zu klein"},
     )
     assert antwort.status_code == 200
 
-    weiterleitung = client.get("/r/FB-SYR-BER-001")
-    assert weiterleitung.status_code == 302
-
     with MarketingStore(bestand) as store:
-        assert store.resolve_code("FB-SYR-BER-001") is not None
+        codes = [link.tracking_code for link in store.links_for_group(REAL_ID_A)]
+    assert codes == ["FB-SYR-BER-001"]
 
 
 def test_ausschliessen_ruehrt_den_kooperationsweg_nicht_an(
@@ -600,17 +515,16 @@ def test_arabischer_name_verlangt_eine_kennung(client: TestClient) -> None:
     assert mit.json()["campaign_id"] == "arabi-2026"
 
 
-def test_status_laesst_die_codes_gueltig(client: TestClient, bestand: Path) -> None:
-    """Eine pausierte Kampagne nimmt nichts Neues auf - ihre Links leben weiter.
-
-    Sie stehen in Beitraegen, die niemand zurueckholt.
-    """
+def test_status_laesst_die_zuordnungen_stehen(client: TestClient, bestand: Path) -> None:
+    """Eine pausierte Kampagne nimmt nichts Neues auf - ihre Zuordnungen bleiben."""
     antwort = client.post("/kampagnen/batreeq/status", json={"status": "paused"})
 
     assert antwort.status_code == 200
-    assert client.get("/r/FB-SYR-BER-001").status_code == 302
     with MarketingStore(bestand) as store:
         assert store.load_campaign("batreeq").status is CampaignStatus.PAUSED
+        assert [link.tracking_code for link in store.links_for_campaign("batreeq")] == [
+            "FB-SYR-BER-001"
+        ]
 
 
 def test_sync_rechnet_erst_und_schreibt_nichts(client: TestClient, bestand: Path) -> None:
@@ -708,21 +622,15 @@ def test_seite_hat_ausgeglichene_abschnitte(bestand: Path, config) -> None:
     assert seite.count("<section") == seite.count("</section>")
     assert seite.count("<details") == seite.count("</details>")
 
-    # Der Trichter steht seit dem 01.09.2026 **oben**, gleich unter den
-    # Kacheln und neben der Datenabdeckung - vorher lag er als eigene Spalte
-    # ganz unten, hinter der Gruppentabelle und der Kampagnenliste. Wer die
-    # Wirkung der veroeffentlichten Beitraege sehen wollte, scrollte an
-    # dreihundert Zeilen vorbei.
-    # Gesucht wird die Auszeichnung, nicht der Name: "kampagnen-block" steht
-    # auch im Stilblock im Kopf der Seite, und der kommt vor allem anderen.
+    # Oben, gleich unter den Kacheln, steht die Datenabdeckung. Der Trichter
+    # daneben ist mit dem Tracking entfallen (25.09.2026).
     block = seite.index('<section class="kampagnen-block">')
     assert seite.index('class="oben"') < block
     assert seite.index('class="kacheln"') < seite.index('class="oben"')
 
     oben = seite[seite.index('class="oben"'):block]
-    assert oben.count("<section") == 1  # nur der Trichter
-    assert "Trichter" in oben
     assert "Datenabdeckung" in oben
+    assert "Trichter" not in oben
 
 
 # --- Auswahlregel je Kampagne ------------------------------------------
@@ -933,41 +841,20 @@ def fremd_mit_passwort(bestand: Path, config, monkeypatch) -> TestClient:
     )
 
 
-def test_zahlen_sind_von_aussen_lesbar(fremd_mit_passwort: TestClient) -> None:
-    """Dieselben Zahlen wie lokal - dafuer ist der Zugang da."""
-    antwort = fremd_mit_passwort.get("/")
-
-    assert antwort.status_code == 200
-    assert "Syrer in Berlin" in antwort.text
-    assert "FB-SYR-BER-001" in antwort.text
-
-
-def test_von_aussen_ist_die_seite_schreibgeschuetzt(fremd_mit_passwort: TestClient) -> None:
-    """Kein Bedienelement, das einen schreibenden Weg ruft.
-
-    Ein Knopf, dessen Weg mit 404 antwortet, sieht aus wie ein Fehler der
-    Seite. Deshalb wird er gar nicht erst gezeigt.
-    """
-    seite = fremd_mit_passwort.get("/").text
-
-    assert '<body class="nur-lesen">' in seite
-    assert "const NUR_LESEN = true;" in seite
-    # Die Regel, die die uebrigen Knoepfe ausblendet, muss auch da sein.
-    assert "body.nur-lesen .knopfzelle" in seite
     # Weiter reicht diese Ebene nicht: Die Tabellenzeilen entstehen erst im
     # Browser, ihr Bauplan steht also so oder so im Quelltext. Was die Seite
     # daraus macht, entscheidet NUR_LESEN; dass ein Klick trotzdem nichts
     # ausrichtet, sichert test_passwortnachweis_oeffnet_keinen_schreibenden_weg.
 
 
-def test_lokal_bleibt_die_seite_bedienbar(client: TestClient) -> None:
-    """Der Schreibschutz gilt nur fuer den Weg von aussen."""
+def test_lokal_ist_die_seite_bedienbar(client: TestClient) -> None:
+    """Einen Lesezugang von aussen gibt es seit dem Umzug nicht mehr - die
+    Seite hat genau einen Zustand, und der ist bedienbar."""
     seite = client.get("/").text
 
-    # Nicht auf "nur-lesen" pruefen: Die CSS-Regel steht in jeder Fassung der
-    # Seite. Massgeblich ist, ob der Koerper die Klasse traegt.
-    assert '<body class="nur-lesen">' not in seite
-    assert "const NUR_LESEN = false;" in seite
+    assert "nur-lesen" not in seite
+    assert "NUR_LESEN" not in seite
+    assert "class='k-arbeit'" in seite or "Noch keine Kampagne" in seite
 
 
 def test_passwortnachweis_oeffnet_keinen_schreibenden_weg(

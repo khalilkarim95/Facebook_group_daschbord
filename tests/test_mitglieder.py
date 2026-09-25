@@ -284,3 +284,42 @@ def test_eine_unbrauchbare_zeile_haelt_die_datei_nicht_auf(
     assert bericht.gruppen[0].name == "Heil"
     assert len(bericht.fehler) == 1
     assert bericht.fehler[0].zeile == 2
+
+
+def test_der_befehl_liest_ein_und_bewertet(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    """``import-mitglieder`` von vorn bis hinten - der einzige Weg in den Bestand.
+
+    Am 25.09.2026 rief der Befehl ``score_all`` beim Entfernen des Trackings
+    noch mit dem alten Resonanz-Argument auf und waere bei jedem Aufruf
+    abgebrochen - kein Test hatte den Befehl selbst je gestartet.
+    """
+    import shutil
+
+    from typer.testing import CliRunner
+
+    from fbgroups import cli
+    from fbgroups.config import load_config
+    from fbgroups.storage import SqliteStore
+
+    projekt = Path(__file__).resolve().parents[1]
+    shutil.copytree(projekt / "config", tmp_path / "config")
+    monkeypatch.setattr(cli, "load_config", lambda: load_config(tmp_path))
+    datei = tmp_path / "liste.csv"
+    datei.write_text(
+        KOPFZEILE
+        + "\n"
+        + f"{URL_A},Syrer in Deutschland,Reise & Transport,"
+        + "Öffentlich · 12.000 Mitglieder · 5 Beiträge pro Tag,A++,,,member,,,\n",
+        encoding="utf-8-sig",
+    )
+
+    trocken = CliRunner().invoke(cli.app, ["import-mitglieder", str(datei), "--dry-run"])
+    assert trocken.exit_code == 0, trocken.output
+    assert not (tmp_path / "data" / "groups.sqlite").exists()
+
+    echt = CliRunner().invoke(cli.app, ["import-mitglieder", str(datei)])
+    assert echt.exit_code == 0, echt.output
+    with SqliteStore(tmp_path / "data" / "groups.sqlite") as store:
+        gruppen = store.load_groups()
+    assert len(gruppen) == 1
+    assert gruppen[0].score is not None

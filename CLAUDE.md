@@ -8,8 +8,9 @@ Verwaltet Facebook-Gruppen für Marketing-Kooperationen in Deutschland
 (Zielmarkt: syrische und arabische Communities; beworben wird die App
 „بطريقك" — Reisende nehmen Kleinigkeiten nach Syrien mit). Der Bestand wird
 **gepflegt**, nicht gesucht: Der einzige Weg hinein ist die Mitgliederliste
-(`import-mitglieder`). Darauf setzen Kampagnen, Tracking-Codes, Textvorlagen,
-Arbeitsseite und Kommentarautomatik auf.
+(`import-mitglieder`). Darauf setzen Kampagnen, Textvorlagen, Arbeitsseite
+und Kommentarautomatik auf. Gezählt wird nichts mehr: Das Tracking ist seit
+dem 25.09.2026 entfernt (siehe „Ohne Tracking").
 
 Die Projektsprache ist **Deutsch** – Kommentare, Docstrings, CLI-Ausgaben und
 Testnamen. Bitte beibehalten.
@@ -79,7 +80,7 @@ ohnehin schon hier.
 data/groups.sqlite      der Bestand – die einzige gültige Fassung
 data/logs/              Tagesprotokolle (automatik-…, waechter-…), 60 Tage
 data/backups/           Sicherungen sicherung-<zeit>.sqlite.gz (+ ~/fbgroups-sicherung)
-data/umgezogen.txt      Vermerk des Umzugs; sperrt umzug-lokal.sh und ausrollen.sh
+data/umgezogen.txt      Vermerk des Umzugs; sperrt einen zweiten umzug-lokal.sh
 ```
 
 - **Der Umzug** (`umzug-lokal.sh`, Git Bash, einmal; gelaufen am
@@ -96,9 +97,10 @@ data/umgezogen.txt      Vermerk des Umzugs; sperrt umzug-lokal.sh und ausrollen.
   erst beide fertig gerechnet, dann beide geschrieben oder keine; ein Block
   ohne Ende oder mit fremden Zeilen (`listen`, `ssl_*` …) wird verweigert;
   scheitert `nginx -t`, kommen die alten Dateien zurück, ohne Neuladen.
-- **Nach dem Umzug verweigert `ausrollen.sh`**: Es startete den Dienst auf
-  dem Server wieder und läse Mitgliederlisten in einen Bestand, der nicht
-  mehr gilt. Mitgliederlisten werden hier eingelesen (`import-mitglieder`).
+- **`ausrollen.sh` gibt es nicht mehr** (25.09.2026): Es hätte den Dienst
+  auf dem Server wieder gestartet und Mitgliederlisten in einen Bestand
+  gelesen, der nicht mehr gilt. Mitgliederlisten werden hier eingelesen
+  (`import-mitglieder`).
 - **Sicherung** (`sicherung.py`): Sicherungsschnittstelle von SQLite statt
   Dateikopie (ein Schreiber könnte gerade buchen), `integrity_check` vor dem
   Packen, zwei Orte (K: Festplatte, C: SSD), je 30 behalten; gelöscht wird nur
@@ -115,29 +117,58 @@ data/umgezogen.txt      Vermerk des Umzugs; sperrt umzug-lokal.sh und ausrollen.
 - **Mehrere Prozesse an einer Datei**: Lauf, Übersicht und Sicherung öffnen
   `groups.sqlite` über `datenbank.verbinde` und warten bis zu 30 s auf einen
   anderen Schreiber, statt nach 5 s „database is locked" zu melden.
-- **Noch nicht entfernt** (folgt): das Tracking (`/r/`, `/t/`, `/events`,
-  Kurzcodes, Tracking-Tabellen) und der Fernbetrieb (`--server`,
-  `/automatik/naechster`, `watchdog.tunnel`). Beides ist nach dem Umzug
-  ohne Funktion, aber noch im Code; `watchdog.server` ist leer,
-  `watchdog.tunnel.enabled` ist `false`.
+- **Den Fernbetrieb gibt es nicht mehr** (25.09.2026): kein `--server`,
+  keine `POST /automatik/naechster|ergebnis|beitritt/*`, kein
+  `campaign abgleich`, kein Tunnel und keine Dienstprüfung im Wächter. `GET
+  /automatik` bleibt — die Arbeitsseite liest daraus den Stand.
 - Festgehalten in `tests/test_sicherung.py`, `tests/test_protokoll.py` und
   `tests/test_watchdog.py`.
+
+## Ohne Tracking (25.09.2026)
+
+Anweisung des Nutzers: keine Tracking-Links mehr. Entfernt sind `/r/`, `/t/`,
+`POST /events`, `GET /referral/…`, die Linkvorschau, die Kurzcodes
+(`kurzcode.py`), Auswertung und Trichter (`analytics.py`), die Resonanz als
+Score-Quelle (`resonanz.py`), Empfehlungen und Prämien (`referral.py`,
+`rewards.py`, `config/rewards.yaml`), der Lesezugang von außen
+(`UEBERSICHT_TOKEN`), `campaign kurzlinks|refresh-urls`, `campaign set
+--ziel`, `marketing analytics|code|rewards|referral` und das Lesen einer
+`.env`. Geblieben ist die Facebook-Automatik mit allem, was sie speichert.
+
+- **`{link}` in einem Beitrag ist die Startseite der App**
+  (`beitrag.startseite`: `campaign.landing_page`, sonst
+  `marketing.startseite` = `https://b-tarikak.de/home`) — ohne Code, für jede
+  Gruppe dieselbe. `{tracking_code}` gibt es nicht mehr
+  (`UnbekannterPlatzhalter`). Kommentare tragen weiterhin gar keine Adresse.
+- **Der Code bleibt als Paar-Code** (`campaign_groups.tracking_code`,
+  `FB-SYR-BER-001`, `CodeAllocator` in `marketing/tracking.py`): Er
+  kennzeichnet die Zuordnung im Bestand und im Versuchsprotokoll, geht aber
+  nirgends mehr hinaus. Der Spaltenname bleibt (Migrationen sind additiv).
+- **Die Tabellen bleiben, stillgelegt**: `tracking_events`, `user_identities`,
+  `referral_codes`, `referrals`, `rewards` und die Adressspalten der
+  Zuordnung (`tracking_url`, `*_browser`, `public_*`) — niemand schreibt oder
+  liest sie. Alte Zeilen tragen noch ihre Werte.
+- **Die alten Links in veröffentlichten Beiträgen** leitet nginx auf die
+  Startseite (`umzug-lokal.sh --weiterleitung`, siehe „Betrieb").
+- **Die Schutzprüfung bleibt**: Keine `/r/`-, `/t/`- oder `?ref=`-Adresse
+  kommt in einen Kommentar (`urls.tracking_adresse_im_text`).
 
 ## Architektur
 
 ```
-config/settings.yaml, textvorlagen.yaml, rewards.yaml
+config/settings.yaml, textvorlagen.yaml
         │
 mitglieder.py ──► scoring ──► storage/sqlite_store (groups)
                                 │
-                  marketing/store (Kampagnen, Codes, Texte, Versuche, Ereignisse)
+                  marketing/store (Kampagnen, Zuordnungen, Texte, Versuche)
                                 │
-   Text:     vorlagen, beitrag, kurzcode
+   Text:     vorlagen, beitrag, tracking (Paar-Code)
    Urteil:   inhalt (Thema/Anlass/Relevanz), bezug (Bezüge), entscheidung,
              ausgang (Antwort von Facebook), grenzen (Tagesmengen/Takt)
    Ablauf:   lauf (Reihenfolge), automatik (Treiber), arbeit (Arbeitsseite),
              watchdog
-   Dienst:   web (FastAPI), dashboard, arbeitsseite, tracking, referral, rewards
+   Dienst:   web (FastAPI, nur örtlich), dashboard, arbeitsseite
+   Betrieb:  sicherung, protokoll, datenbank
                                 │
                   automation/ (Playwright, sichtbar: actions, browser)
 ```
@@ -178,8 +209,6 @@ Browser prüfbar.
   Browserfenster, ein fehlendes Kommentarfeld, eine tote Beitragsadresse
   sagen nichts über die Gruppe. Was die Gruppe selbst sagt (abgelehnt, Spam,
   „Link in Kommentar"), zählt.
-- **Tests laufen nicht gegen die `.env` des Rechners** — die autouse-Fixture
-  `_ohne_env_datei` in `tests/conftest.py` setzt die Schlüssel je Test auf leer.
 - **Kein Test schläft länger als zehn Sekunden** (`_kein_langer_schlaf`): Ein
   Treiber ohne `warte=`, der in eine Ruhezeit läuft, scheitert statt zu
   hängen — am 23.09.2026 blieb die ganze Testfolge so ohne Meldung stehen.
@@ -207,9 +236,8 @@ unberührt). Die Spalten sind eine fremde Tabelle:
   „Aktiv" — die Reihenfolge in `AKTIVITAETSSTUFEN_TEXT` ist der halbe Inhalt.
 - `parse_member_count` steht in `textnorm.py` (ein Parser für CSV und Browser).
 - Eingelesen wird **hier** (`import-mitglieder data\from_lokal\<datei>.csv`,
-  erst `--dry-run`). Vom 23. bis 25.09.2026 nahm jedes `ausrollen.sh` die
-  CSV-Dateien mit auf den Server; seit dem Umzug verweigert es den Dienst.
-  Zugeordnet wird beim Einlesen nichts.
+  erst `--dry-run`). Zugeordnet wird beim Einlesen nichts. Durchgespielt
+  in `test_der_befehl_liest_ein_und_bewertet`.
 
 ### Note und Aktivitätsstufe
 
@@ -227,7 +255,7 @@ Wahl. Geprüft wird gegen die Aufzählung, nicht gegen den Bestand.
 | Bestandteil | Punkte | Grundlage |
 |---|---:|---|
 | `members` | 25 | Mitgliederzahl, logarithmisch (`member_count_buckets`) |
-| `activity` | 25 | `facebook` (erhobene Zahl, Konfidenz 1,0), sonst `resonanz` (Klicks/Registrierungen, 0,8) |
+| `activity` | 25 | `facebook` (erhobene Zahl, Konfidenz 1,0); sonst unbekannt |
 | `category` | 20 | Haupt- + Nebenkategorien (Bonus 0,08 je Thema, max 0,24) |
 | `location` | 15 | Stadt → Bundesland (0,45) → Land (0,20) → unbekannt |
 | `target_audience` | 15 | Zielgruppen-Tags |
@@ -240,11 +268,9 @@ Wahl. Geprüft wird gegen die Aufzählung, nicht gegen den Bestand.
   Funktion mit `@bestandteil`, Feld in `ScoreBreakdown`, Gewicht in
   `settings.yaml`. Ein Gewicht für einen unbekannten Namen ist ein Tippfehler
   (`config-check`).
-- **„Nicht gemessen" ≠ „wirkungslos"**: ohne veröffentlichten Beitrag oder in
-  der Schonfrist (`schonfrist_tage: 3`) ist die Resonanz `None`; ein Beitrag mit
-  null Klicks ist ein Ergebnis. Zielquote 15 %, `mindest_klicks: 20`,
-  Reichweite je Beitrag. `scoring.Resonanz` beschreibt, `marketing/resonanz.py`
-  beschafft — `scoring.py` importiert nichts aus `marketing`.
+- Bis zum 25.09.2026 war die **Resonanz** (Klicks und Registrierungen aus den
+  Tracking-Links) die zweite Quelle von `activity`; mit dem Tracking ist sie
+  entfallen. `scoring.py` importiert nichts aus `marketing`.
 - `data_confidence` steht **neben** dem Score, nie darin. `data_quality`
   zählt nur erhobene Felder.
 - Sortiert wird über `scoring.sort_by_rank` (Punkte, bei Gleichstand der Anteil
@@ -284,8 +310,7 @@ GRUPPE -> BEITRAEGE LESEN -> BEZUEGE JE BEITRAG -> BEZUEGE DER GRUPPE
 - **Gesammelt wird, wo gelesen wird.** `automatik.entscheide_und_kommentiere`
   hängt die Bezüge **jedes gelesenen** Beitrags an den Ausgang
   (`Schrittergebnis.bezuege`) — auch wenn nichts geschrieben wurde. Gespeichert
-  örtlich in `_fuehre_schritt_aus`, im Fernbetrieb vom Server
-  (`AutomatikErgebnis.bezuege`), in `beitrag_bezuege` (eine Zeile je Beitrag;
+  in `_fuehre_schritt_aus`, in `beitrag_bezuege` (eine Zeile je Beitrag;
   auch ohne Bezug, denn „gelesen, nichts gefunden" ≠ „nie gelesen").
   `store.gruppenbezuege` → `bezug.Gruppenbezuege` (Anzahl je Bezug).
 - **Die Bezüge entscheiden noch nichts.** Bis die Behandlung von `[]`
@@ -304,20 +329,20 @@ GRUPPE -> BEITRAEGE LESEN -> BEZUEGE JE BEITRAG -> BEZUEGE DER GRUPPE
 Aufsatz auf den Bestand, ohne ihn zu verändern. Gleiche Datenbank, gleiches
 Migrationsverfahren.
 
-### Kampagnen, Zuordnung, Tracking-Codes
+### Kampagnen, Zuordnung, Paar-Codes
 
 - **Beschreibung und Auswahlregel sind zwei Dinge.** `campaigns.audiences`/
   `cities` sagen, wen die Kampagne bewirbt; die `target_*`-Spalten, welche
-  Gruppen einen Code bekommen. Leer heißt **keine Einschränkung**; auf der
+  Gruppen zugeordnet werden. Leer heißt **keine Einschränkung**; auf der
   Kommandozeile hebt `alle` eine Einschränkung auf.
 - **Anlegen vergibt keine Codes.** Codes entstehen über `campaign sync`
   (wiederholbar; `POST /kampagnen/{id}/sync` antwortet mit `dry_run: true` als
   Vorgabe) oder `add-groups` (Schnappschuss) oder die angehakten Zeilen der
   Übersicht (`POST /kampagnen/{id}/gruppen`, bestätigt mit der **Zahl**).
   Vorschau und Ernstfall lesen denselben `selection.baue_plan`.
-- **Ein vergebener Tracking-Code ändert sich nie und wird nie zurückgenommen**
-  — er steht in veröffentlichten Beiträgen. Zugeordnet wird nur hinzugefügt;
-  was nicht mehr passt, erscheint als `nicht_mehr_passend`. Der Code ist über
+- **Ein vergebener Code ändert sich nie und wird nie zurückgenommen** — an der
+  Zuordnung hängen Texte und Versuche. Zugeordnet wird nur hinzugefügt; was
+  nicht mehr passt, erscheint als `nicht_mehr_passend`. Der Code ist über
   alle Kampagnen eindeutig.
 - **Codevergabe folgt `first_seen_at`**, nicht dem Score
   (`CodeAllocator`, merkt sich je Kürzelpaar die höchste Nummer; frei
@@ -326,37 +351,13 @@ Migrationsverfahren.
 - `auto_assign` greift nur bei `status: active`; `campaign sync` von Hand fragt
   nicht nach dem Status.
 - **„Bearbeiten wir sie?" ist eine eigene Achse** (`GroupMarketing.bearbeiten`
-  neben `marketing_status`). Ausschließen setzt nur diese Achse; der
-  Tracking-Code bleibt gültig. Kein Lauf schließt eine Gruppe selbst aus — das
-  ist ein Haken in der Übersicht.
+  neben `marketing_status`). Ausschließen setzt nur diese Achse; die
+  Zuordnung bleibt. Ein Haken in der Übersicht nimmt es zurück.
 - Arbeitsstand in `group_marketing`, nicht in `groups` (Schreibläufe über
   `upsert_groups` schreiben den ganzen Datensatz). Beitritt als eigene Schritte
   `beitritt_angefragt` → `mitglied` → `contacted` (`join_requested_at`); ein
   erreichter Stand wird nie zurückgedreht, eine Ablehnung bleibt stehen.
-- `APP_BASE_URL` (Umgebung) schlägt `marketing.app_base_url`
-  (`https://go.b-tarikak.de`); Landingpage `marketing.browser_url`
-  (`https://b-tarikak.de/home`). `campaign refresh-urls` stellt den Vorspann
-  aller vier Adressspalten um, nie den Code.
-
-### Der öffentliche Kurzcode (`kurzcode.py`)
-
-Nach außen steht ein Deckname (`go.b-tarikak.de/r/8wa6dja`), nach innen der
-Code (`FB-SYR-DUE-004`). **Gespeichert und ausgewertet wird nur der innere
-Code** (`aufloesen` ist die eine Stelle). Abgeleitet aus Code + Geheimnis
-(`marketing_meta`), aber gespeichert. Alphabet ohne `0/o`, `1/l/i`, `u/v`.
-Ein vergebener Kurzcode ändert sich nie; der alte lange Link bleibt gültig.
-
-**Lesbare Namen seit dem 23.09.2026:** Ist `marketing.link_basis` gesetzt
-(`https://b-tarikak.de/t`), bekommt jede neue Zuordnung statt `wr4s9xw` einen
-Namen aus zwei Wörtern und einer Zahl (`kurzcode.lesbarer_code`,
-`safar-sham-12`) unter `b-tarikak.de/t/…`. Der Dienst beantwortet `/t/{name}`
-wie `/r/{code}`; nginx auf b-tarikak.de reicht `/t/` an 127.0.0.1:8090 weiter.
-Die Basis steht zusätzlich im Speicher (`marketing_meta.link_basis`, beim
-Dienststart geschrieben), weil `vergib_kurzcodes` keine Konfiguration kennt.
-`campaign kurzlinks --lesbar` stellt Zuordnungen **ohne** veröffentlichten
-Text um; veröffentlichte behalten ihre Adresse.
-Fehlt der Kurzcode, geht die lange Adresse hinaus — und der Lauf sagt es
-(`campaign kurzlinks` trägt nach).
+- `{link}` wird zur Startseite der App (siehe „Ohne Tracking").
 
 ### Beitragsstand je Paar
 
@@ -390,9 +391,10 @@ anlaesse: <sprache>: <anlass>: [Fassungen]
   `--typ` erzeugt beide).
 - **Platzhalter:** `{zielgruppe}` (immer `anrede_allgemein`, „الأصدقاء"),
   `{stadt}`, `{ziel}` (immer `ziel_allgemein`, „سوريا"), `{gegenstand}`,
-  `{gruppe}` (Füllen) sowie `{link}`, `{tracking_code}`, `{landing_page}`,
-  `{datum}` (Lesen; `{datum}` = laufender Monat, levantinische Namen, zwölf
-  in `textvorlagen.yaml`). Jeder andere wirft `UnbekannterPlatzhalter`.
+  `{gruppe}` (Füllen) sowie `{link}`, `{landing_page}` (beide die
+  Startseite) und `{datum}` (Lesen; `{datum}` = laufender Monat,
+  levantinische Namen, zwölf in `textvorlagen.yaml`). Jeder andere wirft
+  `UnbekannterPlatzhalter`.
 - **`vorlagen.pruefe_platzhalter`** gilt für **jeden** Text (auch von Hand):
   genau ein `{link}`, keine ausgeschriebene Adresse, kein codeähnliches Muster.
 - **Arabische Grammatik:** Vor `{zielgruppe}` steht ein eigenes Wort (مِن، إلى،
@@ -440,8 +442,8 @@ Kampagne (sequentiell) → Beitrittsanfragen (derzeit 0)
    → nächste Kampagne
 ```
 
-Kommandozeile, Dienst und Fernbetrieb fragen alle dort; keiner kennt die
-Reihenfolge selbst.
+Kommandozeile und Dienst fragen beide dort; keiner kennt die Reihenfolge
+selbst.
 
 - **Arbeitsliste**: die Score-Reihenfolge (`sort_by_rank`). Sie ordnet die
   Runde, sie wählt nicht mehr — siehe „Die Runde".
@@ -466,7 +468,7 @@ Reihenfolge selbst.
   (erreicht → `completed`) ≠ `fertig` (Lauf versucht nichts mehr); eine leere
   Kampagne beendet den Lauf, wird aber nicht `completed`.
 - **Die Kampagnenliste wird beim Start eingefroren**; `--neu` friert eine
-  frische ein (nur beim ersten Aufruf im Fernbetrieb). Eine leere Liste wird
+  frische ein. Eine leere Liste wird
   nie eingefroren. Eine Kampagne, deren Gruppen alle ruhen, behält ihren Platz.
 - `automatik.mitgliedschaft_pflicht: false` — Gruppen ohne vermerkte
   Mitgliedschaft werden versucht (der Vermerk ist unser Arbeitsstand).
@@ -479,8 +481,8 @@ bei Gruppe 1. Gespeichert ist allein, wer in welcher Runde dran war
 (`automatik_lauf_besuche`, Schritt 27, `store.merke_besuch`); die Runde
 selbst wird gerechnet.
 
-- **Vermerkt wird der Besuch, wenn der Schritt hinausgeht** — örtlich vor dem
-  Browser, im Fernbetrieb in `/automatik/naechster`. Der Ausgang spielt keine
+- **Vermerkt wird der Besuch, wenn der Schritt hinausgeht** — vor dem
+  Browser. Der Ausgang spielt keine
   Rolle: Erfolg, kein Anlass, technischer Fehlschlag, ein Absturz — die Gruppe
   war dran, die nächste ist an der Reihe.
 - **Nur die Ruhezeit übergeht eine Gruppe**, und nur für ihre Dauer; danach
@@ -497,15 +499,14 @@ selbst wird gerechnet.
   kamen und eine davon gut fünfzigmal hintereinander („alle sichtbaren
   Beiträge sind bereits kommentiert"). Gewählt wurde die erste Gruppe, die
   gerade durfte, und nach zwei Minuten Ruhe durfte sie wieder. Festgehalten
-  in `tests/test_runden.py` (11 Gruppen → alle 11 → Runde 2 → wieder alle 11,
-  örtlich und im Fernbetrieb).
+  in `tests/test_runden.py` (11 Gruppen → alle 11 → Runde 2 → wieder alle 11).
 
 ### Ausgänge und was sie kosten
 
 | Ausgang | Folge |
 |---|---|
 | Erfolg | zählt (Tagesmenge, Gruppe, Takt) |
-| kein Anlass (`kein_anlass`), auch „alle sichtbaren Beiträge sind bereits kommentiert" und „keine Beiträge gefunden" | nichts gebucht, Gruppe **ruht** (`automatik.ruhe_minuten`, 2) — bis 23.09.2026 hieß das `erschoepft` und war ein Urteil über die Gruppe; ein älterer Arbeitsrechner sendet es noch, es gilt wie `kein_anlass` |
+| kein Anlass (`kein_anlass`), auch „alle sichtbaren Beiträge sind bereits kommentiert" und „keine Beiträge gefunden" | nichts gebucht, Gruppe **ruht** (`automatik.ruhe_minuten`, 2) — bis 23.09.2026 hieß das `erschoepft` und war ein Urteil über die Gruppe |
 | tote Beitragsadresse (`beitrag_weg`) | nächster Beitrag im selben Schritt, dann Ruhe |
 | technischer Fehlschlag | bis zu drei Beiträge im Schritt (`MAX_BEITRAEGE_JE_SCHRITT`), dann Ruhe — **kein Ausschluss** |
 | Ablehnung durch die Gruppe | Gruppe beiseite für diesen Lauf (keine dauerhafte Sperre) |
@@ -523,9 +524,7 @@ selbst wird gerechnet.
   melden; Schlaf gedeckelt (`wartesekunden`, `ruhesekunden`), der
   Schleifenwächter vergisst nach einem Schlaf.
 - **Fehlerisolierung**: Ein Fehler kostet eine Gruppe diesen Lauf, eine
-  Kampagne darf für sich scheitern (`_lies_kampagne`). Netzfehler im
-  Fernbetrieb: `MAX_NETZFEHLER` (5); ein nicht buchbarer Ausgang beendet den
-  Lauf.
+  Kampagne darf für sich scheitern (`_lies_kampagne`).
 - **Anmeldung vor dem Lauf** (`actions.ist_angemeldet`, `_sitzung_pruefen`):
   abgemeldet → nichts tun, Exit 2. Der Text beginnt mit `NICHT_ANGEMELDET` —
   daran erkennt `automatik._SITZUNG` den Sitzungsfehler.
@@ -553,14 +552,12 @@ Kommentar, 20 Kommentare je Gruppe, das Kampagnenziel aus 12 Stunden und
   schaltet ihn ein); von Hand (Arbeitsseite) ist der Beitrag unberührt.
 - **Kein Link in einem Kommentar — an drei Stellen gehalten:**
   1. Wo der Text entsteht: `beitrag.mit_link(..., texttyp=KOMMENTAR)` nimmt
-     `{link}`, `{landing_page}` und `{tracking_code}` **samt Hinführung**
+     `{link}` und `{landing_page}` **samt Hinführung**
      heraus (`ohne_link`: „… بنفس الاتجاه. حمّل … من هنا: {link}" → „…
      بنفس الاتجاه."). Steht der App-Name nur im Satz des Links, bleibt der
-     Satz und nur „من هنا:" fällt. Server und örtlicher Lauf schicken für
-     Kommentare keine `link_url` mehr.
+     Satz und nur „من هنا:" fällt.
   2. Wo der Lauf den Text wählt: `entscheide_und_kommentiere` wendet
-     `ohne_link` auf jeden Anlasstext an und benutzt `link_url` nicht mehr —
-     auch nicht, wenn ein älterer Server sie schickt.
+     `ohne_link` auf jeden Anlasstext an.
   3. Vor dem Absenden: ein `/r/`- oder `/t/`-Pfad, ein Tracking-Parameter
      oder ein innerer Code (`FB-…`) verhindert den Kommentar — im Lauf und in
      `actions.comment_on_post`.
@@ -570,16 +567,15 @@ Kommentar, 20 Kommentare je Gruppe, das Kampagnenziel aus 12 Stunden und
   `https://b-tarikak.de/home`, Wunsch des Nutzers am selben Tag): ohne Code,
   sie zählt nichts. `beitrag.mit_kommentaradresse` hängt sie hinter den
   letzten Satz — „… من سوريا. https://b-tarikak.de/home" — und nie zweimal;
-  Server und örtlicher Lauf schicken sie beim Kommentar als `link_url`. Eine
+  der Lauf reicht sie als `link_url` durch. Eine
   Tracking-Adresse (`/r/`, `/t/`, `?ref=`) wird dort nie angenommen
   (`kommentar_adresse` → `""`). Die Prüfung vor dem Absenden unterscheidet
   deshalb: `comment_on_post` sperrt jede **Tracking**-Adresse
   (`urls.tracking_adresse_im_text`), der Lauf jede Adresse außer genau der
   freien (`urls.adresse_im_text(..., erlaubt=...)`).
-- **Das Tracking bleibt**: Codes, Kurzcodes, `/r/`, `/t/`, der Beitrag mit
-  Link und die Auswertung sind unverändert. Die Vorlagen in
-  `textvorlagen.yaml` tragen ihr `{link}` weiter — entfernt wird beim
-  Ausfertigen, nicht in der Vorlage.
+- Die Vorlagen in `textvorlagen.yaml` tragen ihr `{link}` weiter — entfernt
+  wird beim Ausfertigen, nicht in der Vorlage. Seit dem 25.09.2026 gibt es
+  kein Tracking mehr (siehe „Ohne Tracking").
 - **Die Runde bleibt** (eine Gruppe je Runde einmal), `je_gruppe_taeglich:
   20` ist die Tagesgrenze je Gruppe.
 - Festgehalten in `tests/test_nur_kommentare.py`.
@@ -608,9 +604,8 @@ Gruppe öffnen → Runde 1 scrollen + beurteilen → Runde 2 → … → Runde 1
   Runde 15) noch den Kommentarschritt: Hat der beste Beitrag keinen Text,
   kommt der nächste dran (vorher endete der Schritt mit „kein Anlass").
 - **Ein Fehler in einer Gruppe hält die anderen nicht auf**: Die Runde hat
-  die Gruppe schon als besucht vermerkt, die nächste ist dran. Im
-  Fernbetrieb meldet der Arbeitsrechner den Fehler als Ausgang; die Gruppe
-  kommt in der nächsten Runde wieder.
+  die Gruppe schon als besucht vermerkt, die nächste ist dran; sie kommt in
+  der nächsten Runde wieder.
 - Die Wege von Hand (`campaign auto`, Arbeitsseite) rufen ohne `geeignet`
   und behalten ihr `limit`. Festgehalten in `tests/test_scroll_runden.py`.
 
@@ -642,8 +637,8 @@ Pinguin mit Karte, Name, Adresse und Store-Knöpfen).
   Leerzeichen, nicht mit einem Zeilenumbruch (ein `\n` über `insert_text`
   ist im Kommentarfeld unberechenbar). `kommentar_adresse` steht auf `""`.
 - **`marketing.kommentar_bild`** (`beitrag.kommentar_bild`): relativ zum
-  Projekt, liegt unter `config/` und kommt damit mit jedem Ausrollen auf
-  Server **und** Arbeitsrechner — hochgeladen wird dort, wo der Browser ist.
+  Projekt, liegt unter `config/` — hochgeladen wird dort, wo der Browser
+  ist.
   JPEG, weil Facebooks Kommentar-Upload damit am sichersten ist (das
   Original war WebP).
 - **`comment_on_post(..., bild=)`** hängt es nach dem Text an
@@ -652,7 +647,7 @@ Pinguin mit Karte, Name, Adresse und Store-Knöpfen).
   Vorschau im Formular steht (bis 15 s). Kommt das Bild nicht an, geht der
   Text trotzdem hinaus — er nennt App und Weg.
 - Die Auswahlkette ruft weiter `kommentieren(context, url, text)`; das Bild
-  kommt über `automatik._mit_bild` (ein `partial`) dazu, örtlich wie fern.
+  kommt über `automatik._mit_bild` (ein `partial`) dazu.
   Die Arbeitsseite von Hand zeigt nur den Text — das Bild fügt dort der
   Mensch ein.
 - Festgehalten in `tests/test_kommentarbild.py`.
@@ -686,18 +681,17 @@ ausschließen.*
   `post_versuche` trägt die Adresse nur bei Erfolg — deshalb stand derselbe
   gescheiterte Beitrag in jeder Runde wieder oben. Gesperrt wird nur, was am
   **Beitrag** liegt (kein Feld, nicht beschreibbar, gelöscht); ein
-  Sitzungsfehler sperrt nichts und beendet den Schritt sofort. Der Server
-  schickt die gesperrten Adressen als `bisherige_post_urls` mit.
+  Sitzungsfehler sperrt nichts und beendet den Schritt sofort.
 - **Nicht beschreibbar heißt jetzt: zweimal versucht.** `_feld_anklicken`
   klickt, und wenn etwas darüber liegt, drückt es Escape, scrollt das Feld
   in den Blick und klickt noch einmal.
 - **Der Ausschluss** (`nichts_zu_machen` → `Schrittergebnis.ausschliessen`
-  → `store.schliesse_gruppe_aus`, örtlich wie fern) verlangt alles zugleich:
+  → `store.schliesse_gruppe_aus`) verlangt alles zugleich:
   alle Runden gelaufen, etwas gesehen, etwas gelesen, kein Beitrag
   geeignet, und der Schritt endete mit „kein Anlass". Ein technischer
   Fehlschlag oder eine Anmeldewand schließt nie aus — sie sperren
-  höchstens Beiträge. Ausgeschlossen heißt `bearbeiten = 0` mit Grund,
-  Tracking-Code bleibt gültig, ein Haken in der Übersicht nimmt es zurück.
+  höchstens Beiträge. Ausgeschlossen heißt `bearbeiten = 0` mit Grund, die
+  Zuordnung bleibt, ein Haken in der Übersicht nimmt es zurück.
   Das hebt die Regel vom 21.09.2026 („keine Gruppe fällt dauerhaft heraus")
   für genau diesen einen Fall auf.
 - Festgehalten in `tests/test_zehn_beitraege.py`.
@@ -791,37 +785,15 @@ Hält **einen** `campaign automatik` am Leben — ohne Kampagnenlogik
 (`test_der_waechter_kennt_keine_kampagnenlogik`). `baue_befehl` ohne `--neu`,
 `--kampagne`, `--limit`. Die Sperre (`data/automatik.lock`) gehört dem Lauf;
 eine Sperre mit toter Kennung gilt nicht (Windows: `GetExitCodeProcess`).
-Seit dem Umzug (25.09.2026) örtlich: kein `--server`, kein Tunnel
-(`watchdog.tunnel.enabled: false`), dafür die tägliche Sicherung als
-`nebenbei`. Der Tunnelweg (`-N`, `ServerAliveCountMax=3`, **kein Kennwort in
-einer Datei**) bleibt im Code, bis der Fernbetrieb entfernt ist.
+Seit dem Umzug (25.09.2026) ohne Dienst und ohne Tunnel; dafür die tägliche
+Sicherung als `nebenbei`.
 
 ## Dienst (`web.py`, `dashboard.py`)
 
--## Dienst (`web.py`, `dashboard.py`)
-
--**`GET /r/{code}`** zählt und leitet mit **302** weiter (nie 301);
-  unbekannter Code → 404. Vorschau-Abrufe (Facebook, WhatsApp, Telegram)
-  bekommen eine eigene Karte (`marketing.vorschau`, `og:url` = eigene Adresse,
-  Weiterleitung per JavaScript statt Meta-Refresh) und zählen nicht. **Nie zum
-  Testen aufrufen** — `/healthz` nehmen.
-- **Keine IP-Adressen im Bestand**: HMAC aus IP und Tagesdatum.
-  Hinter nginx: uvicorn mit `--proxy-headers --forwarded-allow-ips 127.0.0.1`,
-  nginx setzt `X-Forwarded-For $remote_addr` (überschreiben).
-- **Zwei Zugänge**: vom selben Rechner (SSH-Tunnel) bedienbar; von außen hinter
-  Basic Auth **nur lesend** (`UEBERSICHT_TOKEN`). Die Absicherung liegt im
-  Dienst (`_nur_lokal`), ausgeblendete Knöpfe sind nur Aufrichtigkeit.
-- **`POST /events`** nimmt Meldungen der App an (`EVENTS_TOKEN`). Trichter
-  `click` → `landing_visit` → `registration` → `download` → `activation` →
-  `qualified` → `conversion`, jede Stufe für sich gezählt. Spätere Ereignisse
-  erben die **erste** Zuordnung; `user_identities` verknüpft `anon-…` mit der
-  Benutzerkennung (beim Lesen, nie durch Umschreiben). Ohne erkennbaren
-  Menschen keine Zuordnung; unbekannte Codes werden verworfen. `download` zählt
-  je Mensch einmal. Die Web-App meldet über ihre eigene API — das Geheimnis
-  gehört nicht in den Browser.
-- **Referral**: jede Entscheidung mit Begründung, Verdacht → `review`, ein Status
-  fällt nie von selbst zurück; Prämien in `config/rewards.yaml` (kein
-  Geldbetrag). `conversion_rate` ist `None` bei null Klicks.
+- **Nur örtlich** (`fbgroups serve --port 8090`, bindet an 127.0.0.1): `/`
+  Übersicht, `/arbeit/{kampagne}` Arbeitsseite, `GET /automatik` Stand,
+  `/healthz`. Jeder Weg prüft `_nur_lokal` (Absender und `Origin`), auch die
+  Übersicht selbst — einen Lesezugang von außen gibt es nicht mehr.
 - **Übersicht**: zeigt den ganzen Bestand (kein Filter vorausgewählt), blättert
   ab 25 Zeilen, filtert/sortiert über den ganzen Bestand, merkt sich den Stand
   in `sessionStorage` (jeder Zugriff in `try`/`catch`). Der Zähler nennt, was
@@ -837,5 +809,5 @@ einer Datei**) bleibt im Code, bis der Fernbetrieb entfernt ist.
   Arabisch). Von Hand erstellte CSV/TXT mit `utf-8-sig` lesen (BOM), CSV mit
   `utf-8-sig` und `;` schreiben.
 - PowerShell 5.1 kennt kein `&&`/`||` — mit `;` und `if ($?) { }` ketten.
-- `umzug-lokal.sh` (und das stillgelegte `ausrollen.sh`) in **Git Bash**,
-  nicht PowerShell (binäre Ströme durch `ssh`).
+- `umzug-lokal.sh` in **Git Bash**, nicht PowerShell (binäre Ströme durch
+  `ssh`).

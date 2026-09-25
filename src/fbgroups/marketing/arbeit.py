@@ -352,18 +352,6 @@ def stelle_texte_bereit(
     zwecke = [nur] if nur is not None else list(Texttyp)
 
     from fbgroups.marketing.lauf import ZIEL_JE_GRUPPE
-    from fbgroups.marketing.tracking import app_base_url
-
-    # Der Browser-Code entsteht hier, beim Vorbereiten - nicht beim Anzeigen.
-    #
-    # Ein Tracking-Code ist endgueltig; ihn bei einem Seitenaufruf zu vergeben
-    # hiesse, dass blosses Nachsehen etwas Unumkehrbares anlegt. Das
-    # Bereitstellen der Texte ist dagegen der Schritt, der ohnehin schreibt.
-    link = store.link_for(campaign.campaign_id, gruppe.group_id)
-    if link is not None and not link.tracking_code_browser:
-        store.vergib_browsercode(
-            campaign.campaign_id, gruppe.group_id, app_base_url(config)
-        )
 
     entstanden: dict[Texttyp, int] = {}
     for texttyp in zwecke:
@@ -593,33 +581,13 @@ def _fassungen(
 ) -> list[Fassung]:
     """Die gespeicherten Fassungen eines Zwecks, fertig gelesen.
 
-    ``mit_link`` ist dieselbe Ersetzung, die ``beitragstext`` benutzt - es
-    gibt weiterhin genau eine Stelle, an der ein Tracking-Code in einen Text
-    kommt.
+    ``mit_link`` ist dieselbe Ersetzung, die ``beitragstext`` benutzt - eine
+    Stelle, an der ``{link}`` zur Adresse wird.
     """
-    from fbgroups.marketing.lauf import ziel_zu_nummer
-
-    # Vor dem Lesen die Decknamen nachtragen. Hier und nicht in ``mit_link``:
-    # Jene ist eine reine Ersetzung ohne Speicher, diese Stelle hat einen -
-    # und sie ist die letzte vor dem Text, den ein Mensch gleich kopiert.
-    if not link.public_code:
-        link = store.vergib_kurzcodes(campaign.campaign_id, link.group_id) or link
-
     return [
         Fassung(
             vorschlag=vorschlag,
-            # Das Ziel wechselt je Fassung: ungerade in den Browser,
-            # gerade in den Store. Ohne diese Angabe trug jeder
-            # angezeigte Text den Store-Link - und genau das war der
-            # Zustand, den die zwei Ziele beheben sollen.
-            angezeigt=mit_link(
-                campaign,
-                link,
-                vorschlag.text,
-                config=config,
-                ziel=ziel_zu_nummer(vorschlag.nummer),
-                texttyp=texttyp,
-            ),
+            angezeigt=mit_link(campaign, link, vorschlag.text, config=config, texttyp=texttyp),
             post_url=store.letzte_post_url(
                 campaign.campaign_id, link.group_id, texttyp.value, vorschlag.nummer
             )

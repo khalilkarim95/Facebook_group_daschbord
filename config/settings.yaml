@@ -9,104 +9,17 @@ paths:
   backup_dir: data/backups
 
 marketing:
-  # Basis-URL der Anwendung, die den Tracking-Link entgegennimmt.
-  # Die Umgebungsvariable APP_BASE_URL hat Vorrang - so laeuft dieselbe
-  # Konfiguration lokal und auf der echten Domain, ohne die gespeicherten
-  # Codes anzufassen. Der Code steht fest, nur sein Vorspann wechselt.
-  # Seit dem 21.09.2026 die eigene Kurzdomain: Sie nimmt den Tracking-Link
-  # entgegen (``/r/{code}``), waehrend ``browser_url`` das Ziel dahinter ist.
-  # Beides auf derselben Domain hiesse, dass die Landingpage jeden Klick
-  # beantworten muesste, bevor gezaehlt wird.
-  #
-  # **Vergebene Codes aendern sich dadurch nicht** - nur ihr Vorspann. Die
-  # bereits gespeicherten Adressen tragen die alte Domain, bis einmal
-  # ``fbgroups campaign refresh-urls`` gelaufen ist; sie zeigen sonst auf
-  # einen Dienst, der dort nicht mehr antwortet.
-  app_base_url: https://go.b-tarikak.de
+  # Wohin {link} in einem Beitrag zeigt, wenn die Kampagne keine eigene
+  # landing_page hat: die Startseite der App - ohne Code, ohne Zaehlung.
+  # Bis zum 25.09.2026 stand dort ein Tracking-Link je Gruppe
+  # (go.b-tarikak.de/r/..., b-tarikak.de/t/...); das Tracking ist entfernt.
+  startseite: https://b-tarikak.de/home
 
-  # Der Vorspann der **lesbaren** Adresse im Beitrag (23.09.2026):
-  #   https://b-tarikak.de/t/safar-sham-12   statt   go.b-tarikak.de/r/wr4s9xw
-  # nginx auf b-tarikak.de reicht /t/ an den Dienst weiter (127.0.0.1:8090/t/).
-  # Leer: es bleibt beim Kurzcode unter /r/. Bestehende Zuordnungen stellt
-  # `fbgroups campaign kurzlinks --lesbar` um - nur die, deren Text noch nicht
-  # veroeffentlicht ist.
-  link_basis: https://b-tarikak.de/t
-
+  # Der Code einer Zuordnung (FB-SYR-BER-001) - frueher der Tracking-Code,
+  # heute nur noch ihre Kennung im Bestand. Er geht nirgends hinaus.
   tracking:
-    prefix: FB        # Kanal, erster Teil des Codes: FB-SYR-BER-001
-    path: r           # ergibt {APP_BASE_URL}/r/{code}
+    prefix: FB        # erster Teil des Codes
     number_width: 3   # 001, 002, ...
-
-  # --- Wohin ein Klick fuehrt ------------------------------------------
-  #
-  # Zwei Ziele stehen zur Wahl, und der Unterschied ist keine Kleinigkeit:
-  #
-  #   landing  ->  b-tarikak.de/home?ref=CODE
-  #                Der Code steht in der Adresse, die Web-App liest ihn und
-  #                traegt ihn durch die Registrierung. Ein Play-Store-Install
-  #                sieht diese Adresse aber nie - wer die App dort holt, ist
-  #                fuer die Zuordnung verloren.
-  #
-  #   store    ->  play.google.com/...&referrer=CODE
-  #                Google reicht `referrer` nach der Installation an die App
-  #                weiter (Play Install Referrer). Die App liest ihn beim
-  #                ersten Start und meldet `activation` mit dem Code. Damit
-  #                ueberlebt die Zuordnung den Weg ueber den Store.
-  #
-  # Je Kampagne einstellbar (`campaign set --ziel store`); hier steht die
-  # Vorgabe fuer Kampagnen, die nichts sagen.
-  ziel: store
-
-  # --- Wie der Link im Beitrag aussieht ---------------------------------
-  #
-  # Facebook, WhatsApp und Telegram rufen einen frisch geposteten Link selbst
-  # ab und bauen daraus die Vorschaukarte: Bild, Titel, ein Satz. Ohne Karte
-  # steht im Beitrag die nackte Adresse - "go.b-tarikak.de/r/FB-SYR-BER-010-B"
-  # liest sich wie ein Code und nicht wie eine App.
-  #
-  # Ohne diesen Block folgt der Abruf der Weiterleitung und nimmt, was am
-  # Ziel steht: beim Store-Code die Karte von Google, beim Browser-Code die
-  # der Landingpage - zwei verschiedene Karten fuer dieselbe App. Mit dem
-  # Block antwortet /r/{code} den Vorschau-Abrufen selbst, und jeder Beitrag
-  # zeigt dasselbe.
-  #
-  # Ein Klick auf die Karte fuehrt weiterhin auf /r/{code} und wird gezaehlt -
-  # die Karte ersetzt die Weiterleitung nicht, sie beschreibt sie nur.
-  #
-  # bild: absolute Adresse, oeffentlich erreichbar, mindestens 200x200 -
-  # kleinere zeigt Facebook gar nicht. Ist es leer, bleibt es beim bisherigen
-  # Verhalten (Weiterleitung auch fuer den Vorschau-Abruf).
-  vorschau:
-    titel: "بطريقك — أرسل أغراضك مع مسافر موثوق"
-    # Was unter der Ueberschrift der Karte steht. Ohne diesen Wert zeigt
-    # Facebook dort die Domain - "go.b-tarikak.de" liest sich wie eine
-    # technische Adresse und nicht wie eine App. Leer heisst: der Titel.
-    seitenname: "بطريقك"
-    beschreibung: "منصة تربط المسافرين من وإلى سوريا بمن يريد إرسال أوراق أو أدوية أو أغراض صغيرة. بلا وسيط، وبلا شحن مكلف."
-    bild: https://b-tarikak.de/icons/Icon-512.png
-
-  # Wohin ein **Browser-Code** fuehrt (``FB-SYR-BER-010-B``).
-  #
-  # Seit dem 31.08.2026 traegt jedes Paar zwei Codes: der bestehende zum Play
-  # Store, ein zweiter in den Browser. Beide werden vollstaendig gezaehlt -
-  # der Unterschied ist allein das Ziel nach der Weiterleitung, und dadurch
-  # laesst sich im Trichter unterscheiden, woher ein Mensch kam.
-  #
-  # Eigener Eintrag und nicht ``fallback_url``: Der Browser ist ein
-  # gleichrangiges Ziel, kein Notnagel. Steht an der Kampagne eine eigene
-  # ``landing_page``, gilt sie vor diesem Wert.
-  browser_url: https://b-tarikak.de/home
-
-  store:
-    # Die echte Package-ID der App (b-tarikak-frontend/android/app/build.gradle.kts).
-    # Keine Beispielkennung: Eine falsche fuehrte auf eine fremde oder gar
-    # keine Store-Seite, und der Fehler faellt erst auf, wenn niemand die App
-    # findet.
-    android_package: de.btarikak.app
-    # {package} und {referrer} werden ersetzt. `referrer` ist das Feld, das
-    # Google nach der Installation an die App zurueckgibt - dort steht der
-    # Tracking-Code und sonst nichts.
-    play_url: "https://play.google.com/store/apps/details?id={package}&referrer={referrer}"
 
   # --- Das Ziel einer Kampagne ------------------------------------------
   #
@@ -189,7 +102,7 @@ marketing:
   # die Auskunft im Protokoll; entfernt wird der Link unabhaengig davon an
   # der Stelle, an der ein Kommentar entsteht (beitrag.mit_link mit texttyp
   # "kommentar", beitrag.ohne_link) und geprueft unmittelbar vor dem Absenden
-  # (actions.comment_on_post). Der Beitrag und das Klick-Tracking bleiben.
+  # (actions.comment_on_post). Der Beitrag traegt seinen Link weiter.
   linkmodus_max: app_name_only
 
   # Die **freie** Adresse am Ende jedes Kommentars (23.09.2026, Wunsch des
@@ -388,48 +301,6 @@ scoring:
   # treffen - ohne Deckel gewaenne die Gruppe mit dem laengsten Namen.
   kategorie_nebenbonus: 0.08
   kategorie_nebenbonus_max: 0.24
-
-  # Schwellen der gemessenen Resonanz - einer der Quellen von "activity".
-  # Sie stehen hier und nicht im Code: Eine geaenderte Zielquote ist eine
-  # fachliche Entscheidung.
-  resonanz:
-    # Eine Registrierungsquote, die als "voll" gilt. NICHT 1,0: 15 % sind
-    # hervorragend. Wer auf 100 % normiert, gibt selbst der besten Gruppe ein
-    # Sechstel der Punkte und macht den Bestandteil wirkungslos.
-    ziel_quote: 0.15
-    # Ab so vielen Klicks zaehlt die Quote voll, darunter anteilig. 1 Klick
-    # und 1 Registrierung sind 100 % und beweisen nichts.
-    mindest_klicks: 20
-    # Klicks je Beitrag, die als volle Reichweite gelten.
-    ziel_klicks_je_beitrag: 25
-    # Nach so vielen Tagen ohne Klick ist die Aktualitaet auf 0 gefallen.
-    aktualitaet_tage: 30
-    # Solange der aelteste Beitrag juenger ist, gilt die Gruppe als NICHT
-    # gemessen. Wer vor zwei Stunden gepostet hat, hat noch keine Klicks -
-    # eine Null waere hier eine Behauptung ueber die Zukunft.
-    schonfrist_tage: 3
-    # Wie die drei Teilmasse zu EINEM Aktivitaetsfaktor verrechnet werden.
-    # Sie werden auf ihre Summe normiert, damit ein Tippfehler die Obergrenze
-    # nicht sprengt. Die Registrierungsquote wiegt am schwersten: Klicks sind
-    # Neugier, Registrierungen sind das Ergebnis.
-    anteile:
-      engagement: 0.60
-      reichweite: 0.25
-      aktualitaet: 0.15
-
-  # Wie die Aktivitaet aus den Datumsangaben der Suchtreffer geschaetzt wird
-  # (Quelle "search_dates"). Das ist die schwaechste der drei Quellen und
-  # traegt deshalb eine niedrige Konfidenz: Ein indexierter Beitrag von vor
-  # zwei Wochen belegt, dass die Gruppe lebt - eine Beitragszahl je Tag ist
-  # daraus NICHT abzuleiten. Bewertet wird allein die Frische des juengsten
-  # gefundenen Beitrags.
-  aktivitaet_aus_treffern:
-    # Juenger als das: voller Faktor. Aelter als "tot_ab_tagen": 0.
-    frisch_bis_tagen: 7
-    tot_ab_tagen: 180
-    # Mindestzahl datierter Treffer, damit ueberhaupt geschaetzt wird. Ein
-    # einzelner indexierter Beitrag ist ein Zufallsfund.
-    mindest_treffer: 1
 
   # Wie die Aktivitaet aus der Beitragsliste der Gruppenseite bewertet wird
   # (Quelle "facebook"). Beitraege je Tag, abgestuft wie die Mitgliederzahl.

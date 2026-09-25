@@ -1,12 +1,12 @@
 """Kommandozeile.
 
     fbgroups import-mitglieder PFAD    Eigene Mitgliederliste einlesen
-    fbgroups serve                     Dienst starten: Uebersicht und Tracking
+    fbgroups serve                     Uebersicht und Arbeitsseite im Browser
     fbgroups config-check              Konfiguration pruefen
     fbgroups sicherung                 Bestand sichern (--liste, --zurueck)
     fbgroups auth login               Interaktiver Browser-Login fuer Automatisierung
     fbgroups campaign ...              Kampagnen: Zuordnung, Texte, Lauf
-    fbgroups marketing ...             Arbeitsstand, Auswertung, Praemien
+    fbgroups marketing ...             Arbeitsstand der Gruppen
 
 Die Entdeckungsschicht ist am 20.09.2026 entfernt worden: ``import-seeds``,
 ``pruefliste``, ``rescore``, ``enrich``, ``report``, ``export``, ``queries``,
@@ -30,7 +30,6 @@ from rich.table import Table
 
 from fbgroups.config import AppConfig, load_config
 from fbgroups.marketing.cli import campaign_app, marketing_app
-from fbgroups.marketing.tracking import app_base_url
 from fbgroups.mitglieder import lies_mitgliederdatei
 from fbgroups.models import AKTIVITAETSSTUFEN, LISTENPRIORITAETEN
 from fbgroups.scoring import score_all
@@ -105,7 +104,7 @@ def import_mitglieder_command(
 
     # Bewertet wird vor dem Speichern - sonst stuenden die Gruppen ohne Score
     # in der Uebersicht, und die Arbeitsliste sortierte sie ans Ende.
-    gruppen = score_all(bericht.gruppen, config, {})
+    gruppen = score_all(bericht.gruppen, config)
 
     tabelle = Table(title=f"Mitgliederliste {bericht.quelle}", show_header=False, box=None)
     tabelle.add_row("Zeilen", str(bericht.zeilen_gesamt))
@@ -229,19 +228,15 @@ def _als_mitglied_vermerken(config: AppConfig, group_ids: list[str]) -> tuple[in
 @app.command("serve")
 def serve_command(
     host: str = typer.Option("127.0.0.1", "--host", help="Bindeadresse."),
-    port: int = typer.Option(3000, "--port"),
+    port: int = typer.Option(8090, "--port"),
     reload: bool = typer.Option(False, "--reload", help="Neu laden bei Codeaenderung."),
 ) -> None:
-    """Startet den Dienst: Uebersichtsseite und Tracking-Links.
+    """Startet den oertlichen Dienst: Uebersicht und Arbeitsseite.
 
-    ``/`` zeigt den Bestand im Browser, ``/r/{code}`` zaehlt einen Klick und
-    leitet zur Landingpage weiter, ``POST /events`` nimmt die Meldungen der
-    Zielanwendung entgegen. Es wird nichts bei Facebook abgerufen und nichts
-    veroeffentlicht.
-
-    Standardmaessig nur lokal erreichbar (127.0.0.1). Wer den Dienst oeffentlich
-    stellt, sollte ihn hinter einen Reverse Proxy mit TLS setzen; die
-    Uebersichtsseite bleibt dabei auf den eigenen Rechner beschraenkt.
+    ``/`` zeigt den Bestand, ``/arbeit/{kampagne}`` die Arbeitsseite. Es wird
+    nichts bei Facebook abgerufen und nichts veroeffentlicht, und seit dem
+    25.09.2026 wird auch nichts mehr gezaehlt - das Tracking ist entfernt.
+    Nur vom eigenen Rechner erreichbar (127.0.0.1).
     """
     try:
         import uvicorn
@@ -252,26 +247,17 @@ def serve_command(
         )
         raise typer.Exit(code=1) from exc
 
-    config = _config()
-    basis = app_base_url(config)
     console.print(
         Panel(
-            f"Uebersicht im Browser: [bold]http://{host}:{port}/[/bold]\n"
-            f"Tracking-Links zeigen auf: [bold]{basis or '(APP_BASE_URL fehlt)'}[/bold]\n\n"
-            "  GET  /            Uebersicht (nur vom eigenen Rechner)\n"
+            f"Uebersicht im Browser: [bold]http://{host}:{port}/[/bold]\n\n"
+            "  GET  /                    Uebersicht\n"
             # Kein f-String: die geschweiften Klammern bleiben wie geschrieben.
-            "  GET  /r/{code}    Klick zaehlen und weiterleiten\n"
-            "  POST /events      Meldung der Zielanwendung\n"
-            "  GET  /healthz     Lebenszeichen\n\n"
+            "  GET  /arbeit/{kampagne}   Arbeitsseite\n"
+            "  GET  /healthz             Lebenszeichen\n\n"
             "[dim]Beenden mit Strg+C[/dim]",
             title="fbgroups serve",
         )
     )
-    if basis and f":{port}" not in basis and not reload:
-        console.print(
-            "[yellow]Hinweis:[/yellow] APP_BASE_URL und der Port passen nicht zusammen - "
-            "die veroeffentlichten Links wuerden woanders landen."
-        )
 
     uvicorn.run(
         "fbgroups.marketing.web:create_app",
